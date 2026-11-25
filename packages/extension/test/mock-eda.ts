@@ -71,6 +71,12 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			stackLayers.push({ layerId: 100 + i, layerName: d.name, kind: 'dielectric', thickness: d.thicknessMm, permittivity: d.er ?? 4.5, lossTangent: 0.02, zIndex: stackLayers.length });
 	});
 
+	const pouredObjs = () => board.pours.map(p => getters({
+		PrimitiveId: `${p.id}-fill`,
+		PourPrimitiveId: isPlane(p) ? undefined : p.id,
+		Layer: p.layer,
+		PourFills: complex(fillOf(p)).map((source, i) => ({ id: `${i}`, fill: true, lineWidth: 0, path: { getSource: () => source } })),
+	}));
 	const eda = {
 		sys_I18n: { text: (key: string, _ns?: string, _lang?: string, ...args: string[]) => args.reduce((s, a, i) => s.replace(`\${${i + 1}}`, a), key) },
 		sys_Log: { add: (message: string, type = 'info') => void logs.push({ message, type }) },
@@ -134,7 +140,8 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		pcb_SelectControl: { getAllSelectedPrimitives: async () => [{ getState_Net: () => selectedNet }] },
 		pcb_Layer: {
 			getStackup: async () => ({ layers: stackLayers, totalThickness: 1.6, unit: 'mm' }),
-			getAllLayers: async () => board.stackup.copper.map(l => ({ id: l.id, name: l.name, type: planeLayers.includes(l.id) ? 'PLANE' : 'SIGNAL' })),
+			getAllLayers: async () => board.stackup.copper.map(l => ({ id: l.id, name: l.name, type: planeLayers.includes(l.id) ? 'PLANE' : 'SIGNAL', layerStatus: 1 })),
+			getTheNumberOfCopperLayers: async () => board.stackup.copper.length,
 		},
 		pcb_PrimitiveLine: {
 			getAll: async () => (counts.boardReads++, board.tracks.map(t => getters({ PrimitiveId: t.id, Net: t.net, Layer: t.layer, StartX: m(t.a.x), StartY: m(t.a.y), EndX: m(t.b.x), EndY: m(t.b.y), LineWidth: m(t.width) }))),
@@ -149,12 +156,9 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			getAllPinsByPrimitiveId: async (id: string) => board.pads.filter(p => p.componentId === id).map(padObj),
 		},
 		pcb_PrimitivePoured: {
-			getAll: async () => board.pours.map(p => getters({
-				PrimitiveId: `${p.id}-fill`,
-				PourPrimitiveId: isPlane(p) ? undefined : p.id,
-				Layer: p.layer,
-				PourFills: complex(fillOf(p)).map((source, i) => ({ id: `${i}`, fill: true, lineWidth: 0, path: { getSource: () => source } })),
-			})),
+			getAllPrimitiveId: async () => board.pours.map(p => `${p.id}-fill`),
+			get: async (id: string) => pouredObjs().find(o => o.getState_PrimitiveId() === id),
+			getAll: async () => pouredObjs(),
 		},
 		pcb_PrimitivePour: {
 			getAll: async () => board.pours.filter(p => !isPlane(p)).map(p => getters({

@@ -175,6 +175,24 @@ async function persist(): Promise<void> {
 	}
 }
 
+/** Reads a value the extension stored earlier (survives a restart). */
+export function readStored(key: string): unknown {
+	try {
+		return api().sys_Storage?.getExtensionUserConfig(key);
+	}
+	catch {
+		return undefined;
+	}
+}
+
+/** Stores a value and waits (at most the log-write limit) until it is saved. */
+export async function writeStored(key: string, value: unknown): Promise<void> {
+	try {
+		await withTimeout(api().sys_Storage?.setExtensionUserConfig(key, value), saveTimeouts.ms, 'sys_Storage.setExtensionUserConfig');
+	}
+	catch {}
+}
+
 /** Waits until the log so far is stored (and written to the log file, if allowed). */
 export function checkpoint(): Promise<void> {
 	writing = writing.then(persist, persist);

@@ -112,7 +112,8 @@ test('every API call of the board read is logged before it is made', async () =>
 	const mock = install({});
 	await ext.showReturnPath();
 	const calls = saved(mock).map(l => /read board: (pcb_\w+\.\w+)…$/.exec(l)?.[1]).filter(Boolean);
-	assert.deepEqual(calls, ['pcb_Layer.getStackup', 'pcb_PrimitiveLine.getAll', 'pcb_PrimitiveArc.getAll', 'pcb_PrimitiveVia.getAll', 'pcb_PrimitivePad.getAll', 'pcb_PrimitiveComponent.getAll', 'pcb_PrimitiveFill.getAll', 'pcb_PrimitivePoured.getAll', 'pcb_PrimitivePour.getAll']);
+	assert.ok(saved(mock).some(l => /read board: pcb_PrimitivePoured.get 1\/3 \(.*\)…$/.test(l)));
+	assert.deepEqual(calls, ['pcb_Layer.getStackup', 'pcb_PrimitiveLine.getAll', 'pcb_PrimitiveArc.getAll', 'pcb_PrimitiveVia.getAll', 'pcb_PrimitivePad.getAll', 'pcb_PrimitiveComponent.getAll', 'pcb_PrimitiveFill.getAll', 'pcb_PrimitivePoured.getAllPrimitiveId', 'pcb_PrimitivePour.getAll']);
 });
 
 test('log writes that never answer are switched off and the run still finishes', async () => {
@@ -137,11 +138,79 @@ test('a stackup call that never answers falls back to the layer list', async () 
 
 test('a board-read call that never answers ends in a dialog naming it, and the saved log ends there', async () => {
 	const mock = install({});
-	mock.eda.pcb_PrimitivePoured.getAll = never;
+	mock.eda.pcb_PrimitivePour.getAll = never;
 	await ext.showReturnPath();
-	assert.match(mock.messages.at(-1)!, /pcb_PrimitivePoured.getAll did not answer within/);
+	assert.match(mock.messages.at(-1)!, /pcb_PrimitivePour.getAll did not answer within/);
 	const lines = saved(mock);
-	const at = lines.findIndex(l => /read board: pcb_PrimitivePoured.getAll…$/.test(l));
+	const at = lines.findIndex(l => /read board: pcb_PrimitivePour.getAll…$/.test(l));
 	assert.ok(at >= 0);
 	assert.ok(lines.slice(at + 1).every(l => /ERROR|did not answer|^\s+at /.test(l) || !/read board/.test(l)), lines.slice(at).join('\n'));
+});
+
+test('without the stackup API only the copper layers the board uses are read, not every possible inner layer', async () => {
+	const mock = install({});
+	(mock.eda.pcb_Layer as Record<string, unknown>).getStackup = undefined;
+	const listed = [1, 2, ...Array.from({ length: 32 }, (_, i) => 15 + i)].map(id => ({ id, name: `L${id}`, type: 'SIGNAL', layerStatus: id === 1 || id === 2 || id === 15 || id === 16 ? 1 : 0 }));
+	mock.eda.pcb_Layer.getAllLayers = async () => listed;
+	await ext.showReturnPath();
+	assert.ok(saved(mock).some(l => /read board: 4 copper layers in use \(board says 4; 34 listed\)/.test(l)), saved(mock).join('\n'));
+	assert.ok(saved(mock).some(l => /read board: stackup, 4 copper layers/.test(l)));
+
+	const byCount = install({});
+	(byCount.eda.pcb_Layer as Record<string, unknown>).getStackup = undefined;
+	byCount.eda.pcb_Layer.getAllLayers = async () => listed.map(l => ({ ...l, layerStatus: 1 }));
+	await ext.showReturnPath();
+	assert.ok(saved(byCount).some(l => /read board: 4 copper layers in use \(board says 4; 34 listed\)/.test(l)));
+});
+
+test('computed pour fills are fetched one at a time; a run that hung there makes the next one use pour outlines', async () => {
+	const storage = new Map<string, unknown>();
+	const hung = install({ storage }, () => false);
+	hung.eda.pcb_PrimitivePoured.get = never;
+	boardModule.apiTimeouts.callMs = 1500;
+	void ext.showReturnPath();
+	await new Promise(r => setTimeout(r, 150));
+	boardModule.apiTimeouts.callMs = 200;
+	assert.ok(storage.get('fetchingPouredSince'), 'marker set while fetching');
+	assert.match(saved(hung).at(-1)!, /read board: pcb_PrimitivePoured.get 1\/3 \(.*\)…$/);
+
+	const next = install({ storage });
+	let fetched = 0;
+	next.eda.pcb_PrimitivePoured.get = async () => (fetched++, undefined);
+	await ext.showReturnPath();
+	assert.equal(fetched, 0);
+	assert.match(next.messages.at(-1)!, /previous run stopped while fetching computed pour fills/);
+	assert.ok(next.markers.length > 0, 'analysis still ran on outline-computed pours');
+	assert.equal(storage.get('fetchingPouredSince'), '');
+});
+
+test('slow pour-fill fetches switch the rest to outlines', async () => {
+	const mock = install({});
+	const get = mock.eda.pcb_PrimitivePoured.get;
+	boardModule.apiTimeouts.pouredSlowMs = 20;
+	try {
+		mock.eda.pcb_PrimitivePoured.get = async (id: string) => {
+			await new Promise(r => setTimeout(r, 40));
+			return get(id);
+		};
+		await ext.showReturnPath();
+	}
+	finally {
+		boardModule.apiTimeouts.pouredSlowMs = 3000;
+	}
+	assert.match(mock.messages.at(-1)!, /the remaining 2 are computed from their outlines/);
+	assert.ok(mock.markers.length > 0);
+});
+
+test('a saved log from an older build that ends in pcb_PrimitivePoured.getAll also switches to pour outlines', async () => {
+	const storage = new Map<string, unknown>([['log', '2026-11-26 00:19:41.588 INFO  read board: pcb_PrimitivePoured.getAll…']]);
+	const mock = install({ storage });
+	let fetched = 0;
+	mock.eda.pcb_PrimitivePoured.get = async () => (fetched++, undefined);
+	await ext.showReturnPath();
+	assert.equal(fetched, 0);
+	assert.match(mock.messages.at(-1)!, /previous run stopped while fetching computed pour fills \(started 2026-11-26 00:19:41.588\)/);
+	const again = install({ storage });
+	await ext.showReturnPath();
+	assert.doesNotMatch(again.messages.at(-1)!, /previous run stopped/);
 });

@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.2] - 2026-11-26
+
+The saved log of the first 0.1.1 test (DC Return Current on the R-Com dongle board) ended at `read board: pcb_PrimitivePoured.getAll…`. EasyEDA froze inside that call, which returns the pour fills EasyEDA has computed. The 60 s limit never fired, so the editor itself was blocked, not just slow to answer. The same log showed 34 copper layers on that board.
+
+- Computed pour fills are fetched one at a time (`getAllPrimitiveId`, then `get` per fill). Each fetch is logged before it is made, along with its size and time.
+- If one fetch takes over 3 s, or all of them over 20 s, the remaining pours are computed from their outlines instead (clearances approximated), with a warning.
+- A marker is stored while fetching. If the next run finds it still set, the editor hung there, so that run skips the fetch and computes every pour from its outline. A saved log from 0.1.1 that ends in `pcb_PrimitivePoured.getAll…` counts the same, so the next run after that freeze does not try again.
+- Stackup: `pcb_Layer.getStackup` is not in this EasyEDA version, and the fallback `getAllLayers` lists all 32 possible inner layers. Only layers in use are kept now: `layerStatus` not "not used", and within `getTheNumberOfCopperLayers()`.
+
 ## [0.1.1] - 2026-11-26
 
 Everything since 0.1.0. The test builds handed out as `_v0.3.0`, `_v0.4.0` and `_v0.5.0` were numbered wrongly (the minor number went up instead of the patch number); they are earlier states of this version.

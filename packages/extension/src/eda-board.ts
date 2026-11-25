@@ -25,7 +25,7 @@ import {
 	type Track,
 	type Via,
 } from '@returnpath/core';
-import { checkpoint, log, TimedOut, withTimeout, yieldToEditor } from './runner';
+import { checkpoint, log, readStored, savedLog, TimedOut, withTimeout, writeStored, yieldToEditor } from './runner';
 
 export const MIL = 0.0254;
 const LAYER_MULTI = 12;
@@ -66,7 +66,10 @@ function copperMm(t: number, warnings: string[]): number | undefined {
 }
 
 /** Time limits for API calls; tests shorten them. */
-export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, pinsMs: 20_000 };
+export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, pinsMs: 20_000, pouredTotalMs: 20_000, pouredSlowMs: 3_000 };
+
+/** Set while computed pour fills are fetched; still set at the next start means the editor hung there. */
+const POURED_MARKER = 'fetchingPouredSince';
 
 /**
  * Logs an API call before making it, saves the log, then waits for it with a time limit. If the
@@ -114,7 +117,18 @@ async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 		warnings.push('Stackup API unavailable (needs EasyEDA Pro >= 4.1.93); assuming 0.2 mm dielectrics.');
 		copper.length = 0;
 		dielectrics.length = 0;
-		const layers = (await call('pcb_Layer.getAllLayers', () => eda.pcb_Layer.getAllLayers())).filter(l => l.type === 'SIGNAL' || l.type === 'PLANE');
+		// getAllLayers lists every possible inner layer; keep the ones the board uses.
+		const all = (await call('pcb_Layer.getAllLayers', () => eda.pcb_Layer.getAllLayers())).filter(l => l.type === 'SIGNAL' || l.type === 'PLANE');
+		let count: number | undefined;
+		if (typeof eda.pcb_Layer.getTheNumberOfCopperLayers === 'function') {
+			try {
+				count = await call('pcb_Layer.getTheNumberOfCopperLayers', () => eda.pcb_Layer.getTheNumberOfCopperLayers(), apiTimeouts.stackupMs);
+			}
+			catch {}
+		}
+		const INNER_1 = 15;
+		const layers = all.filter(l => (l.layerStatus as number | undefined) !== 0 && (!count || l.id === 1 || l.id === 2 || (l.id >= INNER_1 && l.id < INNER_1 + count - 2)));
+		log(`read board: ${layers.length} copper layers in use (board says ${count ?? '?'}; ${all.length} listed)`);
 		const order = (id: number) => (id === 1 ? -1 : id === 2 ? 1000 : id);
 		layers.sort((a, b) => order(a.id) - order(b.id));
 		layers.forEach((l, i) => {
@@ -190,6 +204,75 @@ function matchPlane(island: Paths, layer: number, planes: PlaneFill[], boxes: Re
 		}
 	}
 	return best;
+}
+
+type Poured = Awaited<ReturnType<typeof eda.pcb_PrimitivePoured.getAll>>[number];
+
+/**
+ * Fetches the computed pour fills one at a time. EasyEDA computes them in the editor itself, and
+ * fetching all at once (getAll) has frozen the editor on a real board, which no time limit can
+ * interrupt. If the last run hung here, or fetching gets slow, the remaining pours are computed
+ * from their outlines instead (less accurate: clearances are approximated).
+ */
+async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipped: boolean }> {
+	// Builds before 0.1.2 had no marker; their last words in the saved log tell the same story.
+	const lines = savedLog();
+	let lastGetAll = lines.length - 1;
+	while (lastGetAll >= 0 && !/read board: pcb_PrimitivePoured\.getAll…$/.test(lines[lastGetAll])) lastGetAll--;
+	const hungBefore = lastGetAll >= 0 && !lines.slice(lastGetAll + 1).some(l => /computed copper areas|did not answer|pours are computed from their outlines/.test(l));
+	const since = readStored(POURED_MARKER) || (hungBefore ? lines[lastGetAll].slice(0, 23) : '');
+	if (since) {
+		const msg = `The previous run stopped while fetching computed pour fills (started ${String(since)}); pours are computed from their outlines this time.`;
+		log(`read board: ${msg}`, 'warn');
+		warnings.push(msg);
+		await writeStored(POURED_MARKER, '');
+		return { poured: [], skipped: true };
+	}
+	const api = eda.pcb_PrimitivePoured;
+	const ids = typeof api.getAllPrimitiveId === 'function' ? await call('pcb_PrimitivePoured.getAllPrimitiveId', () => api.getAllPrimitiveId()) : undefined;
+	await writeStored(POURED_MARKER, new Date().toISOString());
+	try {
+		if (!ids)
+			return { poured: await call('pcb_PrimitivePoured.getAll', () => api.getAll()), skipped: false };
+		const out: Poured[] = [];
+		const t0 = clock();
+		for (const [i, id] of ids.entries()) {
+			if (clock() - t0 > apiTimeouts.pouredTotalMs) {
+				const msg = `Fetching computed pour fills took over ${Math.round(apiTimeouts.pouredTotalMs / 1000)} s; ${ids.length - i} of ${ids.length} are computed from their outlines.`;
+				log(`read board: ${msg}`, 'warn');
+				warnings.push(msg);
+				return { poured: out, skipped: true };
+			}
+			const t1 = clock();
+			const p = await call(`pcb_PrimitivePoured.get ${i + 1}/${ids.length} (${id})`, () => api.get(id));
+			const ms = clock() - t1;
+			if (p) {
+				out.push(p);
+				const fills = p.getState_PourFills();
+				let values = 0;
+				for (const f of fills) values += (f.path.getSource() as unknown[]).length;
+				log(`read board: poured ${id}: layer ${p.getState_Layer()}, ${fills.length} fill regions, ${values} path values, ${Math.round(ms)} ms`);
+			}
+			if (ms > apiTimeouts.pouredSlowMs) {
+				const msg = `Fetching computed pour fill ${id} took ${Math.round(ms / 1000)} s; the remaining ${ids.length - i - 1} are computed from their outlines.`;
+				log(`read board: ${msg}`, 'warn');
+				warnings.push(msg);
+				return { poured: out, skipped: true };
+			}
+			await yieldToEditor();
+		}
+		return { poured: out, skipped: false };
+	}
+	catch (e) {
+		if (!(e instanceof TimedOut))
+			throw e;
+		log(`read board: ${e.message}; pours are computed from their outlines`, 'warn');
+		warnings.push(`${e.message}; pours are computed from their outlines.`);
+		return { poured: [], skipped: true };
+	}
+	finally {
+		await writeStored(POURED_MARKER, '');
+	}
 }
 
 const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -305,7 +388,7 @@ export async function readBoard(): Promise<Board> {
 	const ringsByPour = new Map<string, Paths>();
 	const islandsByPlane = new Map<string, { plane: typeof planeFills[number]; islands: Paths }>();
 	const planeBoxes = planeFills.map(p => bbox(p.shape));
-	const pouredAll = await call('pcb_PrimitivePoured.getAll', () => eda.pcb_PrimitivePoured.getAll());
+	const { poured: pouredAll, skipped: pouredSkipped } = await readPoured(warnings);
 	let pieces = 0;
 	let islandCount = 0;
 	let sliceStart = clock();
@@ -363,7 +446,7 @@ export async function readBoard(): Promise<Board> {
 	for (const p of await call('pcb_PrimitivePour.getAll', () => eda.pcb_PrimitivePour.getAll())) {
 		const id = p.getState_PrimitiveId();
 		const poured = fillsByPour.get(id);
-		if (!poured)
+		if (!poured && !pouredSkipped)
 			warnings.push(`Pour "${p.getState_PourName()}" (${p.getState_Net()}) has no computed fill; rebuild copper for accurate results.`);
 		pours.push({
 			id,
