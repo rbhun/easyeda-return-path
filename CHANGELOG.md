@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.4] - 2026-11-26
+
+First complete runs on a real board (R-Com dongle, 2 layers): DC Return Current (+12V from J3 to U4 and U5) and Show for Selected Net (BNC1+) both finished. But the DC overlay crossed the board outline and keepouts, and the high-frequency check assumed 0.2 mm between the layers.
+
+- Pour fills: in EasyEDA Pro (API 0.3.59) the pour-fill primitive has no `getState_Layer`, which 0.1.3 required, so every pour was computed from its outline. It is now used as is; the layer comes from its pour. Plane copper without a layer is skipped with a warning, and its plane outline is used.
+- The board outline (polylines on the outline layer, else the bounding box of outline lines) and keepout regions (rules "no pours" and "no inner plane") are now read. Copper computed from pour outlines is clipped to them; until now it could spill past the board edge and through keepouts.
+- Without the stackup API, a 1.6 mm board is assumed: one 1.5 mm core for 2 layers, JLCPCB's default 7628 stack for 4 layers (0.21 / 1.065 / 0.21 mm), and 0.2 mm outer prepregs with the rest split evenly for more. Until now it was 0.2 mm between every pair of layers, which made the ±3h band and via loop estimates far too small on a 2-layer board. The warning now says the stack is assumed, instead of naming an EasyEDA version.
+
 ## [0.1.3] - 2026-11-26
 
 The 0.1.2 test got through the board read in about 0.1 s up to the pour fills. It ended with a dialog, "Error: p.getState_Layer is not a function": in this client, `pcb_PrimitivePoured.get(id)` does not return the documented primitive object.

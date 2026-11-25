@@ -160,6 +160,19 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			get: async (id: string) => pouredObjs().find(o => o.getState_PrimitiveId() === id),
 			getAll: async () => pouredObjs(),
 		},
+		pcb_PrimitivePolyline: {
+			getAll: async (_net?: string, layer?: number) => board.outline
+				.filter(() => layer === undefined || layer === 11)
+				.map((r, i) => getters({ PrimitiveId: `outline-${i}`, Net: '', Layer: 11, Polygon: { getSource: () => ring(r) } })),
+		},
+		pcb_PrimitiveRegion: {
+			getAll: async () => board.keepouts.map(k => getters({
+				PrimitiveId: k.id,
+				Layer: k.layer === -1 ? 12 : k.layer,
+				RuleType: [7],
+				ComplexPolygon: { getSource: () => complex(k.outline)[0] ?? [] },
+			})),
+		},
 		pcb_PrimitivePour: {
 			getAll: async () => board.pours.filter(p => !isPlane(p)).map(p => getters({
 				PrimitiveId: p.id,

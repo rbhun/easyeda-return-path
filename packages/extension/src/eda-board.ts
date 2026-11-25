@@ -6,6 +6,7 @@ import {
 	bbox,
 	circle,
 	decodeComplex,
+	decodeRings,
 	pointInPaths,
 	intersect,
 	rect,
@@ -18,6 +19,7 @@ import {
 	type Component,
 	type CopperLayer,
 	type Dielectric,
+	type Keepout,
 	type Pad,
 	type Paths,
 	type Pour,
@@ -29,6 +31,9 @@ import { checkpoint, log, readStored, savedLog, TimedOut, withTimeout, writeStor
 
 export const MIL = 0.0254;
 const LAYER_MULTI = 12;
+const LAYER_OUTLINE = 11;
+/** Region rule types that keep pour and plane copper out: no pours, no inner plane. */
+const NO_POUR_RULES = new Set([7, 8]);
 
 /** API data coordinates are mil, Y up, which is what the file parser assumes too. */
 const conv = (x: number, y: number): Pt => ({ x: x * MIL, y: y * MIL });
@@ -114,7 +119,6 @@ async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 		}
 	}
 	if (copper.length < 2) {
-		warnings.push('Stackup API unavailable (needs EasyEDA Pro >= 4.1.93); assuming 0.2 mm dielectrics.');
 		copper.length = 0;
 		dielectrics.length = 0;
 		// getAllLayers lists every possible inner layer; keep the ones the board uses.
@@ -131,13 +135,34 @@ async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 		log(`read board: ${layers.length} copper layers in use (board says ${count ?? '?'}; ${all.length} listed)`);
 		const order = (id: number) => (id === 1 ? -1 : id === 2 ? 1000 : id);
 		layers.sort((a, b) => order(a.id) - order(b.id));
+		const gaps = assumedDielectricsMm(layers.length);
+		let z = 0;
 		layers.forEach((l, i) => {
-			copper.push({ id: l.id, name: l.name, index: i, z: i * 0.2 });
-			if (i)
-				dielectrics.push({ name: `D${i}`, thicknessMm: 0.2 });
+			if (i) {
+				z += gaps[i - 1];
+				dielectrics.push({ name: `assumed D${i}`, thicknessMm: gaps[i - 1] });
+			}
+			copper.push({ id: l.id, name: l.name, index: i, z });
 		});
+		warnings.push(`This EasyEDA version does not give the layer stack to extensions; assuming a 1.6 mm board with dielectrics of ${gaps.map(g => `${g} mm`).join(', ')}.`);
 	}
 	return { copper, dielectrics };
+}
+
+/**
+ * Dielectric thicknesses (top to bottom) of a common 1.6 mm board when the stack is unknown:
+ * 2 layers = one 1.5 mm core; 4 layers = JLCPCB's default 7628 stack; more = 0.2 mm outer prepregs
+ * with the rest split evenly.
+ */
+export function assumedDielectricsMm(copperLayers: number): number[] {
+	if (copperLayers < 2)
+		return [];
+	if (copperLayers === 2)
+		return [1.5];
+	if (copperLayers === 4)
+		return [0.21, 1.065, 0.21];
+	const inner = +((1.5 - 0.4) / (copperLayers - 3)).toFixed(3);
+	return [0.2, ...Array.from({ length: copperLayers - 3 }, () => inner), 0.2];
 }
 
 /** Same shape rules as the file parser in packages/cli: pad shapes are relative to the pad centre. */
@@ -206,6 +231,56 @@ function matchPlane(island: Paths, layer: number, planes: PlaneFill[], boxes: Re
 	return best;
 }
 
+/** The board outline: polylines on the outline layer, else the bounding box of outline line segments. */
+async function readOutline(segments: Pt[][], warnings: string[]): Promise<Paths> {
+	const rings: Paths = [];
+	const api = eda.pcb_PrimitivePolyline;
+	if (typeof api?.getAll === 'function') {
+		try {
+			for (const pl of await call('pcb_PrimitivePolyline.getAll (board outline)', () => api.getAll(undefined, LAYER_OUTLINE as never))) {
+				if ((pl.getState_Layer() as number) !== LAYER_OUTLINE)
+					continue;
+				rings.push(...decodeRings(pl.getState_Polygon().getSource(), conv, MIL).filter(r => r.length >= 3));
+			}
+		}
+		catch (e) {
+			log(`read board: board outline not readable (${e instanceof Error ? e.message : String(e)})`, 'warn');
+		}
+	}
+	if (rings.length)
+		return union(rings);
+	if (segments.length) {
+		const b = bbox(segments);
+		warnings.push('Board outline built from line segments; using their bounding box.');
+		return [rect((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, b.maxX - b.minX, b.maxY - b.minY)];
+	}
+	warnings.push('No board outline found; copper computed from pour outlines is not clipped to the board.');
+	return [];
+}
+
+/** Regions that forbid pours or plane copper. */
+async function readKeepouts(copperIds: Set<number>): Promise<Keepout[]> {
+	const api = eda.pcb_PrimitiveRegion;
+	if (typeof api?.getAll !== 'function')
+		return [];
+	const out: Keepout[] = [];
+	try {
+		for (const r of await call('pcb_PrimitiveRegion.getAll (keepouts)', () => api.getAll())) {
+			const rules = (r.getState_RuleType() ?? []) as number[];
+			if (!rules.some(t => NO_POUR_RULES.has(t)))
+				continue;
+			const layer = r.getState_Layer() as number;
+			if (layer !== LAYER_MULTI && !copperIds.has(layer))
+				continue;
+			out.push({ id: r.getState_PrimitiveId(), layer: layer === LAYER_MULTI ? MULTI_LAYER : layer, outline: decodeComplex(r.getState_ComplexPolygon().getSource(), conv, MIL) });
+		}
+	}
+	catch (e) {
+		log(`read board: keepout regions not readable (${e instanceof Error ? e.message : String(e)})`, 'warn');
+	}
+	return out;
+}
+
 type Poured = Awaited<ReturnType<typeof eda.pcb_PrimitivePoured.getAll>>[number];
 type PourFill = ReturnType<Poured['getState_PourFills']>[number];
 
@@ -232,13 +307,14 @@ function asPoured(x: unknown): Poured | undefined {
 		return undefined;
 	if (typeof o.getState_Layer === 'function' && typeof o.getState_PourFills === 'function')
 		return o as unknown as Poured;
+	// Seen in EasyEDA Pro (API 0.3.59): the primitive without getState_Layer.
 	const field = (name: string) => {
 		const getter = o[`getState_${name}`];
 		if (typeof getter === 'function')
 			return (getter as () => unknown).call(o);
 		return o[name] ?? o[name[0].toLowerCase() + name.slice(1)];
 	};
-	if (field('Layer') === undefined || !Array.isArray(field('PourFills')))
+	if (!Array.isArray(field('PourFills')))
 		throw new Error(`pcb_PrimitivePoured.get returned ${shapeOf(x)}`);
 	return {
 		getState_PrimitiveId: () => field('PrimitiveId'),
@@ -302,7 +378,7 @@ async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipp
 				const fills = p.getState_PourFills();
 				let values = 0;
 				for (const f of fills) values += (fillSource(f) as unknown[] | undefined)?.length ?? 0;
-				log(`read board: poured ${id}: layer ${p.getState_Layer()}, ${fills.length} fill regions, ${values} path values, ${Math.round(ms)} ms`);
+				log(`read board: poured ${id}: pour ${p.getState_PourPrimitiveId() ?? '-'}, layer ${p.getState_Layer() ?? '?'}, ${fills.length} fill regions, ${values} path values, ${Math.round(ms)} ms`);
 			}
 			if (ms > apiTimeouts.pouredSlowMs) {
 				const msg = `Fetching computed pour fill ${id} took ${Math.round(ms / 1000)} s; the remaining ${ids.length - i - 1} are computed from their outlines.`;
@@ -344,8 +420,11 @@ export async function readBoard(): Promise<Board> {
 	const copperIds = new Set(stackup.copper.map(l => l.id));
 
 	const tracks: Track[] = [];
+	const outlineSegments: Pt[][] = [];
 	for (const l of await call('pcb_PrimitiveLine.getAll', () => eda.pcb_PrimitiveLine.getAll())) {
 		const layer = l.getState_Layer() as number;
+		if (layer === LAYER_OUTLINE)
+			outlineSegments.push([conv(l.getState_StartX(), l.getState_StartY()), conv(l.getState_EndX(), l.getState_EndY())]);
 		if (!copperIds.has(layer))
 			continue;
 		tracks.push({
@@ -469,7 +548,11 @@ export async function readBoard(): Promise<Board> {
 			await breathe();
 			continue;
 		}
-		const layer = poured.getState_Layer() as number;
+		const layer = poured.getState_Layer() as number | undefined;
+		if (layer === undefined) {
+			warnings.push(`Plane copper ${poured.getState_PrimitiveId()} has no layer in this EasyEDA version; its plane outline is used instead.`);
+			continue;
+		}
 		for (const island of splitIslands(rings)) {
 			islandCount++;
 			const plane = matchPlane(island, layer, planeFills, planeBoxes);
@@ -521,5 +604,8 @@ export async function readBoard(): Promise<Board> {
 	await step(`${pours.length} pours, fills and planes in total`);
 
 	const nets = [...new Set([...tracks.map(t => t.net), ...vias.map(v => v.net), ...pads.map(p => p.net)].filter(Boolean))].sort();
-	return { outline: [], stackup, nets, tracks, vias, pads, components, pours, keepouts: [], warnings };
+	const outline = await readOutline(outlineSegments, warnings);
+	const keepouts = await readKeepouts(copperIds);
+	await step(`board outline ${outline.length ? `${outline.length} ring(s)` : 'missing'}, ${keepouts.length} pour keepouts`);
+	return { outline, stackup, nets, tracks, vias, pads, components, pours, keepouts, warnings };
 }

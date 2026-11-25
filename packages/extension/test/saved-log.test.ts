@@ -246,3 +246,42 @@ test('an unknown pcb_PrimitivePoured.get result is described in the log and the 
 	assert.match(mock.messages.at(-1)!, /Computed pour fills could not be read/);
 	assert.ok(mock.markers.length > 0);
 });
+
+test('a pour-fill primitive without getState_Layer (EasyEDA Pro API 0.3.59) is used as is', async () => {
+	const mock = install({});
+	const get = mock.eda.pcb_PrimitivePoured.get;
+	mock.eda.pcb_PrimitivePoured.get = (async (id: string) => {
+		const p = (await get(id)) as unknown as Record<string, unknown>;
+		const { getState_Layer: _drop, ...rest } = p;
+		return rest;
+	}) as never;
+	await ext.showReturnPath();
+	assert.ok(saved(mock).some(l => /read board: 3 computed copper areas, 19 rings/.test(l)), saved(mock).join('\n'));
+	assert.doesNotMatch(mock.messages.at(-1)!, /computed from their outlines/);
+});
+
+test('the board outline and pour keepouts are read', async () => {
+	const board = demo;
+	const mock = install({});
+	const read = await boardModule.readBoard();
+	assert.ok(board.outline.length > 0 && read.outline.length === board.outline.length);
+	const area = (ps: typeof board.outline) => ps.reduce((s, r) => s + r.reduce((a, p, i) => a + p.x * r[(i + 1) % r.length].y - r[(i + 1) % r.length].x * p.y, 0) / 2, 0);
+	assert.ok(Math.abs(Math.abs(area(read.outline)) - Math.abs(area(board.outline))) < 0.01);
+	assert.equal(read.keepouts.length, board.keepouts.length);
+	assert.ok(saved(mock).some(l => new RegExp(`board outline 1 ring\\(s\\), ${board.keepouts.length} pour keepouts`).test(l)), saved(mock).join('\n'));
+});
+
+test('without the stackup API a 2-layer board is assumed to be 1.6 mm thick, not 0.2 mm', async () => {
+	assert.deepEqual(boardModule.assumedDielectricsMm(2), [1.5]);
+	assert.deepEqual(boardModule.assumedDielectricsMm(4), [0.21, 1.065, 0.21]);
+	assert.ok(Math.abs(boardModule.assumedDielectricsMm(6).reduce((a, b) => a + b, 0) - 1.5) < 0.01);
+	const mock = install({});
+	(mock.eda.pcb_Layer as Record<string, unknown>).getStackup = undefined;
+	mock.eda.pcb_Layer.getAllLayers = async () => [1, 2].map(id => ({ id, name: `L${id}`, type: 'SIGNAL', layerStatus: 1 }));
+	mock.eda.pcb_Layer.getTheNumberOfCopperLayers = async () => 2;
+	const read = await boardModule.readBoard();
+	assert.deepEqual(read.stackup.dielectrics.map(d => d.thicknessMm), [1.5]);
+	assert.deepEqual(read.stackup.copper.map(c => c.z), [0, 1.5]);
+	assert.ok(read.warnings.some(w => /assuming a 1.6 mm board with dielectrics of 1.5 mm/.test(w)));
+	assert.ok(!read.warnings.some(w => /4\.1\.93/.test(w)));
+});
