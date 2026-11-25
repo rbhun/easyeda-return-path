@@ -6,6 +6,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
+    "prebuild": "node -e \"for (const f of ['LICENSE', 'NOTICE']) require('node:fs').copyFileSync('../../' + f, f)\"",
     "compile": "rimraf ./dist/ && tsx ./config/esbuild.prod.ts",
     "build": "npm run compile && tsx ./build/packaged.ts",
     "debug": "tsx ./build/dev.ts",
