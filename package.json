@@ -2,7 +2,7 @@
   "name": "easyeda-return-path",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=20.17.0"
   },

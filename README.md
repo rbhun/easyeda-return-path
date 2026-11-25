@@ -46,5 +46,14 @@ npm run demo              # CLI demo boards → packages/cli/out/
 Early development. The geometry is validated on synthetic boards only, and the extension
 has not yet been run inside EasyEDA Pro.
 
-Prior art: [kistitch](https://github.com/hatlabs/kistitch) (MIT, © Hat Labs Oy) informed the
+Prior art: [kistitch](https://github.com/hatlabs/kistitch) (MIT, © 2025 Hat Labs Oy) informed the
 via-return thresholds; no code is copied.
+
+## License
+
+[Apache License 2.0](LICENSE), © 2026 Balazs Rozgonyi; see also [NOTICE](NOTICE).
+
+Third-party code keeps its own license. If code from kistitch (MIT, © 2025 Hat Labs Oy) is
+ever ported, include its copyright and permission notice: add the full MIT text to
+`packages/extension/THIRD_PARTY_NOTICES.txt` (it ships in the `.eext`) and credit it in
+`NOTICE`. The same applies to any other MIT, BSD or BSL code that gets bundled.

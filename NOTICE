@@ -1,0 +1,11 @@
+easyeda-return-path
+Copyright 2026 Balazs Rozgonyi
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The EasyEDA Pro extension build tooling in packages/extension/build and
+packages/extension/config comes from the EasyEDA Pro extension SDK
+(https://github.com/easyeda/pro-api-sdk), Copyright 2024 JLCEDA, Apache-2.0.
+
+Third-party licenses for code bundled into the extension are listed in
+packages/extension/THIRD_PARTY_NOTICES.txt.

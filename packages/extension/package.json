@@ -4,7 +4,7 @@
   "description": "EasyEDA Pro extension: return-path overlay for the selected net",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "compile": "rimraf ./dist/ && tsx ./config/esbuild.prod.ts",
     "build": "npm run compile && tsx ./build/packaged.ts",

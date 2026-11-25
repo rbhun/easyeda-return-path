@@ -4,7 +4,7 @@
   "description": "Offline return-path analysis of EasyEDA Pro files: file parser, SVG/PNG overlay and JSON report",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "exports": {
     "./parse": "./src/easyeda/parse.ts",
     "./synth": "./src/synth/make-board.ts"
