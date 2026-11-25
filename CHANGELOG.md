@@ -1,18 +1,22 @@
 # Changelog
 
-Every change raises the minor version (`0.x.0`) and adds an entry here, newest first. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that the version is higher than the target branch's.
+Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
-## [0.5.0] - 2026-11-25
+## [0.1.1] - 2026-11-26
+
+Everything since 0.1.0. The test builds handed out as `_v0.3.0`, `_v0.4.0` and `_v0.5.0` were numbered wrongly (the minor number went up instead of the patch number); they are earlier states of this version.
+
+### API call logging and time limits (test build 0.5.0)
 
 In the third test the log stopped at `read board…` on a signal net (BNC1+), with nothing after it. The log does not say whether that was 0.3.0, whose board read froze right there, or 0.4.0, where only waiting API calls come next (saving the log, then `pcb_Layer.getStackup`). A call that never answers stalls a run silently.
 
 - Every API call of the board read is logged, and the log saved, before it is made (`read board: pcb_PrimitivePoured.getAll…`), so the last line names the call the editor hung in.
 - Every API call has a time limit: 60 s per board-read call, 20 s per component's pins (that component's pads are then left out, with a warning), 15 s for the stackup (then the layer list is used, as on older EasyEDA versions). Running out ends the run with a dialog naming the call.
 - Saving the log is limited to 2 s per write; a write that does not answer switches that destination off with a warning instead of holding up the run. The stored log is now one string instead of a list.
-- Each run starts with the version in its first log line (`Show for Selected Net: BNC1+ (v0.5.0)`).
+- Each run starts with the version in its first log line (`Show for Selected Net: BNC1+ (v0.1.1)`).
 - Progress is logged every 2 s while component pins are read.
 
-## [0.4.0] - 2026-11-25
+### Saved log and non-blocking board read (test build 0.4.0)
 
 The editor still froze and went white in a second test, which also took the log panel with it.
 
@@ -20,7 +24,7 @@ The editor still froze and went white in a second test, which also took the log 
 - Power and ground nets are turned away by name before the board is read, so Show for Selected Net on such a net no longer reads the whole board first.
 - Reading the board no longer blocks the editor for long: it yields between primitive groups and logs counts and times for each. Pour and plane copper is merged once per pour or plane instead of piece by piece (which grew quadratically on large planes), plane islands are matched to plane partitions by bounding box and a point test before falling back to polygon intersection, and holes are assigned to islands with a bounding-box prefilter.
 
-## [0.3.0] - 2026-11-25
+### Freeze fix, 2-layer boards and diagnostics (test build 0.3.0)
 
 Fixes the UI freeze from the first test in EasyEDA Pro (selecting a power net, then Return Path → Show for Selected Net).
 
@@ -31,10 +35,10 @@ Fixes the UI freeze from the first test in EasyEDA Pro (selecting a power net, t
 - Diagnostics: every phase is logged to the EasyEDA log panel (bottom panel, shortcut S, Log tab) with timings and sizes, prefixed `[ReturnPath]`. Errors are logged with their stack and shown in a dialog. The extension README explains how to open developer tools in the desktop client.
 - CLI: `--verbose` prints time per phase; dielectric thickness units are guessed from the total board thickness (a single 1.5 mm core was read as mil); new synthetic 2-layer boards (`npm run demo:2layer`).
 
-## [0.2.0] - 2026-11-25
+### DC return current
 
 - **DC Return Current...**: a wizard guesses the power rails, their grounds, the source and the loads, then solves the rail and its ground on the rasterised copper and draws streamlines and colour-binned current-density contours. Also in the CLI (`--list-rails`, `--dc`).
-- The build Balazs first tested in EasyEDA Pro was this version, still labelled 0.1.0.
+- The build Balazs first tested in EasyEDA Pro had this, still labelled 0.1.0.
 
 ## [0.1.0] - 2026-11-25
 
