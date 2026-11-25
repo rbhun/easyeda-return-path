@@ -5,7 +5,7 @@ EasyEDA Pro extension built on the official [pro-api-sdk](https://github.com/eas
 ## Use
 
 1. From the repository root: `npm ci && npm run build:extension`.
-2. In EasyEDA Pro (≥ 4.1.93 for the stackup and undo-group APIs), import `packages/extension/build/dist/easyeda-return-path_v0.1.0.eext` as a local extension in the Extension Manager. CI also uploads it as the `extension-eext` artifact.
+2. In EasyEDA Pro (≥ 4.1.93 for the stackup and undo-group APIs), import `packages/extension/build/dist/easyeda-return-path_v<version>.eext` (the version is in `extension.json`; see the root `CHANGELOG.md`) as a local extension in the Extension Manager. CI also uploads it as the `extension-eext` artifact.
 3. In a PCB, select a track, via or pad of the net, then choose **Return Path → Show for Selected Net**. **Clear Overlay** removes the drawing.
 
 The analysis runs in ~30 ms slices and hands control back to the editor between them, so the UI stays responsive. A progress bar shows the current phase; closing it, or **Return Path → Cancel Running Analysis**, stops the run (so does **Clear Overlay**). The high-frequency check stops with a message after 60 s, the DC solve after 120 s. Nets with more than 4000 track segments, or boards whose reference copper has more than 500 000 polygon vertices, are refused up front. A slot detour with more than 1500 copper corners in its search window is reported as too complex instead of being traced.

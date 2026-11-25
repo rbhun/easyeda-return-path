@@ -45,6 +45,8 @@ npm run build:extension   # → packages/extension/build/dist/*.eext
 npm run demo              # CLI demo boards → packages/cli/out/
 ```
 
+Versioning: every change raises the minor version and adds an entry to [CHANGELOG.md](CHANGELOG.md); `npm run check:version` (also run in CI) checks it.
+
 ## Status
 
 Early development. The geometry is validated on synthetic boards only. The first run inside
