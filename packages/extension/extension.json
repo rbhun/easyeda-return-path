@@ -1,0 +1,55 @@
+{
+	"name": "easyeda-return-path",
+	"uuid": "cfe3a38bdd3044659ee9f3eadd5ebbc8",
+	"displayName": "Return Path Visualizer",
+	"description": "Shows the high-frequency return current path of the selected net and flags split crossings, missing reference copper and layer changes without a nearby return via or decap.",
+	"version": "0.1.0",
+	"publisher": "rbhun",
+	"engines": {
+		"eda": "^4.1.93"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "extension-store",
+		"url": ""
+	},
+	"categories": "Other",
+	"keywords": [
+		"Signal Integrity",
+		"Return Path",
+		"EMC"
+	],
+	"images": {
+		"logo": "./images/logo.png"
+	},
+	"homepage": "https://github.com/rbhun/easyeda-return-path",
+	"bugs": "https://github.com/rbhun/easyeda-return-path/issues",
+	"activationEvents": {},
+	"entry": "./dist/index",
+	"dependentExtensions": {},
+	"headerMenus": {
+		"pcb": [
+			{
+				"id": "returnPath",
+				"title": "Return Path",
+				"menuItems": [
+					{
+						"id": "showReturnPath",
+						"title": "Show for Selected Net",
+						"registerFn": "showReturnPath"
+					},
+					{
+						"id": "clearReturnPath",
+						"title": "Clear Overlay",
+						"registerFn": "clearReturnPath"
+					},
+					{
+						"id": "about",
+						"title": "About...",
+						"registerFn": "about"
+					}
+				]
+			}
+		]
+	}
+}

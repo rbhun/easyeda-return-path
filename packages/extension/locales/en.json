@@ -1,0 +1,7 @@
+{
+	"About": "About",
+	"Return path": "Return path",
+	"Return-path overlay v${1}": "Return-path overlay v${1}",
+	"Select a track, via or pad of the net to analyse.": "Select a track, via or pad of the net to analyse.",
+	"${1}: ${2} finding(s), ${3} overlay marker(s).": "${1}: ${2} finding(s), ${3} overlay marker(s)."
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@returnpath/cli",
+  "version": "0.1.0",
+  "description": "Offline return-path analysis of EasyEDA Pro files: file parser, SVG/PNG overlay and JSON report",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./parse": "./src/easyeda/parse.ts",
+    "./synth": "./src/synth/make-board.ts"
+  },
+  "bin": {
+    "returnpath": "src/cli.ts"
+  },
+  "scripts": {
+    "synth": "tsx src/synth/make-board.ts examples",
+    "analyze": "tsx src/cli.ts",
+    "demo": "npm run synth && tsx src/cli.ts examples/demo-4layer.epro --net CLK --name demo-clk --png && tsx src/cli.ts examples/fixed-4layer.epro --net CLK --name fixed-clk --png",
+    "typecheck": "tsc -p .",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@returnpath/core": "0.1.0",
+    "fflate": "^0.8.3"
+  }
+}

@@ -21,6 +21,30 @@ selected nets and flags return-path problems. EasyEDA has no built-in equivalent
 2. Check ±3h coverage for each fast-net segment, and flag a missing reference or a split crossing.
 3. For each split crossing, compute the geodesic detour and the added loop area.
 4. For each signal via, find the nearest return via or bridging decap.
-5. Draw the overlay on a custom layer: the ±3h band, gaps, detours, via links and loop areas.
+5. Draw a temporary overlay (indicator markers, not saved in the document): the ±3h band, gaps, detours, via links and loop areas.
 
-Status: early development.
+## Repository layout
+
+npm workspaces, TypeScript, Node ≥ 20.17.
+
+| Package | What it is |
+|---|---|
+| [`packages/core`](packages/core) | Pure geometry core: board model, reference copper, coverage, detours, via returns (pipeline steps 1–4). No I/O, no Node or DOM APIs. |
+| [`packages/cli`](packages/cli) | Offline tool: EasyEDA Pro file parser, SVG/PNG overlay renderer, JSON report, synthetic test boards. See its [README](packages/cli/README.md). |
+| [`packages/extension`](packages/extension) | EasyEDA Pro extension (official pro-api-sdk template): reads the board through the API, runs the core and draws a temporary overlay. See its [README](packages/extension/README.md). |
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run build:extension   # → packages/extension/build/dist/*.eext
+npm run demo              # CLI demo boards → packages/cli/out/
+```
+
+## Status
+
+Early development. The geometry is validated on synthetic boards only, and the extension
+has not yet been run inside EasyEDA Pro.
+
+Prior art: [kistitch](https://github.com/hatlabs/kistitch) (MIT, © Hat Labs Oy) informed the
+via-return thresholds; no code is copied.
