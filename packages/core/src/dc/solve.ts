@@ -4,7 +4,8 @@
 // load pads draw (rail) or return (ground) their currents. Jacobi-preconditioned conjugate
 // gradients, typed arrays only: pure TS for the extension sandbox.
 import { bbox } from '../geom.js';
-import { buildReferenceCopper } from '../refcopper.js';
+import { runAsync, runSync, type RunOptions, type Steps } from '../budget.js';
+import { buildReferenceCopperSteps, type LayerCopper } from '../refcopper.js';
 import { MULTI_LAYER, type Board, type Pad, type Pt } from '../types.js';
 import { cellCentre, cellOf, inGrid, padCells, rasterNet, type Grid } from './raster.js';
 import type { DcSetup } from './rails.js';
@@ -143,20 +144,30 @@ interface Barrel {
 }
 
 /** Solve both halves of the loop: the rail from the source to the loads, the ground back. */
-export function solveDc(board: Board, setup: DcSetup, options: Partial<DcOptions> = {}): DcResult {
+export function solveDc(board: Board, setup: DcSetup, options: Partial<DcOptions> = {}, run: RunOptions = {}): DcResult {
+  return runSync(solveDcSteps(board, setup, options), run);
+}
+
+/** Same as solveDc, in time slices that hand control back to the host between slices. */
+export function solveDcAsync(board: Board, setup: DcSetup, options: Partial<DcOptions> = {}, run: RunOptions = {}): Promise<DcResult> {
+  return runAsync(solveDcSteps(board, setup, options), run);
+}
+
+export function* solveDcSteps(board: Board, setup: DcSetup, options: Partial<DcOptions> = {}): Steps<DcResult> {
   const opts = { ...defaultDcOptions, ...options };
   const warnings = [...setup.warnings];
   const thickness = copperThickness(board, opts, warnings);
   const grid = chooseGrid(board, setup, opts);
-  const refCopper = buildReferenceCopper(board, { clearance: opts.clearance });
+  yield { phase: 'reference copper', fraction: 0 };
+  const refCopper = yield* buildReferenceCopperSteps(board, { clearance: opts.clearance });
 
-  const solveNet = (net: string, role: 'supply' | 'return'): DcNetResult => {
+  const solveNet = (net: string, role: 'supply' | 'return'): Steps<DcNetResult> => {
     const sourcePads = role === 'supply' ? setup.source.railPads : setup.source.groundPads;
     const loads = setup.loads.map((l) => ({ designator: l.designator, current: l.current, pads: role === 'supply' ? l.railPads : l.groundPads }));
     return solveNetField(board, grid, refCopper, thickness, net, role, sourcePads, loads, opts);
   };
-  const supply = solveNet(setup.rail, 'supply');
-  const ret = setup.source.groundPads.length ? solveNet(setup.ground, 'return') : undefined;
+  const supply = yield* solveNet(setup.rail, 'supply');
+  const ret = setup.source.groundPads.length ? yield* solveNet(setup.ground, 'return') : undefined;
   for (const r of [supply, ret]) {
     if (!r) continue;
     for (const u of r.unconnected) warnings.push(`${u} has no copper path to ${setup.source.designator} on ${r.net}; left out.`);
@@ -165,21 +176,26 @@ export function solveDc(board: Board, setup: DcSetup, options: Partial<DcOptions
   return { setup, grid, supply, ret, warnings, thickness };
 }
 
-function solveNetField(
+function* solveNetField(
   board: Board,
   g: Grid,
-  refCopper: ReturnType<typeof buildReferenceCopper>,
+  refCopper: Map<number, LayerCopper>,
   thickness: Map<number, number>,
   net: string,
   role: 'supply' | 'return',
   sourcePads: Pad[],
   loads: { designator: string; current: number; pads: Pad[] }[],
   opts: DcOptions,
-): DcNetResult {
+): Steps<DcNetResult> {
   const { copper, dielectrics } = board.stackup;
   const L = copper.length;
   const NC = g.nx * g.ny;
-  const weights = copper.map((l) => rasterNet(board, g, net, l.id, refCopper.get(l.id)?.byNet.get(net)));
+  const weights: Float32Array[] = [];
+  for (const [li, l] of copper.entries()) {
+    yield { phase: `raster ${net}`, fraction: li / L };
+    weights.push(rasterNet(board, g, net, l.id, refCopper.get(l.id)?.byNet.get(net)));
+  }
+  yield { phase: `network ${net}` };
 
   // Node numbering: copper cells of every layer.
   const nodeOf = weights.map(() => new Int32Array(NC).fill(-1));
@@ -356,7 +372,9 @@ function solveNetField(
   }
   let it = 0;
   let res = bnorm ? 1 : 0;
+  const logTol = Math.log(opts.tolerance);
   while (bnorm && it < opts.maxIterations) {
+    yield { phase: `solve ${net}`, fraction: Math.min(1, Math.max(0, Math.log(Math.max(res, 1e-300)) / logTol)) };
     apply(p, q);
     let pq = 0;
     for (let n = 0; n < N; n++) if (active[n]) pq += p[n] * q[n];

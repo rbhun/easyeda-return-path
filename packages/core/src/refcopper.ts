@@ -1,3 +1,4 @@
+import { runSync, type Steps } from './budget.js';
 import { circle, difference, inflate, intersect, strokePath, union } from './geom.js';
 import { MULTI_LAYER, type Board, type Paths } from './types.js';
 
@@ -19,6 +20,10 @@ export interface RefCopperOptions {
  * Same-net tracks and pads on the layer are merged into the net's copper.
  */
 export function buildReferenceCopper(board: Board, opts: RefCopperOptions): Map<number, LayerCopper> {
+  return runSync(buildReferenceCopperSteps(board, opts));
+}
+
+export function* buildReferenceCopperSteps(board: Board, opts: RefCopperOptions): Steps<Map<number, LayerCopper>> {
   const result = new Map<number, LayerCopper>();
   const refNets = new Set(board.pours.map((p) => p.net));
 
@@ -42,7 +47,8 @@ export function buildReferenceCopper(board: Board, opts: RefCopperOptions): Map<
     };
 
     let claimed: Paths = [];
-    for (const pour of pours) {
+    for (const [k, pour] of pours.entries()) {
+      yield { phase: 'reference copper', fraction: k / pours.length };
       let fill: Paths;
       if (pour.poured) {
         fill = pour.poured;
@@ -58,6 +64,7 @@ export function buildReferenceCopper(board: Board, opts: RefCopperOptions): Map<
 
     for (const net of byNet.keys()) {
       if (!refNets.has(net)) continue;
+      yield { phase: 'reference copper' };
       const extra: Paths = [];
       for (const t of board.tracks) if (t.layer === layer.id && t.net === net) extra.push(...strokePath([t.a, t.b], t.width));
       for (const p of board.pads) if ((p.layer === layer.id || p.layer === MULTI_LAYER) && p.net === net) extra.push(...p.shape);
@@ -91,4 +98,11 @@ function otherNetObstacles(board: Board, layer: number, net: string, clearance: 
 export function allCopper(lc: LayerCopper | undefined): Paths {
   if (!lc) return [];
   return union(...lc.byNet.values());
+}
+
+/** Vertex count of a region, for diagnostics and complexity limits. */
+export function vertexCount(paths: Iterable<Paths>): number {
+  let n = 0;
+  for (const ps of paths) for (const p of ps) n += p.length;
+  return n;
 }

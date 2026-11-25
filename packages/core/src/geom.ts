@@ -195,12 +195,30 @@ export class Polyline {
   get length() {
     return this.cum[this.cum.length - 1];
   }
+  private segIndex(s: number): number {
+    let lo = 1;
+    let hi = this.cum.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.cum[mid] < s) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
   at(s: number): Pt {
     s = Math.max(0, Math.min(this.length, s));
-    let i = 1;
-    while (i < this.cum.length - 1 && this.cum[i] < s) i++;
+    if (this.pts.length < 2) return this.pts[0];
+    const i = this.segIndex(s);
     const seg = this.cum[i] - this.cum[i - 1];
     return lerp(this.pts[i - 1], this.pts[i], seg ? (s - this.cum[i - 1]) / seg : 0);
+  }
+  /** Unit tangent at arc length s. */
+  dirAt(s: number): Pt {
+    if (this.pts.length < 2) return { x: 1, y: 0 };
+    const i = this.segIndex(Math.max(0, Math.min(this.length, s)));
+    const d = sub(this.pts[i], this.pts[i - 1]);
+    const l = Math.hypot(d.x, d.y) || 1;
+    return { x: d.x / l, y: d.y / l };
   }
   /** Sub-polyline between arc lengths s0 < s1. */
   slice(s0: number, s1: number): Path {

@@ -1,4 +1,6 @@
-import { bbox, cross, dist, distPointSeg, inflate, intersect, lerp, pointInPaths, segmentsCross, signedArea, simplify, splitIslands, sub } from './geom.js';
+import { runSync, type Steps, type Tick } from './budget.js';
+import { bbox, cross, dist, inflate, intersect, lerp, pointInPaths, signedArea, simplify, splitIslands, sub } from './geom.js';
+import { EdgeGrid } from './spatial.js';
 import type { Path, Paths, Pt } from './types.js';
 
 export interface DetourOptions {
@@ -6,6 +8,10 @@ export interface DetourOptions {
   minHoleArea: number;
   /** Initial half-size of the search window around the crossing, mm. */
   window: number;
+  /** Give up when a window holds more graph nodes (reflex vertices) than this. */
+  maxNodes?: number;
+  /** Receives the largest graph size searched, for diagnostics. */
+  info?: { nodes: number };
 }
 
 export interface Detour {
@@ -13,14 +19,25 @@ export interface Detour {
   length: number;
 }
 
+/** Returned when the copper around a crossing is too complex for the node budget. */
+export const TOO_COMPLEX = 'too-complex' as const;
+
+export const DEFAULT_MAX_DETOUR_NODES = 1500;
+
 /**
  * Pipeline step 3: shortest path from a to b inside a copper region (geodesic).
  * Visibility graph over the region's reflex vertices + A*. The region is clipped to a window
  * around a..b that doubles until the path no longer touches the window border.
  */
 export function geodesic(region: Paths, a: Pt, b: Pt, opts: DetourOptions): Detour | null {
+  const r = runSync(geodesicSteps(region, a, b, opts));
+  return r === TOO_COMPLEX ? null : r;
+}
+
+export function* geodesicSteps(region: Paths, a: Pt, b: Pt, opts: DetourOptions): Steps<Detour | null | typeof TOO_COMPLEX> {
   const rb = bbox(region);
   const regionSize = Math.max(rb.maxX - rb.minX, rb.maxY - rb.minY);
+  const maxNodes = opts.maxNodes ?? DEFAULT_MAX_DETOUR_NODES;
   let half = Math.max(opts.window, dist(a, b));
   for (;;) {
     const cx = (a.x + b.x) / 2;
@@ -34,9 +51,11 @@ export function geodesic(region: Paths, a: Pt, b: Pt, opts: DetourOptions): Deto
       { x: win.maxX, y: win.maxY },
       { x: win.minX, y: win.maxY },
     ];
+    yield { phase: 'detour' };
     const local = prepareRegion(intersect(region, [winRect]), opts.minHoleArea);
     const island = local.find((isl) => pointInPaths(a, isl) && pointInPaths(b, isl));
-    const path = island ? shortestPath(island, a, b) : null;
+    const path = island ? yield* shortestPath(island, a, b, maxNodes, opts.info) : null;
+    if (path === TOO_COMPLEX) return TOO_COMPLEX;
     if (path) {
       const touches = path.some(
         (p) => Math.abs(p.x - win.minX) < 1e-3 || Math.abs(p.x - win.maxX) < 1e-3 || Math.abs(p.y - win.minY) < 1e-3 || Math.abs(p.y - win.maxY) < 1e-3,
@@ -55,8 +74,7 @@ function prepareRegion(paths: Paths, minHoleArea: number): Paths[] {
   return splitIslands(shrunk);
 }
 
-function shortestPath(island: Paths, a: Pt, b: Pt): Path | null {
-  const edges: [Pt, Pt][] = [];
+function* shortestPath(island: Paths, a: Pt, b: Pt, maxNodes: number, info?: { nodes: number }): Generator<Tick, Path | null | typeof TOO_COMPLEX, void> {
   const nodes: Pt[] = [a, b];
   for (const ring of island) {
     const n = ring.length;
@@ -64,24 +82,19 @@ function shortestPath(island: Paths, a: Pt, b: Pt): Path | null {
       const prev = ring[(i + n - 1) % n];
       const cur = ring[i];
       const next = ring[(i + 1) % n];
-      edges.push([cur, next]);
       // Region interior is on the left of every ring, so reflex vertices turn right.
       if (cross(sub(cur, prev), sub(next, cur)) < 0) nodes.push(cur);
     }
   }
+  if (info) info.nodes = Math.max(info.nodes, nodes.length);
+  if (nodes.length > maxNodes) return TOO_COMPLEX;
+  const grid = new EdgeGrid(island);
 
   const visible = (p: Pt, q: Pt): boolean => {
-    const minX = Math.min(p.x, q.x);
-    const maxX = Math.max(p.x, q.x);
-    const minY = Math.min(p.y, q.y);
-    const maxY = Math.max(p.y, q.y);
-    for (const [e0, e1] of edges) {
-      if (Math.max(e0.x, e1.x) < minX || Math.min(e0.x, e1.x) > maxX || Math.max(e0.y, e1.y) < minY || Math.min(e0.y, e1.y) > maxY) continue;
-      if (segmentsCross(p, q, e0, e1)) return false;
-    }
+    if (grid.crosses(p, q)) return false;
     const mid = lerp(p, q, 0.5);
     // Edges between consecutive boundary vertices are valid moves; their midpoint lies on the boundary.
-    return pointInPaths(mid, island) || edges.some(([e0, e1]) => distPointSeg(mid, e0, e1) < 1e-7);
+    return grid.contains(mid) || grid.nearBoundary(mid, 1e-7);
   };
 
   // A* from node 0 (a) to node 1 (b) on the implicit visibility graph.
@@ -91,6 +104,7 @@ function shortestPath(island: Paths, a: Pt, b: Pt): Path | null {
   const closed = new Uint8Array(n);
   g[0] = 0;
   const open = new Set<number>([0]);
+  let checks = 0;
   while (open.size) {
     let u = -1;
     let best = Infinity;
@@ -107,7 +121,8 @@ function shortestPath(island: Paths, a: Pt, b: Pt): Path | null {
     for (let v = 0; v < n; v++) {
       if (closed[v] || v === u) continue;
       const nd = g[u] + dist(nodes[u], nodes[v]);
-      if (nd >= g[v]) continue;
+      if (nd >= g[v] || nd + dist(nodes[v], b) >= g[1]) continue;
+      if (++checks % 256 === 0) yield { phase: 'detour' };
       if (!visible(nodes[u], nodes[v])) continue;
       g[v] = nd;
       prev[v] = u;

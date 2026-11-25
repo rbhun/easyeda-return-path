@@ -1,4 +1,6 @@
 export * from './types.js';
+export * from './budget.js';
+export * from './spatial.js';
 export * from './geom.js';
 export * from './refcopper.js';
 export * from './detour.js';
