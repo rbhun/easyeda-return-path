@@ -21,5 +21,11 @@
 	"Step 4/5: active source of ${1}. ${2}": "Step 4/5: active source of ${1}. ${2}",
 	"Other candidate sources are left out of the solve.": "Other candidate sources are left out of the solve.",
 	"Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.": "Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.",
-	"Load currents, e.g. ${1}. Leave empty to split 1 A equally and show normalised density.": "Load currents, e.g. ${1}. Leave empty to split 1 A equally and show normalised density."
+	"Load currents, e.g. ${1}. Leave empty to split 1 A equally and show normalised density.": "Load currents, e.g. ${1}. Leave empty to split 1 A equally and show normalised density.",
+	"Cancel": "Cancel",
+	"Open DC view": "Open DC view",
+	"No analysis is running.": "No analysis is running.",
+	"Error": "Error",
+	"Details are in the log panel (bottom panel, shortcut S, Log tab).": "Details are in the log panel (bottom panel, shortcut S, Log tab).",
+	"${1} is still running. Cancel it first (Return Path > Cancel Running Analysis).": "${1} is still running. Cancel it first (Return Path > Cancel Running Analysis)."
 }

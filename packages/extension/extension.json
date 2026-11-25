@@ -44,6 +44,11 @@
 						"registerFn": "showDcReturn"
 					},
 					{
+						"id": "cancelAnalysis",
+						"title": "Cancel Running Analysis",
+						"registerFn": "cancelAnalysis"
+					},
+					{
 						"id": "clearReturnPath",
 						"title": "Clear Overlay",
 						"registerFn": "clearReturnPath"

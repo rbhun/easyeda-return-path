@@ -4,5 +4,11 @@
 	"Return-path overlay v${1}": "回流路径叠加层 v${1}",
 	"Select a track, via or pad of the net to analyse.": "请先选中要分析网络的导线、过孔或焊盘。",
 	"${1}: ${2} finding(s), ${3} overlay marker(s).": "${1}：${2} 个问题，绘制了 ${3} 个标记。",
-	"DC return current": "直流回流电流"
+	"DC return current": "直流回流电流",
+	"Cancel": "取消",
+	"Open DC view": "打开直流视图",
+	"No analysis is running.": "没有正在运行的分析。",
+	"Error": "错误",
+	"Details are in the log panel (bottom panel, shortcut S, Log tab).": "详细信息见日志面板（底部面板，快捷键 S，日志页）。",
+	"${1} is still running. Cancel it first (Return Path > Cancel Running Analysis).": "${1} 仍在运行。请先取消（回流路径 > 取消正在运行的分析）。"
 }

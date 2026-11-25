@@ -12,7 +12,7 @@ const complex = (paths: Paths) => splitIslands(paths).map(island => island.map(r
 
 /** Pours on `planeLayers` are served like EasyEDA plane layers: poured copper without a pour ID, plus mode-2 fills carrying the net. */
 export interface DialogCall {
-	kind: 'select' | 'multi' | 'input';
+	kind: 'select' | 'multi' | 'input' | 'confirm';
 	prompt: string;
 	title: string;
 	options: { value: string; displayContent: string }[];
@@ -30,6 +30,10 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 
 	const markers: { shape: Record<string, unknown>; color: unknown }[] = [];
 	const messages: string[] = [];
+	const logs: { message: string; type: string }[] = [];
+	const progress: { progress?: number; title?: string }[] = [];
+	const toasts: string[] = [];
+	const progressListeners = new Map<string, (p: { action: string }) => void>();
 	const getters = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [`getState_${k}`, () => v]));
 	const padObj = (p: Board['pads'][number]) => getters({
 		PrimitiveId: p.id,
@@ -53,8 +57,22 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 
 	const eda = {
 		sys_I18n: { text: (key: string, _ns?: string, _lang?: string, ...args: string[]) => args.reduce((s, a, i) => s.replace(`\${${i + 1}}`, a), key) },
+		sys_Log: { add: (message: string, type = 'info') => void logs.push({ message, type }) },
+		sys_LoadingAndProgressBar: {
+			showProgressBar: (p?: number, title?: string) => void progress.push({ progress: p, title }),
+			destroyProgressBar: () => void progress.push({}),
+		},
+		sys_Event: {
+			addProgressBarEventListener: (id: string, fn: (p: { action: string }) => void) => void progressListeners.set(id, fn),
+			removeEventListener: (id: string) => progressListeners.delete(id),
+		},
+		sys_Message: { showToastMessage: (m: string) => void toasts.push(m) },
 		sys_Dialog: {
 			showInformationMessage: (content: string) => void messages.push(content),
+			showConfirmationMessage: (content: string, title: string, _ok: string, _cancel: string, cb: (ok: boolean) => void) => {
+				dialogs.push({ kind: 'confirm', prompt: content, options: [], dflt: undefined });
+				cb(!!answer({ kind: 'confirm', prompt: content, title, options: [], dflt: undefined }));
+			},
 			showSelectDialog: (options: { value: string; displayContent: string }[], before: string, _after: unknown, title: string, dflt: string | string[] | undefined, multiple: boolean, cb: (v: unknown) => void) => {
 				dialogs.push({ kind: multiple ? 'multi' : 'select', prompt: before, options: options.map(o => o.value), dflt });
 				cb(answer({ kind: multiple ? 'multi' : 'select', prompt: before, title, options, dflt }));
@@ -120,5 +138,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			})),
 		},
 	};
-	return { eda, markers, messages, dialogs };
+	/** Simulates the user closing the progress bar. */
+	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
+	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar };
 }
