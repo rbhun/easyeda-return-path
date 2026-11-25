@@ -159,9 +159,11 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
   py += 10;
   el(`<text x="${px + 8}" y="${py}" fill="#e5e7eb" font-size="14" font-weight="bold">Legend</text>`);
   py += 20;
+  const coplanar = chains.some((c) => c.ref?.coplanar);
+  const bandName = coplanar && chains.every((c) => c.ref?.coplanar) ? 'coplanar band (3 gaps beside the trace clearance)' : coplanar ? '±3h / coplanar band' : '±3h band';
   const legend: [string, string][] = [
-    ['band', '±3h band with reference copper (≈80% of return current)'],
-    ['hatch', '±3h band without reference copper'],
+    ['band', `${bandName} with reference copper${coplanar ? '' : ' (≈80% of return current)'}`],
+    ['hatch', `${bandName} without reference copper`],
     ['gap', 'trace over a gap / split (no copper under centreline)'],
     ['detour', 'geodesic return detour + added loop area'],
     ['ok', 'return via / decap within limit'],

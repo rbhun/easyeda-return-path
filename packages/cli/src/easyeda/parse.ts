@@ -12,7 +12,7 @@ const LAYER_MULTI = 12;
 const NO_POUR = new Set([4, 7, 8]);
 
 export interface ParseOptions {
-  /** Unit of LAYER_PHYS dielectric thickness. 'auto': mm if any value < 1, else mil. */
+  /** Unit of LAYER_PHYS dielectric thickness. 'auto': whichever makes the board 0.2–10 mm thick; if both do, mm when any value < 1. */
   physUnit?: 'auto' | 'mil' | 'mm';
   /** Dielectric thickness used when the stackup gives none, mm. */
   defaultDielectricMm?: number;
@@ -159,7 +159,13 @@ function buildStackup(recs: Rec[], opts: ParseOptions, warnings: string[]): Boar
 
   const subThk = middle.filter((l) => l.layerType === 'SUBSTRATE').map((l) => num(phys.get(num(l.id))?.thickness, NaN)).filter(isFinite);
   let unit = opts.physUnit ?? 'auto';
-  if (unit === 'auto') unit = subThk.some((t) => t < 1) ? 'mm' : 'mil';
+  if (unit === 'auto') {
+    // A board is roughly 0.2–10 mm thick: pick the unit that makes the stack plausible.
+    const total = subThk.reduce((a, t) => a + t, 0);
+    if (total * MIL < 0.2) unit = 'mm';
+    else if (total > 10) unit = 'mil';
+    else unit = subThk.some((t) => t < 1) ? 'mm' : 'mil';
+  }
   const toMm = (v: number) => (unit === 'mm' ? v : v * MIL);
   const dflt = opts.defaultDielectricMm ?? 0.2;
 

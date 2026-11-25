@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Resvg } from '@resvg/resvg-js';
-import { analyzeNet, guessRails, type Analysis, type Board } from '@returnpath/core';
+import { AnalysisAborted, analyzeNet, guessRails, hfApplicability, type Analysis, type Board } from '@returnpath/core';
 import { dcReport, dcViews, describeGuess, runDc } from './dc.js';
 import { loadBoard } from './easyeda/load.js';
 import { renderOverlay } from './render/svg.js';
@@ -26,6 +26,8 @@ const { values, positionals } = parseArgs({
     loads: { type: 'string' },
     current: { type: 'string' },
     cell: { type: 'string' },
+    force: { type: 'boolean', default: false },
+    verbose: { type: 'boolean', short: 'v', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -33,7 +35,7 @@ const { values, positionals } = parseArgs({
 const file = positionals[0];
 if (values.help || !file) {
   console.log(`Usage: returnpath <board.epro|board.epcb> --net CLK [--out dir] [--name prefix] [--png]
-       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets]
+       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets] [--force] [--verbose]
        returnpath <board> --list-rails
        returnpath <board> --dc 3V3 [--ground GND] [--source U1] [--loads U2,U3] [--current U2=0.15,U3=20mA]
        [--cell mm] [--out dir] [--name prefix] [--png]`);
@@ -79,7 +81,27 @@ if (values['list-nets'] || !values.net) {
 }
 
 const net = values.net;
-const analysis = analyzeNet(board, net, values.clearance ? { clearance: Number(values.clearance) } : {});
+const scope = hfApplicability(board, net);
+if (!scope.ok && !values.force) {
+  console.error(`${scope.message}\nCLI: returnpath <board> --dc <rail>. Pass --force to run the high-frequency check anyway.`);
+  process.exit(2);
+}
+const phaseMs = new Map<string, number>();
+let analysis: Analysis;
+try {
+  analysis = analyzeNet(board, net, values.clearance ? { clearance: Number(values.clearance) } : {}, {
+    timeBudgetMs: 120_000,
+    onPhase: (_p, prev, ms) => prev && phaseMs.set(prev, (phaseMs.get(prev) ?? 0) + ms),
+  });
+} catch (e) {
+  if (!(e instanceof AnalysisAborted)) throw e;
+  console.error(`error: ${e.message}`);
+  process.exit(2);
+}
+if (values.verbose) {
+  console.log(`phases: ${[...phaseMs].map(([p, ms]) => `${p} ${ms.toFixed(0)} ms`).join(', ')}`);
+  console.log(`sizes: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${typeof v === 'number' ? +v.toFixed(3) : v}`).join(' ')}`);
+}
 const prefix = values.name ?? `${basename(file).replace(/\.[^.]+$/, '')}-${net.toLowerCase()}`;
 mkdirSync(values.out!, { recursive: true });
 
@@ -87,7 +109,8 @@ const layerName = (id: number) => board.stackup.copper.find((l) => l.id === id)?
 const views: { suffix: string; title: string; refLayer?: number }[] = [{ suffix: 'overview', title: `${net} return path: overview (${basename(file)})` }];
 for (const rl of new Set(analysis.chains.map((c) => c.ref?.layer).filter((x): x is number => x !== undefined))) {
   const sig = [...new Set(analysis.chains.filter((c) => c.ref?.layer === rl).map((c) => layerName(c.chain.layer)))].join(' + ');
-  views.push({ suffix: `ref-${layerName(rl).toLowerCase().replace(/\W+/g, '')}`, title: `${net} on ${sig}, referenced to ${layerName(rl)}`, refLayer: rl });
+  const coplanar = analysis.chains.some((c) => c.ref?.layer === rl && c.ref.coplanar);
+  views.push({ suffix: `ref-${layerName(rl).toLowerCase().replace(/\W+/g, '')}`, title: `${net} on ${sig}, referenced to ${layerName(rl)}${coplanar ? ' (coplanar pour)' : ''}`, refLayer: rl });
 }
 
 for (const v of views) writeSvg(join(values.out!, `${prefix}-${v.suffix}`), renderOverlay(board, analysis, { title: v.title, refLayer: v.refLayer }));
@@ -105,10 +128,11 @@ function report(b: Board, a: Analysis) {
     units: 'mm',
     warnings: b.warnings,
     stackup: b.stackup,
+    stats: a.stats,
     findings: a.findings.map((f) => ({ ...f, at: pt(f.at) })),
     chains: a.chains.map((c) => ({
       layer: layerName(c.chain.layer),
-      reference: c.ref ? { layer: layerName(c.ref.layer), h: c.ref.h, band: r2(3 * c.ref.h) } : null,
+      reference: c.ref ? { layer: layerName(c.ref.layer), h: r2(c.ref.h), band: r2(3 * c.ref.h), coplanar: !!c.ref.coplanar } : null,
       referenceNets: c.refNets,
       length: r2(c.chain.pts.reduce((s, p, i) => (i ? s + Math.hypot(p.x - c.chain.pts[i - 1].x, p.y - c.chain.pts[i - 1].y) : 0), 0)),
       coverage: c.coverage.map((x) => ({ track: x.trackId, ratio: r2(x.ratio) })),
