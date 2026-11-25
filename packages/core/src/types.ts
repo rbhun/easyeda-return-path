@@ -16,6 +16,8 @@ export interface CopperLayer {
   index: number;
   /** Depth of the layer from the top copper surface, mm (dielectrics only). */
   z: number;
+  /** Copper foil thickness, mm, when the stackup gives one. */
+  thicknessMm?: number;
 }
 
 export interface Dielectric {
@@ -63,11 +65,15 @@ export interface Pad {
   shape: Paths;
   holeDiameter: number;
   componentId?: string;
+  /** Schematic pin name (VOUT, GND…) when known; PCB data carries only the pad number. */
+  pinName?: string;
 }
 
 export interface Component {
   id: string;
   designator: string;
+  /** Device / part name (e.g. AMS1117-3.3) when known. */
+  name?: string;
   at: Pt;
   rotation: number;
   layer: number;

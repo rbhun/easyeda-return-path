@@ -3,5 +3,6 @@
 	"Return path": "回流路径",
 	"Return-path overlay v${1}": "回流路径叠加层 v${1}",
 	"Select a track, via or pad of the net to analyse.": "请先选中要分析网络的导线、过孔或焊盘。",
-	"${1}: ${2} finding(s), ${3} overlay marker(s).": "${1}：${2} 个问题，绘制了 ${3} 个标记。"
+	"${1}: ${2} finding(s), ${3} overlay marker(s).": "${1}：${2} 个问题，绘制了 ${3} 个标记。",
+	"DC return current": "直流回流电流"
 }

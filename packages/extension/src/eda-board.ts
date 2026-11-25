@@ -52,6 +52,16 @@ export async function selectedNet(): Promise<string | undefined> {
 	return undefined;
 }
 
+/** Copper foil thickness in the stackup unit; values outside 5–210 µm are taken for a unit mix-up and dropped. */
+function copperMm(t: number, warnings: string[]): number | undefined {
+	if (!(t > 0))
+		return undefined;
+	if (t >= 0.005 && t <= 0.21)
+		return t;
+	warnings.push(`Copper thickness ${t} mm from getStackup() is implausible; using the default.`);
+	return undefined;
+}
+
 async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 	const copper: CopperLayer[] = [];
 	const dielectrics: Dielectric[] = [];
@@ -64,7 +74,7 @@ async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 			if (l.kind === 'copper') {
 				if (copper.length)
 					dielectrics.push(pending ?? { name: 'unknown', thicknessMm: 0.2 });
-				copper.push({ id: l.layerId, name: l.layerName, index: copper.length, z });
+				copper.push({ id: l.layerId, name: l.layerName, index: copper.length, z, thicknessMm: copperMm(l.thickness * k, warnings) });
 				pending = undefined;
 			}
 			else if (l.kind === 'dielectric' && copper.length) {
@@ -181,6 +191,7 @@ export async function readBoard(): Promise<Board> {
 		components.push({
 			id,
 			designator: c.getState_Designator() ?? id,
+			name: c.getState_Name(),
 			at: conv(c.getState_X(), c.getState_Y()),
 			rotation: c.getState_Rotation(),
 			layer: c.getState_Layer() as number,

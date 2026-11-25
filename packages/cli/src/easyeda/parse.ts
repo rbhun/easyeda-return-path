@@ -185,10 +185,19 @@ function buildStackup(recs: Rec[], opts: ParseOptions, warnings: string[]): Boar
       z += thk;
     }
     pending = [];
-    copper.push({ id, name: str(l.layerName) || `L${id}`, index: copper.length, z });
+    copper.push({ id, name: str(l.layerName) || `L${id}`, index: copper.length, z, thicknessMm: copperThicknessMm(num(phys.get(id)?.thickness, NaN)) });
   }
   if (subThk.length) warnings.push(`LAYER_PHYS dielectric thickness read as ${unit}.`);
+  if (copper.some((c) => c.thicknessMm)) warnings.push('LAYER_PHYS copper thickness read as oz (0.25–6), mm (< 0.25) or µm (> 6); unverified against a real export.');
   return { copper, dielectrics };
+}
+
+/** Copper LAYER_PHYS thickness: the unit is undocumented, so guess it from the magnitude. */
+function copperThicknessMm(t: number): number | undefined {
+  if (!isFinite(t) || t <= 0) return undefined;
+  if (t < 0.25) return t;
+  if (t <= 6) return t * 0.035;
+  return t / 1000;
 }
 
 interface Xform {
@@ -261,7 +270,8 @@ function buildComponents(recs: Rec[], footprints: Map<string, string>, copperIds
     const fpId = a.get('footprint') ?? str(attrMap['Footprint']);
     const layer = num(r.layerId, LAYER_TOP);
     const xf: Xform = { at: conv(num(r.positionX), num(r.positionY)), angle: num(r.angle), mirror: layer === LAYER_BOTTOM };
-    const comp: Component = { id: r.id, designator: a.get('designator') || str(attrMap['Designator']) || r.id, at: xf.at, rotation: xf.angle, layer, padIds: [] };
+    const name = a.get('name') || str(attrMap['Name']) || a.get('manufacturer part') || undefined;
+    const comp: Component = { id: r.id, designator: a.get('designator') || str(attrMap['Designator']) || r.id, name, at: xf.at, rotation: xf.angle, layer, padIds: [] };
     const fpText = footprints.get(fpId);
     if (!fpText) {
       missing++;

@@ -3,7 +3,7 @@
 import { type Analysis, type Path, type Paths, type Pt } from '@returnpath/core';
 import { MIL } from './eda-board';
 
-type Rgba = { r: number; g: number; b: number; alpha: number };
+export type Rgba = { r: number; g: number; b: number; alpha: number };
 
 export const COLORS = {
 	band: { r: 46, g: 158, b: 79, alpha: 0.5 },
@@ -12,14 +12,14 @@ export const COLORS = {
 	link: { r: 30, g: 136, b: 229, alpha: 0.9 },
 } satisfies Record<string, Rgba>;
 
-type Marker = IDMT_IndicatorMarkerShape;
+export type Marker = IDMT_IndicatorMarkerShape;
 
 export async function clearOverlay(): Promise<void> {
 	await eda.dmt_EditorControl.removeIndicatorMarkers();
 }
 
-/** Replaces the overlay with the given analysis. Returns the number of markers drawn. */
-export async function drawAnalysis(an: Analysis): Promise<number> {
+/** Marker builders in canvas coordinates for core geometry in mm. */
+export async function markerKit() {
 	// Assumes marker coordinates are canvas coordinates, offset from data coordinates by a translation (D1: to test).
 	const origin = await eda.pcb_Document.convertDataOriginToCanvasOrigin(0, 0);
 	const toMil = (p: Pt) => ({ x: p.x / MIL + origin.x, y: p.y / MIL + origin.y });
@@ -31,6 +31,12 @@ export async function drawAnalysis(an: Analysis): Promise<number> {
 	};
 	const outline = (paths: Paths) => paths.flatMap(r => segs(r, true));
 	const dot = (p: Pt, rMm: number): Marker => ({ type: 'circle' as EDMT_IndicatorMarkerType, ...toMil(p), r: rMm / MIL });
+	return { segs, outline, dot };
+}
+
+/** Replaces the overlay with the given analysis. Returns the number of markers drawn. */
+export async function drawAnalysis(an: Analysis): Promise<number> {
+	const { segs, outline, dot } = await markerKit();
 
 	const groups: Record<keyof typeof COLORS, Marker[]> = { band: [], gap: [], detour: [], link: [] };
 	for (const c of an.chains) {

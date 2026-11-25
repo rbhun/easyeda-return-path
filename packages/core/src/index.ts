@@ -4,3 +4,4 @@ export * from './refcopper.js';
 export * from './detour.js';
 export * from './analyze.js';
 export * from './easyeda-polygon.js';
+export * from './dc/index.js';

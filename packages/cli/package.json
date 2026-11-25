@@ -7,17 +7,20 @@
   "license": "Apache-2.0",
   "exports": {
     "./parse": "./src/easyeda/parse.ts",
-    "./synth": "./src/synth/make-board.ts"
+    "./synth": "./src/synth/make-board.ts",
+    "./synth-dc": "./src/synth/make-dc-board.ts",
+    "./dc": "./src/dc.ts"
   },
   "bin": {
     "returnpath": "src/cli.ts"
   },
   "scripts": {
-    "synth": "tsx src/synth/make-board.ts examples",
+    "synth": "tsx src/synth/make-board.ts examples && tsx src/synth/make-dc-board.ts examples",
     "analyze": "tsx src/cli.ts",
     "demo": "npm run synth && tsx src/cli.ts examples/demo-4layer.epro --net CLK --name demo-clk --png && tsx src/cli.ts examples/fixed-4layer.epro --net CLK --name fixed-clk --png",
     "typecheck": "tsc -p .",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "demo:dc": "tsx src/synth/make-dc-board.ts examples && tsx src/cli.ts examples/dc-4layer.epro --dc 3V3 --name dc-3v3 --png && tsx src/cli.ts examples/dc-4layer.epro --dc VBUS --name dc-vbus --png"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",

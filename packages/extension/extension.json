@@ -39,6 +39,11 @@
 						"registerFn": "showReturnPath"
 					},
 					{
+						"id": "showDcReturn",
+						"title": "DC Return Current...",
+						"registerFn": "showDcReturn"
+					},
+					{
 						"id": "clearReturnPath",
 						"title": "Clear Overlay",
 						"registerFn": "clearReturnPath"

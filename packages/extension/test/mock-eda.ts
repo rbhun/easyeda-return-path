@@ -11,7 +11,17 @@ const ring = (r: Path, origin: Pt = { x: 0, y: 0 }): unknown[] => {
 const complex = (paths: Paths) => splitIslands(paths).map(island => island.map(r => ring(r)));
 
 /** Pours on `planeLayers` are served like EasyEDA plane layers: poured copper without a pour ID, plus mode-2 fills carrying the net. */
-export function createMockEda(board: Board, selectedNet: string, planeLayers: number[] = []) {
+export interface DialogCall {
+	kind: 'select' | 'multi' | 'input';
+	prompt: string;
+	title: string;
+	options: { value: string; displayContent: string }[];
+	dflt: string | string[] | undefined;
+}
+
+/** Answers every dialog with its default unless `answer` says otherwise. */
+export function createMockEda(board: Board, selectedNet: string, planeLayers: number[] = [], answer: (d: DialogCall) => unknown = d => d.dflt) {
+	const dialogs: { kind: string; prompt: string; options: string[]; dflt: unknown }[] = [];
 	// EasyEDA serves computed fills (clearances, keepouts and priorities applied); stand in for them
 	// with the core's own computation so pours without a stored fill still match the file pipeline.
 	const refCopper = buildReferenceCopper(board, { clearance: defaultOptions.clearance });
@@ -43,7 +53,17 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 
 	const eda = {
 		sys_I18n: { text: (key: string, _ns?: string, _lang?: string, ...args: string[]) => args.reduce((s, a, i) => s.replace(`\${${i + 1}}`, a), key) },
-		sys_Dialog: { showInformationMessage: (content: string) => void messages.push(content) },
+		sys_Dialog: {
+			showInformationMessage: (content: string) => void messages.push(content),
+			showSelectDialog: (options: { value: string; displayContent: string }[], before: string, _after: unknown, title: string, dflt: string | string[] | undefined, multiple: boolean, cb: (v: unknown) => void) => {
+				dialogs.push({ kind: multiple ? 'multi' : 'select', prompt: before, options: options.map(o => o.value), dflt });
+				cb(answer({ kind: multiple ? 'multi' : 'select', prompt: before, title, options, dflt }));
+			},
+			showInputDialog: (before: string, _after: unknown, title: string, _type: string, value: string, _props: unknown, cb: (v: unknown) => void) => {
+				dialogs.push({ kind: 'input', prompt: before, options: [], dflt: value });
+				cb(answer({ kind: 'input', prompt: before, title, options: [], dflt: value }));
+			},
+		},
 		dmt_EditorControl: {
 			generateIndicatorMarkers: async (shapes: Record<string, unknown>[], color: unknown) => {
 				markers.push(...shapes.map(shape => ({ shape, color })));
@@ -69,7 +89,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		},
 		pcb_PrimitivePad: { getAll: async () => board.pads.filter(p => !p.componentId).map(padObj) },
 		pcb_PrimitiveComponent: {
-			getAll: async () => board.components.map(c => getters({ PrimitiveId: c.id, Designator: c.designator, X: m(c.at.x), Y: m(c.at.y), Rotation: c.rotation, Layer: c.layer })),
+			getAll: async () => board.components.map(c => getters({ PrimitiveId: c.id, Designator: c.designator, Name: c.name, X: m(c.at.x), Y: m(c.at.y), Rotation: c.rotation, Layer: c.layer })),
 			getAllPinsByPrimitiveId: async (id: string) => board.pads.filter(p => p.componentId === id).map(padObj),
 		},
 		pcb_PrimitivePoured: {
@@ -100,5 +120,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			})),
 		},
 	};
-	return { eda, markers, messages };
+	return { eda, markers, messages, dialogs };
 }

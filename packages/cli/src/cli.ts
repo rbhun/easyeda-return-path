@@ -3,7 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Resvg } from '@resvg/resvg-js';
-import { analyzeNet, type Analysis, type Board } from '@returnpath/core';
+import { analyzeNet, guessRails, type Analysis, type Board } from '@returnpath/core';
+import { dcReport, dcViews, describeGuess, runDc } from './dc.js';
 import { loadBoard } from './easyeda/load.js';
 import { renderOverlay } from './render/svg.js';
 
@@ -18,6 +19,13 @@ const { values, positionals } = parseArgs({
     'phys-unit': { type: 'string', default: 'auto' },
     pcb: { type: 'string' },
     'list-nets': { type: 'boolean', default: false },
+    'list-rails': { type: 'boolean', default: false },
+    dc: { type: 'string' },
+    ground: { type: 'string' },
+    source: { type: 'string' },
+    loads: { type: 'string' },
+    current: { type: 'string' },
+    cell: { type: 'string' },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -25,12 +33,46 @@ const { values, positionals } = parseArgs({
 const file = positionals[0];
 if (values.help || !file) {
   console.log(`Usage: returnpath <board.epro|board.epcb> --net CLK [--out dir] [--name prefix] [--png]
-       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets]`);
+       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets]
+       returnpath <board> --list-rails
+       returnpath <board> --dc 3V3 [--ground GND] [--source U1] [--loads U2,U3] [--current U2=0.15,U3=20mA]
+       [--cell mm] [--out dir] [--name prefix] [--png]`);
   process.exit(file ? 0 : 1);
 }
 
 const board = loadBoard(file, { physUnit: values['phys-unit'] as 'auto' | 'mil' | 'mm', pcb: values.pcb });
 for (const w of board.warnings) console.warn(`warning: ${w}`);
+const writeSvg = (base: string, svg: string) => {
+  writeFileSync(`${base}.svg`, svg);
+  console.log(`wrote ${base}.svg`);
+  if (values.png) {
+    const png = new Resvg(svg, { fitTo: { mode: 'zoom', value: 1.5 }, font: { loadSystemFonts: true, defaultFontFamily: 'DejaVu Sans' } }).render().asPng();
+    writeFileSync(`${base}.png`, png);
+    console.log(`wrote ${base}.png`);
+  }
+};
+if (values['list-rails']) {
+  console.log(describeGuess(guessRails(board)));
+  process.exit(0);
+}
+if (values.dc) {
+  let run;
+  try {
+    run = runDc(board, { rail: values.dc, ground: values.ground, source: values.source, loads: values.loads?.split(',').map((s) => s.trim()).filter(Boolean), currents: values.current, cell: values.cell ? Number(values.cell) : undefined });
+  } catch (e) {
+    console.error(`error: ${e instanceof Error ? e.message : e}`);
+    process.exit(2);
+  }
+  const prefix = values.name ?? `${basename(file).replace(/\.[^.]+$/, '')}-dc-${values.dc.toLowerCase().replace(/\W+/g, '')}`;
+  mkdirSync(values.out!, { recursive: true });
+  for (const v of dcViews(board, run, basename(file))) writeSvg(join(values.out!, `${prefix}-${v.suffix}`), v.svg);
+  const report = dcReport(board, run);
+  writeFileSync(join(values.out!, `${prefix}-report.json`), JSON.stringify(report, null, 2));
+  console.log(`wrote ${join(values.out!, `${prefix}-report.json`)}`);
+  for (const w of run.result.warnings) console.warn(`warning: ${w}`);
+  for (const n of [report.supply, report.return]) if (n) console.log(`${n.net} (${n.role}): drop ${n.dropMv} ${report.units.drop}, bottleneck ${n.bottleneck ? `${n.bottleneck.aPerMm} ${report.units.density} on ${n.bottleneck.layer}` : 'n/a'}`);
+  process.exit(0);
+}
 if (values['list-nets'] || !values.net) {
   console.log(board.nets.join('\n'));
   process.exit(values.net ? 0 : 1);
@@ -48,17 +90,7 @@ for (const rl of new Set(analysis.chains.map((c) => c.ref?.layer).filter((x): x 
   views.push({ suffix: `ref-${layerName(rl).toLowerCase().replace(/\W+/g, '')}`, title: `${net} on ${sig}, referenced to ${layerName(rl)}`, refLayer: rl });
 }
 
-for (const v of views) {
-  const svg = renderOverlay(board, analysis, { title: v.title, refLayer: v.refLayer });
-  const base = join(values.out!, `${prefix}-${v.suffix}`);
-  writeFileSync(`${base}.svg`, svg);
-  console.log(`wrote ${base}.svg`);
-  if (values.png) {
-    const png = new Resvg(svg, { fitTo: { mode: 'zoom', value: 1.5 }, font: { loadSystemFonts: true, defaultFontFamily: 'DejaVu Sans' } }).render().asPng();
-    writeFileSync(`${base}.png`, png);
-    console.log(`wrote ${base}.png`);
-  }
-}
+for (const v of views) writeSvg(join(values.out!, `${prefix}-${v.suffix}`), renderOverlay(board, analysis, { title: v.title, refLayer: v.refLayer }));
 writeFileSync(join(values.out!, `${prefix}-report.json`), JSON.stringify(report(board, analysis), null, 2));
 console.log(`wrote ${join(values.out!, `${prefix}-report.json`)}`);
 
