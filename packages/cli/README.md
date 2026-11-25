@@ -13,6 +13,17 @@ npm run analyze -- examples/demo-4layer.epro --net CLK --out out --png
 npm run analyze -- my-board.epro --list-nets
 ```
 
+DC return current (design decision D7):
+
+```bash
+npm run demo:dc          # regenerate examples/dc-4layer.epro and render the 3V3 and VBUS loops into out/
+npm run analyze -- examples/dc-4layer.epro --list-rails
+npm run analyze -- examples/dc-4layer.epro --dc 3V3 --png
+npm run analyze -- examples/dc-4layer.epro --dc 3V3 --current U2=150mA,U3=5mA,J2=0.5 --png
+```
+
+`--dc <rail>` runs wizard step 1 without dialogs: the guessed ground, source and loads are used unless `--ground`, `--source <designator>` or `--loads U2,U3` override them. `--current` gives load currents in A (or `mA`). Without it, 1 A total is split equally and the results are per amp. `--cell <mm>` sets the raster cell; by default it is picked from a node budget. If the rail's source is ambiguous, the command stops and lists the candidates. Each run writes `<prefix>-overview.svg` (both nets: streamlines plus contours on each net's dominant layer), a `<prefix>-<net>-<layer>.svg` with a binned density raster for every layer that carries at least 2 % of a net's flow, a PNG of each with `--png`, and `<prefix>-report.json`.
+
 CLI options: `--net <name>`, `--out <dir>` (default `out`), `--name <file prefix>`, `--png`, `--clearance <mm>` (default 0.25, used only when a pour has no stored fill), `--phys-unit auto|mil|mm` (unit of `LAYER_PHYS` thickness), `--pcb <name>` (pick a PCB in a multi-board project).
 
 Input can be:
@@ -32,12 +43,18 @@ Each run writes `<prefix>-overview.svg`, a `<prefix>-ref-<layer>.svg` for each r
   analyze.ts         steps 2 + 4 and the orchestration: analyzeNet(board, net)
   detour.ts          step 3: geodesic shortest path inside copper (visibility graph + A*)
   easyeda-polygon.ts EasyEDA complex-polygon decoder (same encoding in files and the API)
+  dc/rails.ts        wizard step 1 guesses: rails, grounds, source, loads; DcSetup
+  dc/raster.ts       copper rasterisation per (net, layer)
+  dc/solve.ts        DC resistive solve (sheet conductance + via barrels, Jacobi-PCG)
+  dc/field.ts        streamlines, density bins and contour lines
 src/easyeda/       EasyEDA Pro file format → board model (records.ts is pure)
 src/render/svg.ts  step 5: overlay as an SVG string (pure)
+src/render/dc-svg.ts DC return-current view as an SVG string (pure)
+src/dc.ts          --dc: setup from the guess and flags, views, JSON report
 src/synth/         synthetic test board generator
 src/cli.ts         file I/O, PNG via resvg
 test/              node:test suite
-examples/          generated boards (demo = problems, fixed = repaired)
+examples/          generated boards (demo = problems, fixed = repaired, dc-4layer = DC loop with a slotted GND plane)
 ```
 
 ## Format notes
@@ -71,3 +88,11 @@ Sources: [easyeda-pro-file-format-v2](https://github.com/easyeda/easyeda-pro-fil
 - A detour is the geometric shortest path, not a current distribution. Loop area is planar (trace vs detour). Via loops are distance × Δz. No inductance numbers.
 - A decap is any component with exactly 2 pads on the two nets. Driver/receiver loop closure and frequency/edge rate (brief, "loop closure") are not implemented.
 - The visibility graph is O(V²·E) per crossing. That is fine for windowed plane slots, but large dense fills will want `flatbush` or the navmesh route.
+
+## DC return current (D7)
+
+1. **Guess (wizard step 1).** Power rails come from net names (`3V3`, `+5V`, `VCC*`, `VDD*`, `VBUS`, `VBAT`, `VIN`…) and from non-ground nets that own pours. Grounds come from names (`GND`, `AGND`, `GND_ISO`, `VSS`…), and each rail is paired by name (AVDD → AGND, *ISO → GND_ISO), else `GND`. The source is a regulator output: a pad whose pin name is `VOUT`/`OUT`/`SW`, a part whose name looks like a regulator (AMS1117, LDO, TPS…) sitting between this rail and a higher or input-like rail, or a switcher's output inductor. If there is none and the rail is `VIN`/`VBUS`/`VBAT`-like, the source is the single connector (`J*`, `P*`, `CN*`, `USB*`) or battery (`BT*`). Several candidates, a conflict between the two rules, or no rule at all means *ask*: one active source is chosen, and the other candidates are left out of the solve. Loads are every other part on the rail, including connectors, apart from two-pin `C*` decaps across the rail and a ground.
+2. **Solve.** Each net (the rail, then its ground) is rasterised per copper layer on one grid: pour/plane fills, tracks (sub-sampled coverage, so a track narrower than a cell keeps its resistance per length), pads and vias. Neighbouring cells are joined by the sheet conductance σ·t (σ = 5.8·10⁷ S/m, t from the stackup, else 35 µm outer and 17.5 µm inner), using the harmonic mean of the cell weights. Via and plated-hole barrels join the layers with σ·π(r² − (r − 25 µm)²)/Δz. The source pads are held at 0 V, and each load's pads draw (rail) or return (ground) its current. Jacobi-preconditioned conjugate gradients, to a relative residual of 10⁻⁷.
+3. **Draw.** Current density per cell (A/mm of copper width) comes from the edge currents. Streamlines are traced from each load's strongest pad cells back to the source along the field, falling back to steepest descent of the potential at track corners, and they switch layers where a via hands the current on. Contour lines are drawn at 5, 15, 35 and 70 % of the layer's peak (marching squares). The peak excludes cells within two cells of terminal pads and vias, and partly covered edge cells.
+
+DC approximations: through-hole vias only; the contact at a pad is uniform injection rather than an equipotential pad; diagonal tracks are staircased, which reads up to ~25 % high in density at the default cell; peaks at sharp corners grow as the cell shrinks; copper `LAYER_PHYS` thickness units are guessed (oz, mm or µm by magnitude); and no thermal reliefs, since stored fills are used as they are.
