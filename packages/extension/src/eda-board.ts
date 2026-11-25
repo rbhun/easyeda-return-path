@@ -25,7 +25,7 @@ import {
 	type Track,
 	type Via,
 } from '@returnpath/core';
-import { checkpoint, log, yieldToEditor } from './runner';
+import { checkpoint, log, TimedOut, withTimeout, yieldToEditor } from './runner';
 
 export const MIL = 0.0254;
 const LAYER_MULTI = 12;
@@ -65,11 +65,32 @@ function copperMm(t: number, warnings: string[]): number | undefined {
 	return undefined;
 }
 
+/** Time limits for API calls; tests shorten them. */
+export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, pinsMs: 20_000 };
+
+/**
+ * Logs an API call before making it, saves the log, then waits for it with a time limit. If the
+ * editor hangs inside the call, the saved log ends with its name.
+ */
+async function call<T>(name: string, fn: () => Promise<T> | T, timeoutMs = apiTimeouts.callMs): Promise<T> {
+	log(`read board: ${name}…`);
+	await checkpoint();
+	return withTimeout(fn(), timeoutMs, name);
+}
+
 async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 	const copper: CopperLayer[] = [];
 	const dielectrics: Dielectric[] = [];
+	let s: Awaited<ReturnType<typeof eda.pcb_Layer.getStackup>> | undefined;
 	if (typeof eda.pcb_Layer.getStackup === 'function') {
-		const s = await eda.pcb_Layer.getStackup();
+		try {
+			s = await call('pcb_Layer.getStackup', () => eda.pcb_Layer.getStackup(), apiTimeouts.stackupMs);
+		}
+		catch (e) {
+			log(`read board: pcb_Layer.getStackup failed (${e instanceof Error ? e.message : String(e)}); using the layer list`, 'warn');
+		}
+	}
+	if (s?.layers) {
 		const k = unitToMm(s.unit);
 		let z = 0;
 		let pending: Dielectric | undefined;
@@ -93,7 +114,7 @@ async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 		warnings.push('Stackup API unavailable (needs EasyEDA Pro >= 4.1.93); assuming 0.2 mm dielectrics.');
 		copper.length = 0;
 		dielectrics.length = 0;
-		const layers = (await eda.pcb_Layer.getAllLayers()).filter(l => l.type === 'SIGNAL' || l.type === 'PLANE');
+		const layers = (await call('pcb_Layer.getAllLayers', () => eda.pcb_Layer.getAllLayers())).filter(l => l.type === 'SIGNAL' || l.type === 'PLANE');
 		const order = (id: number) => (id === 1 ? -1 : id === 2 ? 1000 : id);
 		layers.sort((a, b) => order(a.id) - order(b.id));
 		layers.forEach((l, i) => {
@@ -189,7 +210,7 @@ export async function readBoard(): Promise<Board> {
 	const copperIds = new Set(stackup.copper.map(l => l.id));
 
 	const tracks: Track[] = [];
-	for (const l of await eda.pcb_PrimitiveLine.getAll()) {
+	for (const l of await call('pcb_PrimitiveLine.getAll', () => eda.pcb_PrimitiveLine.getAll())) {
 		const layer = l.getState_Layer() as number;
 		if (!copperIds.has(layer))
 			continue;
@@ -202,7 +223,7 @@ export async function readBoard(): Promise<Board> {
 			width: l.getState_LineWidth() * MIL,
 		});
 	}
-	for (const arc of await eda.pcb_PrimitiveArc.getAll()) {
+	for (const arc of await call('pcb_PrimitiveArc.getAll', () => eda.pcb_PrimitiveArc.getAll())) {
 		const layer = arc.getState_Layer() as number;
 		if (!copperIds.has(layer))
 			continue;
@@ -214,7 +235,7 @@ export async function readBoard(): Promise<Board> {
 
 	await step(`${tracks.length} track segments from lines and arcs`);
 
-	const vias: Via[] = (await eda.pcb_PrimitiveVia.getAll()).map(v => ({
+	const vias: Via[] = (await call('pcb_PrimitiveVia.getAll', () => eda.pcb_PrimitiveVia.getAll())).map(v => ({
 		id: v.getState_PrimitiveId(),
 		net: v.getState_Net(),
 		at: conv(v.getState_X(), v.getState_Y()),
@@ -223,12 +244,29 @@ export async function readBoard(): Promise<Board> {
 		stitching: (v.getState_ViaType() as number) === 1,
 	}));
 
-	const pads: Pad[] = (await eda.pcb_PrimitivePad.getAll()).map(p => toPad(p));
+	const pads: Pad[] = (await call('pcb_PrimitivePad.getAll', () => eda.pcb_PrimitivePad.getAll())).map(p => toPad(p));
 	await step(`${vias.length} vias, ${pads.length} free pads`);
 	const components: Component[] = [];
-	for (const c of await eda.pcb_PrimitiveComponent.getAll()) {
+	const allComponents = await call('pcb_PrimitiveComponent.getAll', () => eda.pcb_PrimitiveComponent.getAll());
+	log(`read board: pcb_PrimitiveComponent.getAllPinsByPrimitiveId for ${allComponents.length} components…`);
+	let lastReport = clock();
+	for (const [i, c] of allComponents.entries()) {
 		const id = c.getState_PrimitiveId();
-		const pins = (await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(id)) ?? [];
+		if (clock() - lastReport > 2000) {
+			log(`read board: pins of component ${i + 1} of ${allComponents.length} (${c.getState_Designator() ?? id})`);
+			await checkpoint();
+			lastReport = clock();
+		}
+		let pins: Awaited<ReturnType<typeof eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId>> = [];
+		try {
+			pins = (await withTimeout(eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(id), apiTimeouts.pinsMs, `pins of ${c.getState_Designator() ?? id}`)) ?? [];
+		}
+		catch (e) {
+			if (!(e instanceof TimedOut))
+				throw e;
+			warnings.push(`${e.message}; its pads are left out.`);
+			log(`read board: ${e.message}`, 'warn');
+		}
 		const own = pins.map(p => toPad(p, id));
 		pads.push(...own);
 		components.push({
@@ -248,7 +286,7 @@ export async function readBoard(): Promise<Board> {
 	// plane copper (poured, but with no pour) lacks. Other copper fills are solid copper as drawn.
 	const planeFills: { net: string; layer: number; shape: Paths }[] = [];
 	const pours: Pour[] = [];
-	for (const f of await eda.pcb_PrimitiveFill.getAll()) {
+	for (const f of await call('pcb_PrimitiveFill.getAll', () => eda.pcb_PrimitiveFill.getAll())) {
 		const layer = f.getState_Layer() as number;
 		const net = f.getState_Net();
 		if (!copperIds.has(layer) || !net)
@@ -267,7 +305,7 @@ export async function readBoard(): Promise<Board> {
 	const ringsByPour = new Map<string, Paths>();
 	const islandsByPlane = new Map<string, { plane: typeof planeFills[number]; islands: Paths }>();
 	const planeBoxes = planeFills.map(p => bbox(p.shape));
-	const pouredAll = await eda.pcb_PrimitivePoured.getAll();
+	const pouredAll = await call('pcb_PrimitivePoured.getAll', () => eda.pcb_PrimitivePoured.getAll());
 	let pieces = 0;
 	let islandCount = 0;
 	let sliceStart = clock();
@@ -322,7 +360,7 @@ export async function readBoard(): Promise<Board> {
 	}
 	await step(`merged ${ringsByPour.size} pours and ${islandsByPlane.size} planes`);
 
-	for (const p of await eda.pcb_PrimitivePour.getAll()) {
+	for (const p of await call('pcb_PrimitivePour.getAll', () => eda.pcb_PrimitivePour.getAll())) {
 		const id = p.getState_PrimitiveId();
 		const poured = fillsByPour.get(id);
 		if (!poured)

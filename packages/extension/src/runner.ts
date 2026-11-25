@@ -38,6 +38,44 @@ let dirty = false;
 let writing: Promise<void> = Promise.resolve();
 /** undefined = not tried yet, null = not available (browser or no permission). */
 let logPath: string | null | undefined;
+let storageOff = false;
+/** Time limit for each log write; tests shorten it. */
+export const saveTimeouts = { ms: 2000 };
+
+export class TimedOut extends Error {}
+
+/** Rejects with TimedOut when `p` has not settled after `ms`; API calls that never answer must not stall a run. */
+export function withTimeout<T>(p: Promise<T> | T, ms: number, what: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const cancel = after(ms, () => reject(new TimedOut(`${what} did not answer within ${Math.round(ms / 1000)} s`)));
+		Promise.resolve(p).then(
+			(v) => {
+				cancel();
+				resolve(v);
+			},
+			(e) => {
+				cancel();
+				reject(e);
+			},
+		);
+	});
+}
+
+type SysTimer = { setTimeoutTimer: (id: string, ms: number, fn: () => void) => boolean; clearTimeoutTimer?: (id: string) => boolean };
+let timerSeq = 0;
+
+/** Runs `fn` after `ms` with setTimeout, or EasyEDA's timer where the sandbox has no setTimeout; returns a cancel function. */
+function after(ms: number, fn: () => void): () => void {
+	if (typeof setTimeout === 'function') {
+		const id = setTimeout(fn, ms);
+		return () => clearTimeout(id);
+	}
+	const timer = (eda as unknown as { sys_Timer?: SysTimer }).sys_Timer;
+	const id = `returnpath-timeout-${++timerSeq}`;
+	if (!timer?.setTimeoutTimer(id, ms, fn))
+		return () => {};
+	return () => void timer.clearTimeoutTimer?.(id);
+}
 
 function buffer(): string[] {
 	// A new API object means a new editor session (or test host): start from what that one stored.
@@ -45,6 +83,7 @@ function buffer(): string[] {
 		owner = eda;
 		lines = undefined;
 		logPath = undefined;
+		storageOff = false;
 	}
 	if (!lines) {
 		let saved: unknown;
@@ -52,7 +91,7 @@ function buffer(): string[] {
 			saved = api().sys_Storage?.getExtensionUserConfig(STORE_KEY);
 		}
 		catch {}
-		lines = Array.isArray(saved) ? saved.filter((l): l is string => typeof l === 'string') : [];
+		lines = typeof saved === 'string' && saved ? saved.split('\n') : Array.isArray(saved) ? saved.filter((l): l is string => typeof l === 'string') : [];
 	}
 	return lines;
 }
@@ -85,16 +124,20 @@ export function log(message: string, level: LogLevel = 'info'): void {
 
 async function resolveLogPath(): Promise<string | null> {
 	const fs = api().sys_FileSystem;
+	if (!fs?.getEdaPath || !fs.saveFileToFileSystem)
+		return null;
 	try {
-		const base = await fs?.getEdaPath?.();
-		if (!base || !fs?.saveFileToFileSystem)
+		const base = await withTimeout(fs.getEdaPath(), saveTimeouts.ms, 'sys_FileSystem.getEdaPath');
+		if (!base)
 			return null;
 		const sep = base.includes('\\') ? '\\' : '/';
 		const dir = `${base}${sep}ReturnPath`;
-		await fs.createDirectoryInFileSystem?.(dir);
+		await withTimeout(fs.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem');
 		return `${dir}${sep}${LOG_FILE}`;
 	}
-	catch {
+	catch (e) {
+		if (e instanceof TimedOut)
+			log(`log file disabled: ${e.message}`, 'warn');
 		return null;
 	}
 }
@@ -104,20 +147,30 @@ async function persist(): Promise<void> {
 		return;
 	dirty = false;
 	const snapshot = [...buffer()];
-	try {
-		await api().sys_Storage?.setExtensionUserConfig(STORE_KEY, snapshot);
+	const store = api().sys_Storage;
+	if (store && !storageOff) {
+		try {
+			await withTimeout(store.setExtensionUserConfig(STORE_KEY, snapshot.join('\n')), saveTimeouts.ms, 'sys_Storage.setExtensionUserConfig');
+		}
+		catch (e) {
+			if (e instanceof TimedOut) {
+				storageOff = true;
+				log(`saved log disabled: ${e.message}`, 'warn');
+			}
+		}
 	}
-	catch {}
 	if (logPath === undefined)
 		logPath = await resolveLogPath();
 	if (logPath) {
 		try {
-			const ok = await api().sys_FileSystem!.saveFileToFileSystem!(logPath, new Blob([`${snapshot.join('\n')}\n`], { type: 'text/plain' }));
+			const ok = await withTimeout(api().sys_FileSystem!.saveFileToFileSystem!(logPath, new Blob([`${snapshot.join('\n')}\n`], { type: 'text/plain' })), saveTimeouts.ms, 'sys_FileSystem.saveFileToFileSystem');
 			if (!ok)
 				logPath = null;
 		}
-		catch {
+		catch (e) {
 			logPath = null;
+			if (e instanceof TimedOut)
+				log(`log file disabled: ${e.message}`, 'warn');
 		}
 	}
 }

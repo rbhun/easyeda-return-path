@@ -2,6 +2,16 @@
 
 Every change raises the minor version (`0.x.0`) and adds an entry here, newest first. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that the version is higher than the target branch's.
 
+## [0.5.0] - 2026-11-25
+
+In the third test the log stopped at `read board…` on a signal net (BNC1+), with nothing after it. The log does not say whether that was 0.3.0, whose board read froze right there, or 0.4.0, where only waiting API calls come next (saving the log, then `pcb_Layer.getStackup`). A call that never answers stalls a run silently.
+
+- Every API call of the board read is logged, and the log saved, before it is made (`read board: pcb_PrimitivePoured.getAll…`), so the last line names the call the editor hung in.
+- Every API call has a time limit: 60 s per board-read call, 20 s per component's pins (that component's pads are then left out, with a warning), 15 s for the stackup (then the layer list is used, as on older EasyEDA versions). Running out ends the run with a dialog naming the call.
+- Saving the log is limited to 2 s per write; a write that does not answer switches that destination off with a warning instead of holding up the run. The stored log is now one string instead of a list.
+- Each run starts with the version in its first log line (`Show for Selected Net: BNC1+ (v0.5.0)`).
+- Progress is logged every 2 s while component pins are read.
+
 ## [0.4.0] - 2026-11-25
 
 The editor still froze and went white in a second test, which also took the log panel with it.

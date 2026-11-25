@@ -70,7 +70,7 @@ export async function runReturnPath(ask: Ask): Promise<void> {
 			eda.sys_Dialog.showInformationMessage(t('Select a track, via or pad of the net to analyse.'), title);
 			return;
 		}
-		log(`Show for Selected Net: ${net}`);
+		log(`Show for Selected Net: ${net} (v${extensionConfig.version})`);
 		// The name check needs no board, so power and ground nets are turned away before the read.
 		const byName = hfApplicability({ pours: [] }, net);
 		const board = byName.ok ? await timed('read board', readBoard, boardSizes) : undefined;
@@ -105,6 +105,7 @@ export async function showDcReturn(): Promise<void> {
 export async function runDcReturn(ask: Ask, preferredRail?: string): Promise<void> {
 	const title = t('DC return current');
 	await guarded(title, async () => {
+		log(`DC Return Current (v${extensionConfig.version})`);
 		const board = await timed('read board', readBoard, boardSizes);
 		const wiz = await runDcWizard(board, ask, preferredRail ?? await selectedNet());
 		if (!wiz)
