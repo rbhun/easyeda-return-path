@@ -19,8 +19,15 @@ export interface DialogCall {
 	dflt: string | string[] | undefined;
 }
 
+export interface MockHost {
+	/** Extension config storage; pass the same map to a second mock to simulate a restart. */
+	storage?: Map<string, unknown>;
+	/** 'denied' throws like a client without the external-interaction permission; omitted = browser (no file system). */
+	fileSystem?: 'allowed' | 'denied';
+}
+
 /** Answers every dialog with its default unless `answer` says otherwise. */
-export function createMockEda(board: Board, selectedNet: string, planeLayers: number[] = [], answer: (d: DialogCall) => unknown = d => d.dflt) {
+export function createMockEda(board: Board, selectedNet: string, planeLayers: number[] = [], answer: (d: DialogCall) => unknown = d => d.dflt, host: MockHost = {}) {
 	const dialogs: { kind: string; prompt: string; options: string[]; dflt: unknown }[] = [];
 	// EasyEDA serves computed fills (clearances, keepouts and priorities applied); stand in for them
 	// with the core's own computation so pours without a stored fill still match the file pipeline.
@@ -33,6 +40,15 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const logs: { message: string; type: string }[] = [];
 	const progress: { progress?: number; title?: string }[] = [];
 	const toasts: string[] = [];
+	const storage = host.storage ?? new Map<string, unknown>();
+	const files = new Map<string, string>();
+	const downloads: { name?: string; text: string }[] = [];
+	const counts = { boardReads: 0 };
+	const fsCall = <T>(fn: () => T) => async () => {
+		if (host.fileSystem === 'denied')
+			throw new Error('external interaction is not allowed');
+		return fn();
+	};
 	const progressListeners = new Map<string, (p: { action: string }) => void>();
 	const getters = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [`getState_${k}`, () => v]));
 	const padObj = (p: Board['pads'][number]) => getters({
@@ -65,6 +81,28 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		sys_Event: {
 			addProgressBarEventListener: (id: string, fn: (p: { action: string }) => void) => void progressListeners.set(id, fn),
 			removeEventListener: (id: string) => progressListeners.delete(id),
+		},
+		sys_Storage: {
+			getExtensionUserConfig: (k: string) => storage.get(k),
+			setExtensionUserConfig: async (k: string, v: unknown) => {
+				storage.set(k, structuredClone(v));
+				return true;
+			},
+		},
+		sys_FileSystem: {
+			saveFile: async (data: Blob, name?: string) => void downloads.push({ name, text: await data.text() }),
+			...(host.fileSystem
+				? {
+						getEdaPath: fsCall(() => 'C:\\Users\\me\\Documents\\EasyEDA-Pro'),
+						createDirectoryInFileSystem: fsCall(() => true),
+						saveFileToFileSystem: async (uri: string, data: Blob) => {
+							if (host.fileSystem === 'denied')
+								throw new Error('external interaction is not allowed');
+							files.set(uri, await data.text());
+							return true;
+						},
+					}
+				: {}),
 		},
 		sys_Message: { showToastMessage: (m: string) => void toasts.push(m) },
 		sys_Dialog: {
@@ -99,7 +137,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			getAllLayers: async () => board.stackup.copper.map(l => ({ id: l.id, name: l.name, type: planeLayers.includes(l.id) ? 'PLANE' : 'SIGNAL' })),
 		},
 		pcb_PrimitiveLine: {
-			getAll: async () => board.tracks.map(t => getters({ PrimitiveId: t.id, Net: t.net, Layer: t.layer, StartX: m(t.a.x), StartY: m(t.a.y), EndX: m(t.b.x), EndY: m(t.b.y), LineWidth: m(t.width) })),
+			getAll: async () => (counts.boardReads++, board.tracks.map(t => getters({ PrimitiveId: t.id, Net: t.net, Layer: t.layer, StartX: m(t.a.x), StartY: m(t.a.y), EndX: m(t.b.x), EndY: m(t.b.y), LineWidth: m(t.width) }))),
 		},
 		pcb_PrimitiveArc: { getAll: async () => [] },
 		pcb_PrimitiveVia: {
@@ -140,5 +178,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar };
+	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts };
 }

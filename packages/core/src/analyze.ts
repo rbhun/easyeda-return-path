@@ -155,7 +155,7 @@ export interface HfScope {
  * the return path (or carry DC), and their many segments over large pours make the check slow
  * and meaningless; the DC return-current view is the right tool for them.
  */
-export function hfApplicability(board: Board, net: string): HfScope {
+export function hfApplicability(board: Pick<Board, 'pours'>, net: string): HfScope {
   const dc = 'Use "DC Return Current..." to see how supply current flows and returns.';
   if (isGroundNet(net))
     return { ok: false, kind: 'ground', message: `${net} is a ground net: it is the return path, not a signal. Select a signal net routed over it. ${dc}` };

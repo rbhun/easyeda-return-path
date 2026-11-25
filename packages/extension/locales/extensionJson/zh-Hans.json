@@ -4,5 +4,6 @@
 	"Clear Overlay": "清除叠加层",
 	"About...": "关于...",
 	"DC Return Current...": "直流回流电流...",
-	"Cancel Running Analysis": "取消正在运行的分析"
+	"Cancel Running Analysis": "取消正在运行的分析",
+	"Show Saved Log...": "显示保存的日志..."
 }

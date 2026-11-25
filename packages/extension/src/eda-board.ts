@@ -3,8 +3,10 @@
 import {
 	arcPoints,
 	area,
+	bbox,
 	circle,
 	decodeComplex,
+	pointInPaths,
 	intersect,
 	rect,
 	rotate,
@@ -23,6 +25,7 @@ import {
 	type Track,
 	type Via,
 } from '@returnpath/core';
+import { checkpoint, log, yieldToEditor } from './runner';
 
 export const MIL = 0.0254;
 const LAYER_MULTI = 12;
@@ -142,10 +145,47 @@ function toPad(p: IPCB_PrimitivePad, componentId?: string): Pad {
 	};
 }
 
+type PlaneFill = { net: string; layer: number; shape: Paths };
+
+/** The plane partition an island of plane copper belongs to: by bounding box, then a point test, and only then by overlap area. */
+function matchPlane(island: Paths, layer: number, planes: PlaneFill[], boxes: ReturnType<typeof bbox>[]): PlaneFill | undefined {
+	const b = bbox(island);
+	const near = planes.filter((p, i) => p.layer === layer && boxes[i].minX <= b.maxX && boxes[i].maxX >= b.minX && boxes[i].minY <= b.maxY && boxes[i].maxY >= b.minY);
+	if (near.length <= 1)
+		return near[0];
+	const probe = island[0]?.[0];
+	if (probe) {
+		const inside = near.filter(p => pointInPaths(probe, p.shape));
+		if (inside.length === 1)
+			return inside[0];
+	}
+	let best: PlaneFill | undefined;
+	let bestArea = 0;
+	for (const p of near) {
+		const overlap = area(intersect(island, p.shape));
+		if (overlap > bestArea) {
+			bestArea = overlap;
+			best = p;
+		}
+	}
+	return best;
+}
+
+const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
 /** Builds the core board model from the open PCB. Fills must be current; stale pours fall back to outlines. */
 export async function readBoard(): Promise<Board> {
 	const warnings: string[] = [];
+	let t0 = clock();
+	// Logs what was read, saves the log and lets the editor repaint before the next group.
+	const step = async (what: string) => {
+		log(`read board: ${what} (${Math.round(clock() - t0)} ms)`);
+		await checkpoint();
+		await yieldToEditor();
+		t0 = clock();
+	};
 	const stackup = await readStackup(warnings);
+	await step(`stackup, ${stackup.copper.length} copper layers`);
 	const copperIds = new Set(stackup.copper.map(l => l.id));
 
 	const tracks: Track[] = [];
@@ -172,6 +212,8 @@ export async function readBoard(): Promise<Board> {
 		}
 	}
 
+	await step(`${tracks.length} track segments from lines and arcs`);
+
 	const vias: Via[] = (await eda.pcb_PrimitiveVia.getAll()).map(v => ({
 		id: v.getState_PrimitiveId(),
 		net: v.getState_Net(),
@@ -182,6 +224,7 @@ export async function readBoard(): Promise<Board> {
 	}));
 
 	const pads: Pad[] = (await eda.pcb_PrimitivePad.getAll()).map(p => toPad(p));
+	await step(`${vias.length} vias, ${pads.length} free pads`);
 	const components: Component[] = [];
 	for (const c of await eda.pcb_PrimitiveComponent.getAll()) {
 		const id = c.getState_PrimitiveId();
@@ -199,6 +242,8 @@ export async function readBoard(): Promise<Board> {
 		});
 	}
 
+	await step(`${components.length} components, ${pads.length} pads with pins`);
+
 	// Plane-layer partitions are fills with mode INNER_ELECTRICAL_LAYER (2); they carry the net that
 	// plane copper (poured, but with no pour) lacks. Other copper fills are solid copper as drawn.
 	const planeFills: { net: string; layer: number; shape: Paths }[] = [];
@@ -215,43 +260,67 @@ export async function readBoard(): Promise<Board> {
 			pours.push({ id: f.getState_PrimitiveId(), net, layer, name: 'fill', priority: 0, outline: shape, poured: shape });
 	}
 
-	const fillsByPour = new Map<string, Paths>();
-	const planeCopper = new Map<string, Pour>();
-	for (const poured of await eda.pcb_PrimitivePoured.getAll()) {
+	await step(`${planeFills.length} plane partitions, ${pours.length} solid fills`);
+
+	// Collect every piece first and union once per pour or plane: unioning piece by piece regrows the
+	// whole polygon each time, which on a big plane is quadratic and freezes the editor.
+	const ringsByPour = new Map<string, Paths>();
+	const islandsByPlane = new Map<string, { plane: typeof planeFills[number]; islands: Paths }>();
+	const planeBoxes = planeFills.map(p => bbox(p.shape));
+	const pouredAll = await eda.pcb_PrimitivePoured.getAll();
+	let pieces = 0;
+	let islandCount = 0;
+	let sliceStart = clock();
+	const breathe = async () => {
+		if (clock() - sliceStart > 30) {
+			await yieldToEditor();
+			sliceStart = clock();
+		}
+	};
+	for (const poured of pouredAll) {
 		const rings = poured.getState_PourFills().filter(f => f.fill).flatMap(f => decodeComplex(f.path.getSource(), conv, MIL));
+		pieces += rings.length;
 		const pourId = poured.getState_PourPrimitiveId();
 		if (pourId) {
-			fillsByPour.set(pourId, union(fillsByPour.get(pourId) ?? [], rings));
+			const list = ringsByPour.get(pourId) ?? [];
+			for (const r of rings) list.push(r);
+			ringsByPour.set(pourId, list);
+			await breathe();
 			continue;
 		}
 		const layer = poured.getState_Layer() as number;
 		for (const island of splitIslands(rings)) {
-			let plane: typeof planeFills[number] | undefined;
-			let best = 0;
-			for (const p of planeFills.filter(p => p.layer === layer)) {
-				const overlap = area(intersect(island, p.shape));
-				if (overlap > best) {
-					best = overlap;
-					plane = p;
-				}
-			}
+			islandCount++;
+			const plane = matchPlane(island, layer, planeFills, planeBoxes);
+			await breathe();
 			if (!plane) {
 				warnings.push(`Plane copper on layer ${layer} at (${island[0][0].x.toFixed(1)}, ${island[0][0].y.toFixed(1)}) matches no plane fill; skipped.`);
 				continue;
 			}
 			const key = `${layer}:${plane.net}`;
-			const pour = planeCopper.get(key) ?? { id: `plane-${key}`, net: plane.net, layer, name: 'plane', priority: 0, outline: plane.shape, poured: [] };
-			pour.poured = union(pour.poured!, island);
-			planeCopper.set(key, pour);
+			const entry = islandsByPlane.get(key) ?? { plane, islands: [] };
+			for (const r of island) entry.islands.push(r);
+			islandsByPlane.set(key, entry);
 		}
 	}
+	await step(`${pouredAll.length} computed copper areas, ${pieces} rings, ${islandCount} plane islands`);
+
+	const fillsByPour = new Map<string, Paths>();
+	for (const [id, rings] of ringsByPour) {
+		fillsByPour.set(id, union(rings));
+		await breathe();
+	}
+	for (const [key, { plane, islands }] of islandsByPlane) {
+		pours.push({ id: `plane-${key}`, net: plane.net, layer: plane.layer, name: 'plane', priority: 0, outline: plane.shape, poured: union(islands) });
+		await breathe();
+	}
 	for (const plane of planeFills) {
-		if (!planeCopper.has(`${plane.layer}:${plane.net}`)) {
+		if (!islandsByPlane.has(`${plane.layer}:${plane.net}`)) {
 			warnings.push(`Plane fill ${plane.net} on layer ${plane.layer} has no computed copper; using its outline.`);
 			pours.push({ id: `plane-${plane.layer}:${plane.net}`, net: plane.net, layer: plane.layer, name: 'plane', priority: 0, outline: plane.shape });
 		}
 	}
-	pours.push(...planeCopper.values());
+	await step(`merged ${ringsByPour.size} pours and ${islandsByPlane.size} planes`);
 
 	for (const p of await eda.pcb_PrimitivePour.getAll()) {
 		const id = p.getState_PrimitiveId();
@@ -268,6 +337,7 @@ export async function readBoard(): Promise<Board> {
 			poured,
 		});
 	}
+	await step(`${pours.length} pours, fills and planes in total`);
 
 	const nets = [...new Set([...tracks.map(t => t.net), ...vias.map(v => v.net), ...pads.map(p => p.net)].filter(Boolean))].sort();
 	return { outline: [], stackup, nets, tracks, vias, pads, components, pours, keepouts: [], warnings };

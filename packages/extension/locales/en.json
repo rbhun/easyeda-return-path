@@ -27,5 +27,11 @@
 	"No analysis is running.": "No analysis is running.",
 	"Error": "Error",
 	"Details are in the log panel (bottom panel, shortcut S, Log tab).": "Details are in the log panel (bottom panel, shortcut S, Log tab).",
-	"${1} is still running. Cancel it first (Return Path > Cancel Running Analysis).": "${1} is still running. Cancel it first (Return Path > Cancel Running Analysis)."
+	"${1} is still running. Cancel it first (Return Path > Cancel Running Analysis).": "${1} is still running. Cancel it first (Return Path > Cancel Running Analysis).",
+	"Saved log": "Saved log",
+	"The full log is also written to: ${1}": "The full log is also written to: ${1}",
+	"To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.": "To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.",
+	"Saved log (last ${1} of ${2} lines)": "Saved log (last ${1} of ${2} lines)",
+	"Save as file...": "Save as file...",
+	"If the editor froze, reopen it and use Return Path > Show Saved Log...": "If the editor froze, reopen it and use Return Path > Show Saved Log..."
 }

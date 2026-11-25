@@ -1,20 +1,78 @@
 // Runs analyses without blocking the editor, and makes what they do visible inside EasyEDA Pro.
 // The desktop client has no handy console, so every phase is written to the app's log panel
 // (bottom panel → Log, shortcut S) through eda.sys_Log, and failures end in a dialog.
+// The log panel dies with the window if the editor hangs or crashes, so the same lines are also
+// kept in the extension's stored config (survives a restart; Return Path → Show Saved Log...) and,
+// when the extension may use the file system ("Allow External Interaction"), in a text file.
+// checkpoint() waits for both writes; call it before any step that could block.
 import { AnalysisAborted, runAsync, type Board, type Steps, type Tick } from '@returnpath/core';
+import extensionConfig from '../extension.json' with { type: 'json' };
 
 const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 
 const PREFIX = '[ReturnPath]';
 const PROGRESS_LISTENER = 'returnpath-progress';
+const STORE_KEY = 'log';
+const MAX_LINES = 1000;
+const LOG_FILE = 'returnpath-log.txt';
 
 export type LogLevel = 'info' | 'warn' | 'error';
 
-/** Writes to the EasyEDA log panel when the API has it, and to the console otherwise. */
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+type Api = {
+	sys_Log?: { add: (m: string, type?: string) => void };
+	sys_Storage?: { getExtensionUserConfig: (k: string) => unknown; setExtensionUserConfig: (k: string, v: unknown) => Promise<boolean> };
+	sys_FileSystem?: {
+		getEdaPath?: () => Promise<string>;
+		createDirectoryInFileSystem?: (p: string) => Promise<boolean>;
+		saveFileToFileSystem?: (uri: string, data: Blob, name?: string) => Promise<boolean>;
+		saveFile?: (data: Blob, name?: string) => Promise<void>;
+	};
+};
+const api = () => eda as unknown as Api;
+
+let lines: string[] | undefined;
+let owner: unknown;
+let dirty = false;
+let writing: Promise<void> = Promise.resolve();
+/** undefined = not tried yet, null = not available (browser or no permission). */
+let logPath: string | null | undefined;
+
+function buffer(): string[] {
+	// A new API object means a new editor session (or test host): start from what that one stored.
+	if (owner !== eda) {
+		owner = eda;
+		lines = undefined;
+		logPath = undefined;
+	}
+	if (!lines) {
+		let saved: unknown;
+		try {
+			saved = api().sys_Storage?.getExtensionUserConfig(STORE_KEY);
+		}
+		catch {}
+		lines = Array.isArray(saved) ? saved.filter((l): l is string => typeof l === 'string') : [];
+	}
+	return lines;
+}
+
+const stamp = () => {
+	const d = new Date();
+	const p = (n: number, w = 2) => String(n).padStart(w, '0');
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+};
+
+/** Writes to the EasyEDA log panel (or the console) and to the saved log. */
 export function log(message: string, level: LogLevel = 'info'): void {
 	const line = `${PREFIX} ${message}`;
+	const b = buffer();
+	b.push(`${stamp()} ${level.toUpperCase().padEnd(5)} ${message}`);
+	if (b.length > MAX_LINES)
+		b.splice(0, b.length - MAX_LINES);
+	dirty = true;
 	try {
-		const sysLog = (eda as unknown as { sys_Log?: { add: (m: string, type?: string) => void } }).sys_Log;
+		const sysLog = api().sys_Log;
 		if (sysLog?.add) {
 			sysLog.add(line, level);
 			return;
@@ -25,12 +83,77 @@ export function log(message: string, level: LogLevel = 'info'): void {
 		(level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(line);
 }
 
-const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+async function resolveLogPath(): Promise<string | null> {
+	const fs = api().sys_FileSystem;
+	try {
+		const base = await fs?.getEdaPath?.();
+		if (!base || !fs?.saveFileToFileSystem)
+			return null;
+		const sep = base.includes('\\') ? '\\' : '/';
+		const dir = `${base}${sep}ReturnPath`;
+		await fs.createDirectoryInFileSystem?.(dir);
+		return `${dir}${sep}${LOG_FILE}`;
+	}
+	catch {
+		return null;
+	}
+}
+
+async function persist(): Promise<void> {
+	if (!dirty)
+		return;
+	dirty = false;
+	const snapshot = [...buffer()];
+	try {
+		await api().sys_Storage?.setExtensionUserConfig(STORE_KEY, snapshot);
+	}
+	catch {}
+	if (logPath === undefined)
+		logPath = await resolveLogPath();
+	if (logPath) {
+		try {
+			const ok = await api().sys_FileSystem!.saveFileToFileSystem!(logPath, new Blob([`${snapshot.join('\n')}\n`], { type: 'text/plain' }));
+			if (!ok)
+				logPath = null;
+		}
+		catch {
+			logPath = null;
+		}
+	}
+}
+
+/** Waits until the log so far is stored (and written to the log file, if allowed). */
+export function checkpoint(): Promise<void> {
+	writing = writing.then(persist, persist);
+	return writing;
+}
+
+/** Where the log file is written, or null when the extension may not write files. */
+export async function logFilePath(): Promise<string | null> {
+	await checkpoint();
+	return logPath ?? null;
+}
+
+export function savedLog(): string[] {
+	return [...buffer()];
+}
+
+/** Lets the user save the log anywhere through the system save dialog. */
+export async function saveLogAs(): Promise<void> {
+	await checkpoint();
+	await api().sys_FileSystem?.saveFile?.(new Blob([`${buffer().join('\n')}\n`], { type: 'text/plain' }), LOG_FILE);
+}
+
+export function logStartup(): void {
+	log(`extension v${extensionConfig.version} loaded`);
+	void checkpoint();
+}
 
 /** Times an async step and logs it. */
 export async function timed<T>(label: string, fn: () => Promise<T>, sizes?: (r: T) => string): Promise<T> {
 	const t0 = now();
 	log(`${label}…`);
+	await checkpoint();
 	const r = await fn();
 	log(`${label}: ${Math.round(now() - t0)} ms${sizes ? `; ${sizes(r)}` : ''}`);
 	return r;
@@ -57,7 +180,8 @@ export function cancelRunning(): boolean {
 	return true;
 }
 
-function hostYield(): Promise<void> {
+/** Hands control back to the editor so it can repaint and handle input. */
+export function yieldToEditor(): Promise<void> {
 	return new Promise<void>((resolve) => {
 		if (typeof setTimeout === 'function') {
 			setTimeout(resolve, 0);
@@ -100,6 +224,7 @@ export async function runSteps<T>(steps: Steps<T>, o: StepRunOptions): Promise<T
 	let phase = '';
 	const t0 = now();
 	log(`${o.title}: started (time budget ${Math.round(o.timeBudgetMs / 1000)} s)`);
+	await checkpoint();
 	try {
 		bar?.showProgressBar(0, o.title);
 		const result = await runAsync(steps, {
@@ -107,13 +232,14 @@ export async function runSteps<T>(steps: Steps<T>, o: StepRunOptions): Promise<T
 			sliceMs: 30,
 			signal,
 			now,
-			yieldFn: hostYield,
+			yieldFn: yieldToEditor,
 			onPhase: (next, prev, ms) => {
 				if (prev)
 					phaseMs.set(prev, (phaseMs.get(prev) ?? 0) + ms);
 				if (next !== 'done' && !phaseMs.has(next)) {
 					phaseMs.set(next, 0);
 					log(`${o.title}: phase "${next}" at ${Math.round(now() - t0)} ms`);
+					void checkpoint();
 				}
 			},
 			onProgress: (tick) => {
@@ -129,6 +255,7 @@ export async function runSteps<T>(steps: Steps<T>, o: StepRunOptions): Promise<T
 				}
 			},
 		});
+		void checkpoint();
 		log(`${o.title}: finished in ${Math.round(now() - t0)} ms (${[...phaseMs].map(([p, ms]) => `${p} ${Math.round(ms)} ms`).join(', ')})`);
 		return result;
 	}
@@ -138,6 +265,7 @@ export async function runSteps<T>(steps: Steps<T>, o: StepRunOptions): Promise<T
 	}
 	finally {
 		running = undefined;
+		void checkpoint();
 		try {
 			events?.removeEventListener?.(PROGRESS_LISTENER);
 			bar?.destroyProgressBar();
@@ -162,7 +290,11 @@ export async function guarded(title: string, fn: () => Promise<void>): Promise<v
 		}
 		const err = e instanceof Error ? e : new Error(String(e));
 		log(`${title}: error: ${err.message}${err.stack ? `\n${err.stack}` : ''}`, 'error');
+		await checkpoint();
 		eda.sys_Dialog.showInformationMessage(`${t('Error')}: ${err.message}\n\n${t('Details are in the log panel (bottom panel, shortcut S, Log tab).')}`, title);
+	}
+	finally {
+		await checkpoint();
 	}
 }
 

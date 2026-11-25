@@ -10,5 +10,11 @@
 	"No analysis is running.": "没有正在运行的分析。",
 	"Error": "错误",
 	"Details are in the log panel (bottom panel, shortcut S, Log tab).": "详细信息见日志面板（底部面板，快捷键 S，日志页）。",
-	"${1} is still running. Cancel it first (Return Path > Cancel Running Analysis).": "${1} 仍在运行。请先取消（回流路径 > 取消正在运行的分析）。"
+	"${1} is still running. Cancel it first (Return Path > Cancel Running Analysis).": "${1} 仍在运行。请先取消（回流路径 > 取消正在运行的分析）。",
+	"Saved log": "保存的日志",
+	"The full log is also written to: ${1}": "完整日志同时写入：${1}",
+	"To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.": "如需将日志同时写入文件，请在 高级 > 扩展管理器 中为本扩展开启“外部交互”权限。",
+	"Saved log (last ${1} of ${2} lines)": "保存的日志（共 ${2} 行中的最后 ${1} 行）",
+	"Save as file...": "另存为文件...",
+	"If the editor froze, reopen it and use Return Path > Show Saved Log...": "如果编辑器卡死，请重新打开并使用 回流路径 > 显示保存的日志..."
 }

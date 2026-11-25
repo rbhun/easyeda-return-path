@@ -8,7 +8,7 @@ import extensionConfig from '../extension.json' with { type: 'json' };
 import { drawDc } from './dc-overlay';
 import { readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis } from './overlay';
-import { boardSizes, cancelRunning, guarded, log, runSteps, timed, toast } from './runner';
+import { boardSizes, cancelRunning, guarded, log, logFilePath, logStartup, runSteps, savedLog, saveLogAs, timed, toast } from './runner';
 import { dialogAsk, runDcWizard, type Ask } from './wizard';
 
 const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
@@ -17,10 +17,12 @@ const HF_BUDGET_MS = 60_000;
 const DC_BUDGET_MS = 120_000;
 
 // eslint-disable-next-line unused-imports/no-unused-vars
-export function activate(status?: 'onStartupFinished', arg?: string): void {}
+export function activate(status?: 'onStartupFinished', arg?: string): void {
+	logStartup();
+}
 
 export function about(): void {
-	eda.sys_Dialog.showInformationMessage(t('Return-path overlay v${1}', extensionConfig.version), t('About'));
+	eda.sys_Dialog.showInformationMessage(`${t('Return-path overlay v${1}', extensionConfig.version)}\n\n${t('If the editor froze, reopen it and use Return Path > Show Saved Log...')}`, t('About'));
 }
 
 function confirm(content: string, title: string, ok: string): Promise<boolean> {
@@ -69,14 +71,18 @@ export async function runReturnPath(ask: Ask): Promise<void> {
 			return;
 		}
 		log(`Show for Selected Net: ${net}`);
-		const board = await timed('read board', readBoard, boardSizes);
-		const scope = hfApplicability(board, net);
+		// The name check needs no board, so power and ground nets are turned away before the read.
+		const byName = hfApplicability({ pours: [] }, net);
+		const board = byName.ok ? await timed('read board', readBoard, boardSizes) : undefined;
+		const scope = board ? hfApplicability(board, net) : byName;
 		if (!scope.ok) {
 			log(`${net}: not a signal net (${scope.kind}); high-frequency check skipped`, 'warn');
 			if (await confirm(scope.message!, title, t('Open DC view')))
 				await runDcReturn(ask, scope.kind === 'power' ? net : undefined);
 			return;
 		}
+		if (!board)
+			return;
 		const ownTracks = board.tracks.filter(tr => tr.net === net).length;
 		log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias`);
 		const analysis = await runSteps(analyzeNetSteps(board, net), { title, timeBudgetMs: HF_BUDGET_MS, percent: hfPercent() });
@@ -147,4 +153,18 @@ export function cancelAnalysis(): void {
 export async function clearReturnPath(): Promise<void> {
 	cancelRunning();
 	await guarded(t('Return path'), clearOverlay);
+}
+
+/** Shows the saved log, which survives an editor freeze or crash, and offers to save it as a file. */
+export async function showSavedLog(): Promise<void> {
+	await guarded(t('Saved log'), async () => {
+		const path = await logFilePath();
+		const all = savedLog();
+		const where = path
+			? t('The full log is also written to: ${1}', path)
+			: t('To have the log written to a file as well, allow "External Interaction" for this extension in Advanced > Extension Manager.');
+		const body = [where, '', ...all.slice(-40)].join('\n');
+		if (await confirm(body, t('Saved log (last ${1} of ${2} lines)', String(Math.min(40, all.length)), String(all.length)), t('Save as file...')))
+			await saveLogAs();
+	});
 }

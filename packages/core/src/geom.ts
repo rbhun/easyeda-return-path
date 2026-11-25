@@ -231,20 +231,16 @@ export class Polyline {
 
 /** Region of the paths as a list of polygons with their holes (outer first). */
 export function splitIslands(paths: Paths): Paths[] {
-  const outers = paths.filter((p) => signedArea(p) > 0);
-  const holes = paths.filter((p) => signedArea(p) <= 0);
-  const groups: Paths[] = outers.map((o) => [o]);
-  for (const h of holes) {
-    let best = -1;
-    let bestArea = Infinity;
-    outers.forEach((o, i) => {
-      const a = signedArea(o);
-      if (pointInPaths(h[0], [o]) && a < bestArea) {
-        best = i;
-        bestArea = a;
-      }
-    });
-    if (best >= 0) groups[best].push(h);
+  const areas = paths.map(signedArea);
+  // Smallest first, so the first outer that contains a hole is the tightest one.
+  const outers = paths.map((p, i) => ({ p, a: areas[i], b: bbox([p]), group: [p] as Paths })).filter((o) => o.a > 0);
+  const bySize = [...outers].sort((x, y) => x.a - y.a);
+  for (let i = 0; i < paths.length; i++) {
+    if (areas[i] > 0) continue;
+    const q = paths[i][0];
+    if (!q) continue;
+    const o = bySize.find((o) => q.x >= o.b.minX && q.x <= o.b.maxX && q.y >= o.b.minY && q.y <= o.b.maxY && pointInPaths(q, [o.p]));
+    if (o) o.group.push(paths[i]);
   }
-  return groups;
+  return outers.map((o) => o.group);
 }
