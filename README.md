@@ -23,6 +23,8 @@ selected nets and flags return-path problems. EasyEDA has no built-in equivalent
 4. For each signal via, find the nearest return via or bridging decap.
 5. Draw a temporary overlay (indicator markers, not saved in the document): the ±3h band, gaps, detours, via links and loop areas.
 
+Analyses run as time-sliced steps with a time budget, progress, cancel and complexity limits, so the editor never blocks; power, ground and plane nets go to the DC view instead. 2-layer boards are handled: the reference is the opposite outer layer's pour or a coplanar pour on the trace's own layer.
+
 DC mode (first milestone, design decision D7): a wizard guesses the power rails, their grounds, the source (a regulator output, or else a connector or battery on VIN/VBUS/VBAT) and the loads. It then solves the rail and its ground as a resistor network on the rasterised copper of each layer, with vias joining the layers, and draws streamlines and colour-binned current-density contours.
 
 ## Repository layout
@@ -45,8 +47,9 @@ npm run demo              # CLI demo boards → packages/cli/out/
 
 ## Status
 
-Early development. The geometry is validated on synthetic boards only, and the extension
-has not yet been run inside EasyEDA Pro.
+Early development. The geometry is validated on synthetic boards only. The first run inside
+EasyEDA Pro froze on a power net; that is fixed (time slicing, limits, power-net check) but not yet
+re-tested in the app. See the extension README for reading its logs in the desktop client.
 
 Prior art: [kistitch](https://github.com/hatlabs/kistitch) (MIT, © 2025 Hat Labs Oy) informed the
 via-return thresholds; no code is copied.
