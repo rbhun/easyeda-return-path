@@ -207,6 +207,54 @@ function matchPlane(island: Paths, layer: number, planes: PlaneFill[], boxes: Re
 }
 
 type Poured = Awaited<ReturnType<typeof eda.pcb_PrimitivePoured.getAll>>[number];
+type PourFill = ReturnType<Poured['getState_PourFills']>[number];
+
+/** Describes an unexpected API value for the log: its type and keys, not its (possibly huge) content. */
+function shapeOf(x: unknown): string {
+	if (Array.isArray(x))
+		return `array(${x.length})${x.length ? ` of ${shapeOf(x[0])}` : ''}`;
+	if (x && typeof x === 'object') {
+		const keys = new Set<string>(Object.keys(x));
+		for (let o = Object.getPrototypeOf(x); o && o !== Object.prototype; o = Object.getPrototypeOf(o))
+			for (const k of Object.getOwnPropertyNames(o)) keys.add(k);
+		return `object {${[...keys].slice(0, 25).join(', ')}}`;
+	}
+	return typeof x;
+}
+
+/**
+ * `pcb_PrimitivePoured.get(id)` is documented to return the primitive object, but in some clients it
+ * returns something else (an array, or plain state). Accept those and report anything unknown.
+ */
+function asPoured(x: unknown): Poured | undefined {
+	const o = (Array.isArray(x) ? x[0] : x) as Record<string, unknown> | undefined;
+	if (!o || typeof o !== 'object')
+		return undefined;
+	if (typeof o.getState_Layer === 'function' && typeof o.getState_PourFills === 'function')
+		return o as unknown as Poured;
+	const field = (name: string) => {
+		const getter = o[`getState_${name}`];
+		if (typeof getter === 'function')
+			return (getter as () => unknown).call(o);
+		return o[name] ?? o[name[0].toLowerCase() + name.slice(1)];
+	};
+	if (field('Layer') === undefined || !Array.isArray(field('PourFills')))
+		throw new Error(`pcb_PrimitivePoured.get returned ${shapeOf(x)}`);
+	return {
+		getState_PrimitiveId: () => field('PrimitiveId'),
+		getState_Layer: () => field('Layer'),
+		getState_PourPrimitiveId: () => field('PourPrimitiveId'),
+		getState_PourFills: () => field('PourFills'),
+	} as unknown as Poured;
+}
+
+/** The complex-polygon source of one fill region, whether `path` is an IPCB_ComplexPolygon or already its source. */
+function fillSource(f: PourFill): unknown {
+	const path = f.path as unknown as { getSource?: () => unknown; source?: unknown } | unknown[];
+	if (Array.isArray(path))
+		return path;
+	return typeof path?.getSource === 'function' ? path.getSource() : path?.source;
+}
 
 /**
  * Fetches the computed pour fills one at a time. EasyEDA computes them in the editor itself, and
@@ -244,13 +292,16 @@ async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipp
 				return { poured: out, skipped: true };
 			}
 			const t1 = clock();
-			const p = await call(`pcb_PrimitivePoured.get ${i + 1}/${ids.length} (${id})`, () => api.get(id));
+			const raw: unknown = await call(`pcb_PrimitivePoured.get ${i + 1}/${ids.length} (${id})`, () => api.get(id));
+			if (i === 0)
+				log(`read board: pcb_PrimitivePoured.get returns ${shapeOf(raw)}`);
+			const p = asPoured(raw);
 			const ms = clock() - t1;
 			if (p) {
 				out.push(p);
 				const fills = p.getState_PourFills();
 				let values = 0;
-				for (const f of fills) values += (f.path.getSource() as unknown[]).length;
+				for (const f of fills) values += (fillSource(f) as unknown[] | undefined)?.length ?? 0;
 				log(`read board: poured ${id}: layer ${p.getState_Layer()}, ${fills.length} fill regions, ${values} path values, ${Math.round(ms)} ms`);
 			}
 			if (ms > apiTimeouts.pouredSlowMs) {
@@ -264,10 +315,10 @@ async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipp
 		return { poured: out, skipped: false };
 	}
 	catch (e) {
-		if (!(e instanceof TimedOut))
-			throw e;
-		log(`read board: ${e.message}; pours are computed from their outlines`, 'warn');
-		warnings.push(`${e.message}; pours are computed from their outlines.`);
+		// Pour fills only refine accuracy; any failure here falls back to outlines instead of ending the run.
+		const err = e instanceof Error ? e : new Error(String(e));
+		log(`read board: ${err.message}; pours are computed from their outlines${e instanceof TimedOut || !err.stack ? '' : `\n${err.stack}`}`, 'warn');
+		warnings.push(`Computed pour fills could not be read (${err.message}); pours are computed from their outlines.`);
 		return { poured: [], skipped: true };
 	}
 	finally {
@@ -399,7 +450,16 @@ export async function readBoard(): Promise<Board> {
 		}
 	};
 	for (const poured of pouredAll) {
-		const rings = poured.getState_PourFills().filter(f => f.fill).flatMap(f => decodeComplex(f.path.getSource(), conv, MIL));
+		let rings: Paths;
+		try {
+			rings = poured.getState_PourFills().filter(f => f.fill).flatMap(f => decodeComplex(fillSource(f) as Parameters<typeof decodeComplex>[0], conv, MIL));
+		}
+		catch (e) {
+			const msg = `Computed pour fill ${poured.getState_PrimitiveId()} could not be decoded (${e instanceof Error ? e.message : String(e)}); its pour is computed from its outline.`;
+			log(`read board: ${msg}`, 'warn');
+			warnings.push(msg);
+			continue;
+		}
 		pieces += rings.length;
 		const pourId = poured.getState_PourPrimitiveId();
 		if (pourId) {

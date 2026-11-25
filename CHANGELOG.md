@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.3] - 2026-11-26
+
+The 0.1.2 test got through the board read in about 0.1 s up to the pour fills. It ended with a dialog, "Error: p.getState_Layer is not a function": in this client, `pcb_PrimitivePoured.get(id)` does not return the documented primitive object.
+
+- The result of `pcb_PrimitivePoured.get` is now accepted as the primitive, as an array holding it, or as plain state (`layer`, `pourFills`, …). A fill region's `path` may be a complex-polygon object or already its source.
+- The first result's shape (type and keys) is logged, so an unexpected form can be supported from the log alone.
+- Any failure while fetching pour fills now falls back to fills computed from pour outlines, with a warning; it no longer ends the run. A pour fill that cannot be decoded is skipped the same way.
+
 ## [0.1.2] - 2026-11-26
 
 The saved log of the first 0.1.1 test (DC Return Current on the R-Com dongle board) ended at `read board: pcb_PrimitivePoured.getAll…`. EasyEDA froze inside that call, which returns the pour fills EasyEDA has computed. The 60 s limit never fired, so the editor itself was blocked, not just slow to answer. The same log showed 34 copper layers on that board.

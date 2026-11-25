@@ -214,3 +214,35 @@ test('a saved log from an older build that ends in pcb_PrimitivePoured.getAll al
 	await ext.showReturnPath();
 	assert.doesNotMatch(again.messages.at(-1)!, /previous run stopped/);
 });
+
+test('pcb_PrimitivePoured.get returning an array or plain state still gives the computed fills', async () => {
+	for (const wrap of ['array', 'plain'] as const) {
+		const mock = install({});
+		const get = mock.eda.pcb_PrimitivePoured.get;
+		mock.eda.pcb_PrimitivePoured.get = (async (id: string) => {
+			const p = (await get(id)) as unknown as { getState_PrimitiveId: () => string; getState_Layer: () => number; getState_PourPrimitiveId: () => string | undefined; getState_PourFills: () => { fill: boolean; path: { getSource: () => unknown } }[] };
+			if (wrap === 'array')
+				return [p];
+			return {
+				primitiveId: p.getState_PrimitiveId(),
+				layer: p.getState_Layer(),
+				pourPrimitiveId: p.getState_PourPrimitiveId(),
+				pourFills: p.getState_PourFills().map(f => ({ ...f, path: f.path.getSource() })),
+			};
+		}) as never;
+		await ext.showReturnPath();
+		const log = saved(mock);
+		assert.ok(log.some(l => (wrap === 'array' ? /get returns array\(1\) of object/ : /get returns object \{primitiveId, layer/).test(l)), log.join('\n'));
+		assert.ok(log.some(l => /read board: 3 computed copper areas, 19 rings/.test(l)), `${wrap}: ${log.join('\n')}`);
+		assert.doesNotMatch(mock.messages.at(-1)!, /computed from their outlines/);
+	}
+});
+
+test('an unknown pcb_PrimitivePoured.get result is described in the log and the run falls back to outlines', async () => {
+	const mock = install({});
+	mock.eda.pcb_PrimitivePoured.get = (async () => ({ foo: 1 })) as never;
+	await ext.showReturnPath();
+	assert.ok(saved(mock).some(l => /pcb_PrimitivePoured.get returned object \{foo\}; pours are computed from their outlines/.test(l)), saved(mock).join('\n'));
+	assert.match(mock.messages.at(-1)!, /Computed pour fills could not be read/);
+	assert.ok(mock.markers.length > 0);
+});
