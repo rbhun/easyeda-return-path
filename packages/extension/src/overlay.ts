@@ -145,12 +145,13 @@ export async function markerKit() {
 
 export interface HfDrawn {
 	markers: number;
-	/** "Inner1: green" for each reference layer the return path runs on. */
+	/** "Inner1: green" for each signal layer whose return is drawn. */
 	returnLayers: string[];
 }
 
 /**
- * Replaces the overlay with the given analysis: the return path in a colour per reference layer;
+ * Replaces the overlay with the given analysis: the return path in a colour per signal layer, the
+ * signal trace and the vias it passes through;
  * dashed hops (via, decap, bridging cap, IC pin); red over the trace where it crosses a gap or is
  * short of reference copper; the band edges (hidden by default). Colours and widths come from the style (style.ts).
  */
@@ -182,16 +183,31 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 				gap.push(...segs([g.a, g.b], false));
 		}
 	}
+	// Each return takes the colour of its signal trace's layer and is drawn where it flows: on the trace
+	// when it runs in the copper of another layer, beside it in a pour on the same layer.
 	const returnLayers: string[] = [];
+	const returns = new Map<string, MarkerGroup>();
 	for (const t of an.returnPath.traces) {
-		const { role, inner } = returnRole(board, t.layer);
-		const key = `return ${t.layer}`;
-		if (!groups.has(key))
-			returnLayers.push(`${layerName(t.layer)}: ${roleColour(role, inner).name}`);
-		group(key, role, inner).push(...segs(t.pts, false));
+		const { role, inner } = returnRole(board, t.signalLayer);
+		const key = `return ${t.signalLayer}`;
+		let g = returns.get(key);
+		if (!g) {
+			returnLayers.push(`${layerName(t.signalLayer)}: ${roleColour(role, inner).name}`);
+			returns.set(key, g = { role, inner, markers: [] });
+		}
+		g.markers.push(...segs(t.pts, false));
 	}
 	for (const j of an.returnPath.jumps)
 		hop.push(...dashed(j.from, j.to), dot(j.to, 0.4));
+	// The signal itself, and the vias it passes through from one layer to another.
+	const signal: Marker[] = [];
+	for (const c of an.chains)
+		signal.push(...segs(c.chain.pts, false));
+	for (const v of an.vias) {
+		if (v.transitions.length)
+			signal.push(dot(v.via.at, v.via.diameter / 2 + 0.15));
+	}
+	const ordered = [groups.get('band')!, ...returns.values(), groups.get('gap')!, { role: 'signal' as Role, markers: signal }, groups.get('hop')!];
 
-	return { markers: await drawGroups([...groups.values()]), returnLayers };
+	return { markers: await drawGroups(ordered), returnLayers };
 }

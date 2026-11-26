@@ -19,13 +19,14 @@ export const PALETTE = {
 } satisfies Record<string, Rgba>;
 export type ColourName = keyof typeof PALETTE;
 
-export const ROLES = ['supply', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'band'] as const;
+export const ROLES = ['supply', 'signal', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'band'] as const;
 export type Role = typeof ROLES[number];
 
 export interface RoleStyle { colour: ColourName; width: number; visible: boolean }
 
 export const DEFAULT_STYLE: Record<Role, RoleStyle> = {
 	supply: { colour: 'yellow', width: 2, visible: true },
+	signal: { colour: 'white', width: 2, visible: true },
 	returnTop: { colour: 'magenta', width: 5, visible: true },
 	returnOther: { colour: 'cyan', width: 5, visible: true },
 	returnInner: { colour: 'green', width: 5, visible: true },
@@ -40,6 +41,7 @@ export const INNER_CYCLE: ColourName[] = ['green', 'blue'];
 /** The analyses that draw each role; the panel lists only the roles of the last run's kind. */
 export const ROLE_USE: Record<Role, ('hf' | 'dc')[]> = {
 	supply: ['dc'],
+	signal: ['hf'],
 	returnTop: ['hf', 'dc'],
 	returnOther: ['hf', 'dc'],
 	returnInner: ['hf'],
@@ -50,6 +52,7 @@ export const ROLE_USE: Record<Role, ('hf' | 'dc')[]> = {
 
 export const ROLE_LABELS: Record<Role, string> = {
 	supply: 'DC supply',
+	signal: 'Signal trace and its vias',
 	returnTop: 'Return, top layer',
 	returnOther: 'Return, other layers (bottom)',
 	returnInner: 'Return, inner layers',

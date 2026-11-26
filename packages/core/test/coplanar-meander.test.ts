@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { analyzeNet, circle, difference, rect, strokePath, union, type Board, type Track } from '../src/index.js';
 
 // 2-layer, 40 × 20 mm. SIG runs on Bottom through a GND pour with 0.3 mm clearance, except around a
-// meander (x 15–16.5), where the pour keeps 0.85 mm or more away; a Top GND pour (x < 30) lies under the meander,
+// meander (x 15–16.5), where the pour keeps 0.85 mm or more away; a Top GND pour (x < 29.5) lies under the meander,
 // with a GND via beside it. SIG ends on a via at x = 38 and goes on as a short Top track, over no Top pour.
 function meanderBoard(): Board {
   const TOP = 1;
@@ -39,19 +39,21 @@ function meanderBoard(): Board {
   };
 }
 
-test('a meander in a wider pour clearance keeps the coplanar return: no hop to the plane below and back', () => {
+test('a meander in a wider pour clearance returns in the plane under it, through the GND via beside it', () => {
   const an = analyzeNet(meanderBoard(), 'SIG');
   const bottom = an.chains.filter((c) => c.chain.layer === 2);
-  assert.equal(bottom.length, 1, 'the Bottom trace is one stretch');
-  assert.equal(bottom[0].ref?.layer, 2);
-  assert.equal(bottom[0].ref?.coplanar, true);
-  assert.deepEqual(an.returnPath.jumps.filter((j) => j.kind === 'via'), [], 'no via hops');
-  assert.ok(!an.returnPath.traces.some((t) => t.layer === 1), 'nothing drawn on Top');
-  // The return follows the pour edge around the meander rather than stopping at it.
-  const around = an.returnPath.traces.filter((t) => t.pts.some((p) => p.x > 15.2 && p.x < 16.3));
-  assert.ok(around.length > 0, 'return drawn along the meander');
-  for (const t of an.returnPath.traces.filter((r) => r.pts.every((p) => p.x < 37)))
-    for (const p of t.pts) assert.ok(tracksDist(p) > 0.2, `return point (${p.x.toFixed(2)}, ${p.y.toFixed(2)}) lies on the trace`);
+  assert.deepEqual(bottom.map((c) => [c.ref?.layer, !!c.ref?.coplanar]), [[2, true], [1, false], [2, true]], 'pour beside, Top plane under the meander, pour beside');
+  const meander = bottom[1];
+  assert.ok(meander.chain.pts.every((p) => p.x > 14 && p.x < 17.5), 'the plane stretch is the meander');
+  const hops = an.returnPath.jumps.filter((j) => j.kind === 'via');
+  assert.equal(hops.length, 2, 'into the plane and back out');
+  assert.ok(hops.every((j) => j.to.x === 15.75 && j.to.y === 12.3), 'through the GND via beside the meander');
+  // Every return is tagged with its signal trace's layer; on the plane it runs on the trace, in the pour beside it.
+  assert.ok(an.returnPath.traces.every((t) => t.signalLayer === (t.pts.every((p) => p.x > 37.5) ? 1 : 2)));
+  const onPlane = an.returnPath.traces.filter((t) => t.layer === 1);
+  assert.ok(onPlane.length > 0 && onPlane.every((t) => t.pts.every((p) => tracksDist(p) < 0.01)), 'the plane return lies on the meander');
+  const beside = an.returnPath.traces.filter((t) => t.layer === 2 && t.pts.every((p) => p.x < 37));
+  assert.ok(beside.length > 0 && beside.every((t) => t.pts.every((p) => tracksDist(p) > 0.2)), 'the coplanar return lies beside the trace');
 });
 
 test('a via between a coplanar stretch and a stretch over the same pour is no change of reference', () => {
