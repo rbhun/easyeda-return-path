@@ -229,6 +229,31 @@ test('a saved log from an older build that ends in a pour-fill fetch skips that 
 	assert.deepEqual(fetched, [ids[0], ids[2]]);
 });
 
+test('a run that froze decoding or merging a pour fill skips that fill next time; each step is saved first', async () => {
+	const first = install({});
+	const ids = await first.eda.pcb_PrimitivePoured.getAllPrimitiveId();
+	await ext.showReturnPath();
+	const lines = saved(first);
+	for (const id of ids) {
+		const decoding = lines.findIndex(l => l.endsWith(`read board: decoding pour fill ${id}…`));
+		assert.ok(decoding >= 0 && /decoded .*: \d+ fill regions, \d+ rings, \d+ points/.test(lines[decoding + 1]), lines.join('\n'));
+	}
+	assert.ok(lines.some(l => /read board: merging \d+ rings of pour .*…$/.test(l)));
+	for (const [marker, skipped] of [[`decode:${ids[1]}`, [ids[1]]], [`union:${ids[0]},${ids[2]}`, [ids[0], ids[2]]]] as const) {
+		const storage = new Map<string, unknown>([['fetchingPouredSince', marker]]);
+		const mock = install({ storage });
+		const get = mock.eda.pcb_PrimitivePoured.get;
+		const fetched: string[] = [];
+		mock.eda.pcb_PrimitivePoured.get = async (id: string) => (fetched.push(id), get(id));
+		await ext.showReturnPath();
+		assert.deepEqual(storage.get('pouredIdsThatHang'), [...skipped]);
+		assert.deepEqual(fetched, ids.filter(i => !skipped.includes(i)));
+		assert.ok(saved(mock).some(l => new RegExp(`froze while ${marker.startsWith('decode') ? 'decoding' : 'merging'} computed pour fill`).test(l)));
+		assert.equal(storage.get('fetchingPouredSince'), '');
+		assert.ok(mock.markers.length > 0);
+	}
+});
+
 test('slow pour-fill fetches switch the rest to outlines', async () => {
 	const mock = install({});
 	const get = mock.eda.pcb_PrimitivePoured.get;

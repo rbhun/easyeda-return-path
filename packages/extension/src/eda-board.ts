@@ -74,7 +74,7 @@ function copperMm(t: number, warnings: string[]): number | undefined {
 }
 
 /** Time limits for API calls; tests shorten them. */
-export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, pinsMs: 20_000, pouredTotalMs: 20_000, pouredSlowMs: 3_000 };
+export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, pinsMs: 20_000, pouredTotalMs: 20_000, pouredSlowMs: 3_000, decodeMs: 10_000 };
 
 /** Set while computed pour fills are fetched; still set at the next start means the editor hung there. */
 const POURED_MARKER = 'fetchingPouredSince';
@@ -348,12 +348,14 @@ const SKIP_POURED = 'pouredIdsThatHang';
  * that logged fetches but stored no ID, from a saved-log fetch line with no result after it.
  * `'*'` means a hang inside getAll, which names no single fill.
  */
-function hungFetch(marker: unknown): string | undefined {
-	const m = typeof marker === 'string' ? /^get:(.+)$/.exec(marker) : null;
+function hungFetch(marker: unknown): { ids: string[]; while: string } | undefined {
+	const m = typeof marker === 'string' ? /^(get|decode|union):(.+)$/.exec(marker) : null;
 	if (m)
-		return m[1];
+		return { ids: m[2].split(','), while: { get: 'fetching', decode: 'decoding', union: 'merging' }[m[1]]! };
 	const fromLog = hungFetchInLog();
-	return fromLog ?? (typeof marker === 'string' && marker ? '*' : undefined);
+	if (fromLog)
+		return { ids: [fromLog], while: 'fetching' };
+	return typeof marker === 'string' && marker ? { ids: ['*'], while: 'fetching' } : undefined;
 }
 
 function hungFetchInLog(): string | undefined {
@@ -372,22 +374,24 @@ function hungFetchInLog(): string | undefined {
  * Fetches the computed pour fills one at a time. EasyEDA computes them in the editor itself, and
  * some fetches freeze the editor, which no time limit can interrupt. The fill being fetched is
  * stored first; if the editor hangs, the next run adds it to a skip list and computes that pour from
- * its outline (clearances approximated). Slow fetches switch the rest to outlines too.
+ * its outline (clearances approximated). Decoding and merging a fill store their fill the same way.
+ * Slow fetches switch the rest to outlines too.
  */
 async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skippedIds: Set<string>; allSkipped: boolean }> {
 	const skip = new Set(((readStored(SKIP_POURED) as string[] | undefined) ?? []).filter(x => typeof x === 'string'));
 	const hung = hungFetch(readStored(POURED_MARKER));
 	await writeStored(POURED_MARKER, '');
-	if (hung === '*') {
+	if (hung?.ids[0] === '*') {
 		const msg = 'The previous run froze while fetching computed pour fills; pours are computed from their outlines this time.';
 		log(`read board: ${msg}`, 'warn');
 		warnings.push(msg);
 		return { poured: [], skippedIds: new Set(), allSkipped: true };
 	}
-	if (hung && !skip.has(hung)) {
-		skip.add(hung);
+	const fresh = hung?.ids.filter(id => !skip.has(id)) ?? [];
+	if (fresh.length) {
+		fresh.forEach(id => skip.add(id));
 		await writeStored(SKIP_POURED, [...skip].slice(-50));
-		log(`read board: the previous run froze while fetching computed pour fill ${hung}; it is skipped from now on`, 'warn');
+		log(`read board: the previous run froze while ${hung!.while} computed pour fill ${fresh.join(', ')}; it is skipped from now on`, 'warn');
 	}
 	const api = eda.pcb_PrimitivePoured;
 	const ids = typeof api.getAllPrimitiveId === 'function' ? await call('pcb_PrimitivePoured.getAllPrimitiveId', () => api.getAllPrimitiveId()) : undefined;
@@ -577,13 +581,34 @@ export async function readBoard(): Promise<Board> {
 			sliceStart = clock();
 		}
 	};
+	const pouredOfPour = new Map<string, string[]>();
 	for (const poured of pouredAll) {
-		let rings: Paths;
+		const pouredId = String(poured.getState_PrimitiveId());
+		await writeStored(POURED_MARKER, `decode:${pouredId}`);
+		log(`read board: decoding pour fill ${pouredId}…`);
+		await checkpoint();
+		const rings: Paths = [];
+		const t1 = clock();
+		let points = 0;
 		try {
-			rings = poured.getState_PourFills().filter(f => f.fill).flatMap(f => decodeComplex(fillSource(f) as Parameters<typeof decodeComplex>[0], conv, MIL));
+			const fills = poured.getState_PourFills();
+			for (const f of fills) {
+				if (!f.fill)
+					continue;
+				for (const r of decodeComplex(fillSource(f) as Parameters<typeof decodeComplex>[0], conv, MIL)) {
+					if (r.every(q => Number.isFinite(q.x) && Number.isFinite(q.y))) {
+						rings.push(r);
+						points += r.length;
+					}
+				}
+				if (clock() - t1 > apiTimeouts.decodeMs)
+					throw new Error(`decoding took over ${Math.round(apiTimeouts.decodeMs / 1000)} s`);
+				await breathe();
+			}
+			log(`read board: decoded ${pouredId}: ${fills.length} fill regions, ${rings.length} rings, ${points} points, ${Math.round(clock() - t1)} ms`);
 		}
 		catch (e) {
-			const msg = `Computed pour fill ${poured.getState_PrimitiveId()} could not be decoded (${e instanceof Error ? e.message : String(e)}); its pour is computed from its outline.`;
+			const msg = `Computed pour fill ${pouredId} could not be decoded (${e instanceof Error ? e.message : String(e)}); its pour is computed from its outline.`;
 			log(`read board: ${msg}`, 'warn');
 			warnings.push(msg);
 			continue;
@@ -594,7 +619,7 @@ export async function readBoard(): Promise<Board> {
 			const list = ringsByPour.get(pourId) ?? [];
 			for (const r of rings) list.push(r);
 			ringsByPour.set(pourId, list);
-			await breathe();
+			pouredOfPour.set(pourId, [...(pouredOfPour.get(pourId) ?? []), pouredId]);
 			continue;
 		}
 		const layer = poured.getState_Layer() as number | undefined;
@@ -620,9 +645,15 @@ export async function readBoard(): Promise<Board> {
 
 	const fillsByPour = new Map<string, Paths>();
 	for (const [id, rings] of ringsByPour) {
+		await writeStored(POURED_MARKER, `union:${(pouredOfPour.get(id) ?? [id]).join(',')}`);
+		log(`read board: merging ${rings.length} rings of pour ${id}…`);
+		await checkpoint();
+		const t1 = clock();
 		fillsByPour.set(id, union(rings));
+		log(`read board: merged pour ${id} into ${fillsByPour.get(id)!.length} rings, ${Math.round(clock() - t1)} ms`);
 		await breathe();
 	}
+	await writeStored(POURED_MARKER, '');
 	for (const [key, { plane, islands }] of islandsByPlane) {
 		pours.push({ id: `plane-${key}`, net: plane.net, layer: plane.layer, name: 'plane', priority: 0, outline: plane.shape, poured: union(islands) });
 		await breathe();

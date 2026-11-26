@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.7] - 2026-11-26
+
+With 0.1.5 on the R-Com dongle, EasyEDA returned every pour fill within 3 ms, but DC Return Current still froze: first while the regions of fill `0ca4da6a31655d4b` were read, then, with that fill skipped, after the fetch. Only one step of that later stretch was saved to the log, and it covered decoding and merging every fill.
+
+- Decoding and merging each pour fill are now logged and saved before they start, with region, ring and point counts and times when they finish. The fill being decoded or merged is stored the same way as during the fetch, so a run that freezes there makes the next one skip just that fill and compute its pour from its outline.
+- Decoding yields to the editor between fill regions, gives up on a fill after 10 s (its pour is then computed from its outline), and drops points that are not finite numbers.
+
 ## [0.1.6] - 2026-11-26
 
 - A freeze while fetching a pour fill under 0.1.4 leaves that version's marker set. 0.1.5 read that marker as "skip every fill" for one run before learning which fill hung. The fill is now taken from the saved log at once, so the first run after updating skips only that fill (on the R-Com dongle, `0ca4da6a31655d4b`, which froze both DC Return Current and Show for Selected Net).
