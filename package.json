@@ -17,7 +17,8 @@
     "build:extension": "npm run build -w @returnpath/extension",
     "demo": "npm run demo -w @returnpath/cli",
     "check:version": "node scripts/check-version.mjs",
-    "sync": "node scripts/agent-sync.mjs"
+    "sync": "node scripts/agent-sync.mjs",
+    "fetch:build": "node scripts/fetch-build.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.10",

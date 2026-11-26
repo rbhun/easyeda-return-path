@@ -15,6 +15,9 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,7 +28,8 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Check version and changelog
-        run: node scripts/check-version.mjs ${{ github.base_ref && format('origin/{0}', github.base_ref) || '' }}
+        # Pull requests must raise the patch number above main's, whatever branch they target.
+        run: node scripts/check-version.mjs ${{ github.event_name == 'pull_request' && 'origin/main' || '' }}
       - name: Typecheck
         run: npm run typecheck
       - name: Test
@@ -34,8 +38,78 @@ jobs:
         run: npm run build:extension
       - name: Check the extension.json UUID was not regenerated
         run: git diff --exit-code packages/extension/extension.json
+      - name: Name this build (version + letter)
+        id: name
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The letter counts earlier builds of this version across the repository's artifacts
+        # (expired ones included): a for the first, then b, c, ..., z, aa, ab, ...
+        # extension.json keeps the plain version; the letter is only in the file and artifact name.
+        run: |
+          version=$(node -p "require('./packages/extension/extension.json').version")
+          prefix="easyeda-return-path_v${version}"
+          n=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --jq '.artifacts[].name' \
+            | grep -cE "^${prefix//./\\.}[a-z]+$" || true)
+          i=$n; letter=""
+          while :; do
+            letter=$(printf "\\$(printf '%03o' $((97 + i % 26)))")$letter
+            i=$((i / 26 - 1))
+            [ "$i" -lt 0 ] && break
+          done
+          name="${prefix}${letter}"
+          mkdir -p ci-out
+          cp "packages/extension/build/dist/${prefix}.eext" "ci-out/${name}.eext"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "Build ${name}.eext" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'pull_request'
         with:
-          name: extension-eext
-          path: packages/extension/build/dist/*.eext
+          name: ${{ steps.name.outputs.name }}
+          path: ci-out/${{ steps.name.outputs.name }}.eext
           if-no-files-found: error
+
+  automerge:
+    needs: check
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Merge once check has passed
+        id: merge
+        run: |
+          # GITHUB_TOKEN may not change workflow files, so GitHub refuses to merge such a PR with it.
+          if gh pr diff "$PR" -R "$GITHUB_REPOSITORY" --name-only | grep -q '^\.github/workflows/'; then
+            echo "::notice::This pull request changes .github/workflows; GITHUB_TOKEN cannot merge it. Merge it by hand."
+            echo "merged=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh pr merge "$PR" -R "$GITHUB_REPOSITORY" --auto --merge --match-head-commit "$HEAD_SHA"; then
+            echo "Auto-merge enabled."
+          else
+            # Auto-merge needs branch protection, which private repositories on GitHub Free do not have.
+            echo "::notice::Auto-merge is not available; merging directly because check passed."
+            gh pr merge "$PR" -R "$GITHUB_REPOSITORY" --merge --match-head-commit "$HEAD_SHA"
+          fi
+          echo "merged=yes" >> "$GITHUB_OUTPUT"
+      - name: Start the release
+        if: steps.merge.outputs.merged == 'yes'
+        # A merge made with GITHUB_TOKEN starts no push workflows, so the release is dispatched here.
+        run: |
+          for _ in $(seq 1 60); do
+            state=$(gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json state --jq .state)
+            [ "$state" != OPEN ] && break
+            sleep 10
+          done
+          if [ "$state" != MERGED ]; then
+            echo "::warning::Pull request is $state after 10 minutes; run the Release workflow by hand once it is merged."
+            exit 0
+          fi
+          gh workflow run release.yml -R "$GITHUB_REPOSITORY" --ref main
