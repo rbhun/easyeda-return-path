@@ -28,7 +28,7 @@ export interface WizardQuestion {
 	value: string | string[];
 	/** Label of the OK button. */
 	ok: string;
-	labels: { all: string; cancel: string; count: string; step: string; setAll: string; apply: string };
+	labels: { all: string; cancel: string; count: string; step: string; total: string; equal: string; equalTitle: string };
 }
 
 /** How long the page has to say hello before the system dialogs are used instead. */
@@ -139,7 +139,7 @@ export async function askInWindow(kind: WizardKind, title: string, prompt: strin
 		options,
 		value,
 		ok: ok ?? t('OK'),
-		labels: { all: t('Select all'), cancel: t('Cancel'), count: t('${1} of ${2} selected'), step: t('Step ${1} of ${2}'), setAll: t('All loads'), apply: t('Apply') },
+		labels: { all: t('Select all'), cancel: t('Cancel'), count: t('${1} of ${2} selected'), step: t('Step ${1} of ${2}'), total: t('Total current'), equal: t('Equal'), equalTitle: t('Share the total equally between the loads') },
 	};
 	return new Promise((resolve) => {
 		const finish = (v: string | string[] | boolean | undefined) => {

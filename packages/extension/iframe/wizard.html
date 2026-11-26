@@ -75,6 +75,9 @@
 			.current input[type="text"] { flex: 0 0 96px; width: 96px; padding: 3px 6px; text-align: right; }
 			.current input.bad { border-color: #e5484d; }
 			.current button { min-width: 0; padding: 3px 10px; }
+			.current input[type="range"] { flex: 0 0 110px; width: 110px; margin: 0; accent-color: var(--accent); }
+			.current small { flex: 0 0 34px; text-align: right; }
+			.current.total span { font-weight: 600; }
 			footer { display: flex; justify-content: flex-end; gap: 6px; flex: 0 0 auto; }
 			button {
 				min-width: 84px;
@@ -187,36 +190,87 @@
 						var checked = r.boxes.filter(function (x) { return x.checked; })[0];
 						if (checked) { focus = checked; setTimeout(function () { checked.scrollIntoView({ block: 'nearest' }); }); }
 					} else if (q.kind === 'currents') {
-						var ok = /^(\d+\.?\d*|\.\d+)(m?A?)$/i;
-						var fields = [];
-						var check = function () {
-							fields.forEach(function (f) { var v = f.value.replace(/\s+/g, ''); f.classList.toggle('bad', !!v && !ok.test(v)); });
+						// One total, shared out by a slider per load; a load's field can also be typed exactly.
+						var amps = function (text) {
+							var m = /^(\d+\.?\d*|\.\d+)(m?)A?$/i.exec(text.replace(/\s+/g, ''));
+							return m ? Number(m[1]) * (m[2] ? 1e-3 : 1) : NaN;
+						};
+						var fmt = function (a) {
+							return a < 0.9995 ? +(a * 1000).toFixed(a < 0.01 ? 2 : 1) + 'mA' : +a.toFixed(3) + 'A';
+						};
+						var currents = q.options.map(function (o, i) { var a = amps(q.value[i] || ''); return isFinite(a) ? a : 0; });
+						var sum = function () { return currents.reduce(function (a, b) { return a + b; }, 0); };
+						var rows = [];
+						var total = el('input', { type: 'text', value: fmt(sum()), spellcheck: false });
+						total.setAttribute('aria-label', q.labels.total);
+						var equal = el('button', { type: 'button', textContent: q.labels.equal, title: q.labels.equalTitle });
+						var draw = function (except) {
+							var t = sum();
+							rows.forEach(function (r, i) {
+								r.slider.value = t > 0 ? Math.round(1000 * currents[i] / t) : 0;
+								if (r.field !== except) { r.field.value = fmt(currents[i]); r.field.classList.remove('bad'); }
+								r.share.textContent = t > 0 ? Math.round(100 * currents[i] / t) + '%' : '';
+							});
+							if (total !== except) { total.value = fmt(t); total.classList.remove('bad'); }
 							refresh();
 						};
-						var all = el('input', { type: 'text', spellcheck: false, placeholder: q.value[0] || '' });
-						var apply = el('button', { type: 'button', textContent: q.labels.apply });
-						apply.onclick = function () {
-							if (!all.value.trim()) return;
-							fields.forEach(function (f) { f.value = all.value.trim(); });
-							check();
+						total.addEventListener('input', function () {
+							var v = total.value.trim();
+							var a = amps(v);
+							total.classList.toggle('bad', !!v && !isFinite(a));
+							if (!v || !isFinite(a)) { refresh(); return; }
+							var t = sum();
+							currents = currents.map(function (c) { return t > 0 ? a * c / t : a / currents.length; });
+							draw(total);
+						});
+						total.addEventListener('keydown', function (e) { if (e.key === 'Enter') e.stopPropagation(); });
+						equal.onclick = function () {
+							var t = sum() || amps(total.value) || 0;
+							currents = currents.map(function () { return t / currents.length; });
+							draw();
 						};
-						all.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.stopPropagation(); apply.click(); } });
-						body.appendChild(el('div', { className: 'current' }, [el('span', { className: 'muted', textContent: q.labels.setAll }), all, apply]));
+						body.appendChild(el('div', { className: 'current total' }, [el('span', { textContent: q.labels.total }), equal, total]));
 						var ul = el('ul', { role: 'group' });
 						q.options.forEach(function (o, i) {
-							var f = el('input', { type: 'text', value: q.value[i] || '', spellcheck: false });
-							f.setAttribute('aria-label', o.label);
-							f.addEventListener('input', check);
-							fields.push(f);
-							ul.appendChild(el('li', { className: 'current' }, [el('span', { textContent: o.label, title: o.label }), f]));
+							var slider = el('input', { type: 'range', min: 0, max: 1000, step: 1 });
+							slider.setAttribute('aria-label', o.label);
+							var field = el('input', { type: 'text', spellcheck: false });
+							field.setAttribute('aria-label', o.label);
+							var share = el('small', { className: 'muted' });
+							slider.addEventListener('input', function () {
+								// The total stays; the other loads keep their ratios and share what is left.
+								var t = sum();
+								if (!(t > 0)) return;
+								var mine = t * Number(slider.value) / 1000;
+								var others = t - currents[i];
+								currents = currents.map(function (c, j) {
+									if (j === i) return mine;
+									return others > 0 ? (t - mine) * c / others : (t - mine) / (currents.length - 1);
+								});
+								draw();
+							});
+							field.addEventListener('input', function () {
+								var v = field.value.trim();
+								var a = amps(v);
+								field.classList.toggle('bad', !!v && !isFinite(a));
+								if (isFinite(a)) { currents[i] = a; draw(field); }
+								else if (!v) { currents[i] = 0; draw(field); }
+								else refresh();
+							});
+							rows.push({ slider: slider, field: field, share: share });
+							ul.appendChild(el('li', { className: 'current' }, [el('span', { textContent: o.label, title: o.label }), slider, share, field]));
 						});
 						body.appendChild(ul);
 						read = function () {
-							return q.options.map(function (o, i) { var v = fields[i].value.replace(/\s+/g, ''); return v ? o.value + '=' + v : ''; }).filter(Boolean).join(', ');
+							if (!total.value.trim()) return '';
+							return q.options.map(function (o, i) { return currents[i] > 0 ? o.value + '=' + fmt(currents[i]) : ''; }).filter(Boolean).join(', ');
 						};
-						valid = function () { return fields.every(function (f) { return !f.classList.contains('bad'); }); };
-						if (fields[0]) focus = fields[0];
-						check();
+						valid = function () {
+							if (total.classList.contains('bad') || rows.some(function (r) { return r.field.classList.contains('bad'); })) return false;
+							return !total.value.trim() || sum() > 0;
+						};
+						focus = total;
+						draw();
 					} else if (q.kind === 'input') {
 						var input = el('input', { type: 'text', value: q.value, spellcheck: false });
 						body.appendChild(input);

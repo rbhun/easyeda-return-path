@@ -20,7 +20,7 @@
 	"Step 4/5: active source of ${1}. ${2}": "Step 4/5: active source of ${1}. ${2}",
 	"Other candidate sources are left out of the solve.": "Other candidate sources are left out of the solve.",
 	"Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.": "Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.",
-	"Current of each load: 150mA, or 0.15 for amps. Prefilled with ${1}, or with the last run's value on this rail. Clear every field to split 1 A equally and show normalised density.": "Current of each load: 150mA, or 0.15 for amps. Prefilled with ${1}, or with the last run's value on this rail. Clear every field to split 1 A equally and show normalised density.",
+	"Total current of the rail, shared between the loads with the sliders; a load's current can also be typed (150mA, or 0.15 for amps). Prefilled with ${1} per load, or with the last run's values on this rail. Clear the total to split 1 A equally and show normalised density.": "Total current of the rail, shared between the loads with the sliders; a load's current can also be typed (150mA, or 0.15 for amps). Prefilled with ${1} per load, or with the last run's values on this rail. Clear the total to split 1 A equally and show normalised density.",
 	"Cancel": "Cancel",
 	"Open DC view": "Open DC view",
 	"No analysis is running.": "No analysis is running.",
@@ -69,7 +69,8 @@
 	"OK": "OK",
 	"${1} of ${2} selected": "${1} of ${2} selected",
 	"Step ${1} of ${2}": "Step ${1} of ${2}",
-	"All loads": "All loads",
-	"Apply": "Apply",
-	"${1}: done; open the Return Path panel to see the result.": "${1}: done; open the Return Path panel to see the result."
+	"${1}: done; open the Return Path panel to see the result.": "${1}: done; open the Return Path panel to see the result.",
+	"Total current": "Total current",
+	"Equal": "Equal",
+	"Share the total equally between the loads": "Share the total equally between the loads"
 }
