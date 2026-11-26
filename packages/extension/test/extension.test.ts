@@ -22,7 +22,9 @@ function demoBoard() {
 const board = demoBoard();
 const expected = analyzeNet(board, 'CLK').findings.map(f => `[${f.severity}] ${f.message}`);
 const ext = await import('../src/index.ts');
-const { COLORS, RETURN_COLORS } = await import('../src/overlay.ts');
+const { PALETTE } = await import('../src/style.ts');
+const COLORS = { band: PALETTE.white, gap: PALETTE.red, hop: PALETTE.yellow };
+const RETURN_COLORS = { inner: [PALETTE.green, PALETTE.blue] };
 
 async function run(planeLayers: number[]) {
 	const mock = createMockEda(board, 'CLK', planeLayers);
@@ -36,7 +38,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.equal(mock.messages.length, 1);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
 	assert.match(mock.messages[0], /^CLK: 7 finding\(s\)/);
-	assert.match(mock.messages[0], /Return path \(thick\) on Inner1: green, Inner2: blue\./);
+	assert.match(mock.messages[0], /Return path on Inner1: green, Inner2: blue\. Dashed yellow: hop through a via, decap, bridging cap or IC pin\. red: trace over a gap, or band without copper\. Thin white: ±3h band edges\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
 	const expectedColors = [COLORS.band, COLORS.gap, COLORS.hop, RETURN_COLORS.inner[0], RETURN_COLORS.inner[1]].map(c => JSON.stringify(c));
 	assert.deepEqual(colors, new Set(expectedColors), 'band, gap, hop and one return colour per reference layer, all opaque');

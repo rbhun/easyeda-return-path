@@ -20,7 +20,8 @@ function dcBoard() {
 
 const board = dcBoard();
 const ext = await import('../src/index.ts');
-const { DC_COLORS } = await import('../src/dc-overlay.ts');
+const { PALETTE } = await import('../src/style.ts');
+const DC_COLORS = { supply: PALETTE.yellow, return: PALETTE.magenta, returnOther: PALETTE.cyan, bottleneck: PALETTE.red };
 
 async function run(selected: string, answer?: (d: DialogCall) => unknown) {
 	const mock = createMockEda(board, selected, [], answer);
@@ -48,7 +49,7 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.match(msg, /3V3: drop \d+\.\d+ mV\/A/);
 	assert.match(msg, /GND: drop \d+\.\d+ mV\/A/);
 	assert.doesNotMatch(msg, /Contours drawn/);
-	assert.match(msg, /Streamlines: 3V3 supply thin yellow; GND return thick, magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
+	assert.match(msg, /Streamlines: 3V3 supply yellow; GND return magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
 	assert.deepEqual(colors, new Set([DC_COLORS.supply, DC_COLORS.return, DC_COLORS.returnOther, DC_COLORS.bottleneck].map(c => JSON.stringify(c))));
 	assert.ok(mock.markers.every(m => ['r', 'g', 'b'].every(k => [0, 255].includes((m.color as Record<string, number>)[k]))), 'channels only 0 or 255: EasyEDA Pro 3.2 clips colours to a 0–1 scale');
@@ -162,6 +163,58 @@ test('Show for Selected Net on a switching node (a net on an inductor) offers th
 	assert.match(mock.dialogs[0].prompt, /SWN connects to L9, an inductor or ferrite bead/);
 	assert.ok((mock.dialogs[1].dflt as string[]).includes('SWN'), 'ticked in step 1 though its name is not a rail name');
 	assert.equal(mock.dialogs[2].dflt, 'SWN', 'and preselected in step 2');
+});
+
+test('panel: opens without blocking, runs DC from a button, shows the result there, restyles and hides the overlay', async () => {
+	const { readFileSync } = await import('node:fs');
+	const html = readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8');
+	assert.ok(html.includes("'returnpath.panel.command'") && html.includes("'returnpath.panel.state'"), 'the page uses the same topics');
+
+	const mock = createMockEda(board, '3V3', [], undefined, { storage: new Map() });
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.clearReturnPath();
+	await ext.showPanel();
+	const win = mock.iframes.get('returnPathPanel')!;
+	assert.equal(win.html, '/iframe/index.html');
+	assert.equal(win.props.grayscaleMask, false, 'the editor stays usable');
+	assert.equal(win.props.minimizeButton, true);
+
+	const states = () => mock.published.filter(p => p.topic === 'returnpath.panel.state').map(p => p.message);
+	mock.panelSend({ cmd: 'hello' });
+	assert.equal(states().at(-1).overlay, 'none');
+	assert.equal(states().at(-1).roles.length, 7);
+
+	mock.panelSend({ cmd: 'dc' });
+	for (let i = 0; i < 400 && !(states().at(-1)?.result && !states().at(-1).busy); i++)
+		await new Promise(r => setTimeout(r, 25));
+	const done = states().at(-1);
+	assert.ok(states().some(s => s.busy === 'DC Return Current'), 'busy while running');
+	assert.match(done.result.lines[0], /^3V3 \/ GND: source U1/);
+	assert.equal(done.overlay, 'shown');
+	assert.match(done.lastRun, /^DC 3V3 \/ GND, source U1/);
+	assert.equal(mock.messages.length, 0, 'no modal result dialog while the panel is open');
+	assert.match(mock.toasts.at(-1)!, /result is in the Return Path panel/);
+
+	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 1 });
+	const white = JSON.stringify({ r: 255, g: 255, b: 255, alpha: 1 });
+	const supplyCount = mock.markers.filter(m => JSON.stringify(m.color) === yellow).length;
+	mock.panelSend({ cmd: 'style', style: { supply: { colour: 'white', width: 4 } } });
+	for (let i = 0; i < 40 && mock.markers.filter(m => JSON.stringify(m.color) === white).length < supplyCount; i++)
+		await new Promise(r => setTimeout(r, 25));
+	const restyled = mock.markers.filter(m => JSON.stringify(m.color) === white);
+	assert.equal(restyled.length, supplyCount, 'the supply redrawn in the new colour without a new analysis');
+	assert.ok(restyled.every(m => m.width === 4));
+	assert.equal(states().at(-1).roles.find((r: { role: string }) => r.role === 'supply').colour, 'white');
+
+	mock.panelSend({ cmd: 'resetStyle' });
+	await new Promise(r => setTimeout(r, 50));
+	assert.equal(mock.markers.filter(m => JSON.stringify(m.color) === yellow).length, supplyCount);
+
+	mock.panelSend({ cmd: 'toggle' });
+	for (let i = 0; i < 40 && states().at(-1).overlay !== 'hidden'; i++)
+		await new Promise(r => setTimeout(r, 25));
+	assert.equal(mock.markers.length, 0);
+	assert.equal(states().at(-1).overlay, 'hidden');
 });
 
 test('a ground with no copper path from any load is reported in words and gets no contours', async () => {

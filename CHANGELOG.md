@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.16] - 2026-11-26
+
+A window that stays open, as asked: results, actions and overlay styling without going through the menu each time.
+
+- **Return Path → Open Panel...:** a floating window (`iframe/index.html`) that does not grey out or block the editor and can be minimised. Buttons: Selected net, DC current..., Rerun last, Cancel, Hide/Show, Clear, Log.... It shows what is running, whether the overlay is shown, the last analysis, and the last result. While the panel is open, results go there instead of the modal dialog, with a short toast.
+- **Colours and widths per role:** DC supply, return on the top layer, on other layers, on inner layers, hops, gaps and bottleneck, and band edges; a colour from red, yellow, green, cyan, blue, magenta and white, and a width from 1 to 10. Changes redraw the current overlay without a new analysis, are kept with the extension's settings, and the result legends name the chosen colours. Reset to defaults restores 0.1.15's scheme.
+- The panel talks to the extension over its private message bus (`sys_MessageBus`); the menu items work as before.
+
 ## [0.1.15] - 2026-11-26
 
 From 0.1.14 on the rack display: every marker was still white, and the lines looked thin and all alike. Show for Selected Net on `$1N58` (the switching node between U4 and L1) ran the high-frequency check without offering the DC view, and DC Return Current showed an "export failed" error before its first dialog.

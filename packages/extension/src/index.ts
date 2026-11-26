@@ -8,7 +8,9 @@ import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis, toggleOverlay } from './overlay';
+import { initPanel, openPanel, publishState, report } from './panel';
 import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, readStored, runSteps, savedLog, saveLogAs, timed, toast, writeStored } from './runner';
+import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
 
 const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
@@ -19,6 +21,7 @@ const DC_BUDGET_MS = 120_000;
 // eslint-disable-next-line unused-imports/no-unused-vars
 export function activate(status?: 'onStartupFinished', arg?: string): void {
 	logStartup();
+	initPanel(panelHost);
 }
 
 export function about(): void {
@@ -98,12 +101,12 @@ async function hfFor(net: string, ask: Ask): Promise<void> {
 	const lines = [
 		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
 		drawn.returnLayers.length
-			? t('Return path (thick) on ${1}. Dashed yellow: hop through a via, decap, bridging cap or IC pin. Red: trace over a gap, or band without copper. Thin white: ±3h band edges.', drawn.returnLayers.join(', '))
+			? t('Return path on ${1}. Dashed ${2}: hop through a via, decap, bridging cap or IC pin. ${3}: trace over a gap, or band without copper. Thin ${4}: ±3h band edges.', drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name, roleColour('band').name)
 			: t('No return path drawn: the trace has no reference copper.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
 		...board.warnings.map(w => `warning: ${w}`),
 	];
-	eda.sys_Dialog.showInformationMessage(lines.join('\n'), title);
+	await report(title, lines);
 }
 
 /** Wizard step 1, DC solve of the chosen rail and its ground, and the DC overlay (D7). */
@@ -166,11 +169,11 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 		...[res.supply, res.ret].filter(n => !!n).map(n => carriesCurrent(n!)
 			? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
 			: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
-		t('Streamlines: ${1} supply thin yellow; ${2} return thick, magenta on ${3} and cyan on other layers, with a circle where it changes layer.', setup.rail, setup.ground, layerName(board.stackup.copper[0].id)),
+		t('Streamlines: ${1} supply ${2}; ${3} return ${4} on ${5} and ${6} on other layers, with a circle where it changes layer.', setup.rail, roleColour('supply').name, setup.ground, roleColour('returnTop').name, layerName(board.stackup.copper[0].id), roleColour('returnOther').name),
 		t('${1} overlay marker(s).', String(drawn.markers)),
 		...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 	].filter(Boolean);
-	eda.sys_Dialog.showInformationMessage(lines.join('\n'), title);
+	await report(title, lines);
 }
 
 type LastRun = { kind: 'hf'; net: string } | { kind: 'dc'; input: DcSetupInput };
@@ -217,6 +220,7 @@ export async function toggleReturnPath(): Promise<void> {
 		const visible = await toggleOverlay();
 		toast(visible === undefined ? t('No overlay to show: run an analysis first.') : visible ? t('Overlay shown.') : t('Overlay hidden. Use Hide/Show Overlay again to show it.'));
 	});
+	publishState();
 }
 
 /** Stops a running analysis (closing its progress bar does the same). */
@@ -228,7 +232,29 @@ export function cancelAnalysis(): void {
 export async function clearReturnPath(): Promise<void> {
 	cancelRunning();
 	await guarded(t('Return path'), clearOverlay);
+	publishState();
 }
+
+/** Opens the Return Path panel: last result, actions and overlay colours in a window that stays open. */
+export async function showPanel(): Promise<void> {
+	initPanel(panelHost);
+	await guarded(t('Return Path'), openPanel);
+}
+
+const panelHost = {
+	run: async (cmd: 'hf' | 'dc' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log') => {
+		const actions = { hf: showReturnPath, dc: showDcReturn, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis(), log: showSavedLog };
+		await actions[cmd]();
+	},
+	lastRunLabel: () => {
+		const run = lastRun();
+		if (!run)
+			return undefined;
+		return run.kind === 'hf'
+			? t('Show for Selected Net: ${1}', run.net)
+			: t('DC ${1} / ${2}, source ${3}, loads ${4}', run.input.rail, run.input.ground, run.input.source, (run.input.loads ?? []).join(', ') || '-');
+	},
+};
 
 /** Shows the saved log, which survives an editor freeze or crash, and offers to save it as a file. */
 export async function showSavedLog(): Promise<void> {

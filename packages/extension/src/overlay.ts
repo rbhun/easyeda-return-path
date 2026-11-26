@@ -2,44 +2,24 @@
 // undo history (design decision D6). Markers have no fill, so regions are drawn as outlines.
 import { dist, lerp, type Analysis, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
 import { MIL } from './eda-board';
+import { roleColour, type Role } from './style';
 
-export type Rgba = { r: number; g: number; b: number; alpha: number };
+export type { Rgba } from './style';
 
-// EasyEDA Pro 3.2 reads marker colours on a 0–1 scale and clips above 1 (both { r: 255 } and { r: 1 }
-// draw red), so any mixed 0–255 colour comes out white. Channels of only 0 and 255 read the same on
-// either scale.
-export const COLORS = {
-	band: { r: 255, g: 255, b: 255, alpha: 1 },
-	gap: { r: 255, g: 0, b: 0, alpha: 1 },
-	hop: { r: 255, g: 255, b: 0, alpha: 1 },
-} satisfies Record<string, Rgba>;
-
-/** Return path colour per reference layer: magenta on the top layer, cyan on the bottom one, inner layers in turn. */
-export const RETURN_COLORS = {
-	top: { r: 255, g: 0, b: 255, alpha: 1 },
-	bottom: { r: 0, g: 255, b: 255, alpha: 1 },
-	inner: [
-		{ r: 0, g: 255, b: 0, alpha: 1 },
-		{ r: 0, g: 0, b: 255, alpha: 1 },
-	],
-} satisfies Record<string, Rgba | Rgba[]>;
-
-export const RETURN_COLOR_NAMES = { top: 'magenta', bottom: 'cyan', inner: ['green', 'blue'] };
-
-/** Index-ordered copper layers: 0 is the top. */
-function returnColor(board: Pick<Board, 'stackup'>, layer: number): { color: Rgba; name: string } {
+/** Copper-layer position of a reference layer: its overlay role, and for inner layers their index. */
+function returnRole(board: Pick<Board, 'stackup'>, layer: number): { role: Role; inner?: number } {
 	const stack = board.stackup.copper;
 	const i = stack.findIndex(l => l.id === layer);
 	if (i <= 0)
-		return { color: RETURN_COLORS.top, name: RETURN_COLOR_NAMES.top };
+		return { role: 'returnTop' };
 	if (i === stack.length - 1)
-		return { color: RETURN_COLORS.bottom, name: RETURN_COLOR_NAMES.bottom };
-	const k = (i - 1) % RETURN_COLORS.inner.length;
-	return { color: RETURN_COLORS.inner[k], name: RETURN_COLOR_NAMES.inner[k] };
+		return { role: 'returnOther' };
+	return { role: 'returnInner', inner: i - 1 };
 }
 
 export type Marker = IDMT_IndicatorMarkerShape;
-export interface MarkerGroup { color: Rgba; markers: Marker[]; width: number }
+/** Markers drawn in the colour and width of a role, looked up at drawing time so style changes apply on redraw. */
+export interface MarkerGroup { role: Role; inner?: number; markers: Marker[] }
 
 /** Cap per marker call; marker performance in the thousands is a D1 test item. */
 const MAX_PER_CALL = 4000;
@@ -53,7 +33,8 @@ async function paint(groups: MarkerGroup[]): Promise<number> {
 	for (const grp of groups) {
 		for (let k = 0; k < grp.markers.length; k += MAX_PER_CALL) {
 			const markers = grp.markers.slice(k, k + MAX_PER_CALL);
-			if (await eda.dmt_EditorControl.generateIndicatorMarkers(markers, grp.color, grp.width, false))
+			const { colour, width } = roleColour(grp.role, grp.inner);
+			if (await eda.dmt_EditorControl.generateIndicatorMarkers(markers, colour, width, false))
 				n += markers.length;
 		}
 	}
@@ -69,6 +50,19 @@ export async function drawGroups(groups: MarkerGroup[]): Promise<number> {
 export async function clearOverlay(): Promise<void> {
 	shown = undefined;
 	await eda.dmt_EditorControl.removeIndicatorMarkers();
+}
+
+/** Draws the current overlay again with the current style; false when there is none or it is hidden. */
+export async function restyleOverlay(): Promise<boolean> {
+	if (!shown?.visible)
+		return false;
+	await paint(shown.groups);
+	return true;
+}
+
+/** Whether an overlay is kept, and whether it is shown. */
+export function overlayState(): 'none' | 'shown' | 'hidden' {
+	return shown ? (shown.visible ? 'shown' : 'hidden') : 'none';
 }
 
 /** Hides the overlay, or shows the hidden one again. Returns whether it is now visible; undefined when there is none. */
@@ -114,24 +108,24 @@ export interface HfDrawn {
 }
 
 /**
- * Replaces the overlay with the given analysis: the return path, thick, in a colour per reference
- * layer; dashed yellow hops (via, decap, bridging cap, IC pin); red where the trace crosses a gap or
- * the ±3h band lacks copper; the band edges thin white.
+ * Replaces the overlay with the given analysis: the return path in a colour per reference layer;
+ * dashed hops (via, decap, bridging cap, IC pin); gaps where the trace crosses one or the ±3h band
+ * lacks copper; the band edges. Colours and widths come from the style (style.ts).
  */
 export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>): Promise<HfDrawn> {
 	const { segs, outline, dot, dashed } = await markerKit();
 	const layerName = (id: number) => board.stackup.copper.find(l => l.id === id)?.name ?? `L${id}`;
 
 	const groups = new Map<string, MarkerGroup>();
-	const group = (key: string, color: Rgba, width: number) => {
+	const group = (key: string, role: Role, inner?: number) => {
 		let g = groups.get(key);
 		if (!g)
-			groups.set(key, g = { color, width, markers: [] });
+			groups.set(key, g = { role, inner, markers: [] });
 		return g.markers;
 	};
-	const band = group('band', COLORS.band, 1);
-	const gap = group('gap', COLORS.gap, 3);
-	const hop = group('hop', COLORS.hop, 2);
+	const band = group('band', 'band');
+	const gap = group('gap', 'gap');
+	const hop = group('hop', 'hop');
 
 	for (const c of an.chains) {
 		band.push(...outline(c.band));
@@ -143,11 +137,11 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 	}
 	const returnLayers: string[] = [];
 	for (const t of an.returnPath.traces) {
-		const { color, name } = returnColor(board, t.layer);
+		const { role, inner } = returnRole(board, t.layer);
 		const key = `return ${t.layer}`;
 		if (!groups.has(key))
-			returnLayers.push(`${layerName(t.layer)}: ${name}`);
-		group(key, color, 5).push(...segs(t.pts, false));
+			returnLayers.push(`${layerName(t.layer)}: ${roleColour(role, inner).name}`);
+		group(key, role, inner).push(...segs(t.pts, false));
 	}
 	for (const j of an.returnPath.jumps)
 		hop.push(...dashed(j.from, j.to), dot(j.to, 0.4));

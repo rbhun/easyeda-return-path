@@ -4,8 +4,244 @@
 		<title>Return Path</title>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<style>
+			:root {
+				color-scheme: dark;
+				--bg: #1e1f22;
+				--panel: #2b2d31;
+				--line: #3c3f45;
+				--text: #e3e5e8;
+				--muted: #9aa0a6;
+				--accent: #4f8cff;
+			}
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				padding: 10px;
+				background: var(--bg);
+				color: var(--text);
+				font: 12px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+			}
+			h2 {
+				margin: 14px 0 6px;
+				font-size: 11px;
+				font-weight: 600;
+				letter-spacing: 0.04em;
+				text-transform: uppercase;
+				color: var(--muted);
+			}
+			.row { display: flex; gap: 6px; flex-wrap: wrap; }
+			button {
+				flex: 1 1 auto;
+				min-width: 0;
+				padding: 6px 8px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+				color: var(--text);
+				font: inherit;
+				cursor: pointer;
+			}
+			button:hover:not(:disabled) { border-color: var(--accent); }
+			button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+			button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+			button:disabled { opacity: 0.45; cursor: default; }
+			.status {
+				display: flex;
+				justify-content: space-between;
+				gap: 8px;
+				padding: 6px 8px;
+				border-radius: 6px;
+				background: var(--panel);
+				color: var(--muted);
+			}
+			.status b { color: var(--text); font-weight: 600; }
+			#result {
+				margin: 0;
+				padding: 8px;
+				max-height: 220px;
+				overflow: auto;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+				white-space: pre-wrap;
+				word-break: break-word;
+				font: 11.5px/1.45 ui-monospace, Consolas, monospace;
+			}
+			#result .warn { color: #ffd166; }
+			#result .err { color: #ff6b6b; }
+			.muted { color: var(--muted); }
+			table { width: 100%; border-collapse: collapse; }
+			td { padding: 3px 0; vertical-align: middle; }
+			td.label { padding-right: 6px; }
+			td.ctl { width: 1%; white-space: nowrap; }
+			select, input[type="number"] {
+				padding: 3px 4px;
+				border: 1px solid var(--line);
+				border-radius: 4px;
+				background: var(--panel);
+				color: var(--text);
+				font: inherit;
+			}
+			input[type="number"] { width: 46px; }
+			select { width: 132px; text-overflow: ellipsis; }
+			.swatch {
+				display: inline-block;
+				width: 18px;
+				height: 0;
+				margin-right: 6px;
+				vertical-align: middle;
+				border-top-style: solid;
+			}
+		</style>
 	</head>
 	<body>
-		<p>Results panel (not used yet).</p>
+		<div class="status" role="status" aria-live="polite">
+			<span id="state">Connecting to the extension…</span>
+			<span id="version" class="muted"></span>
+		</div>
+
+		<h2>Analyse</h2>
+		<div class="row">
+			<button id="hf" class="primary" title="High-frequency return path of the selected signal net">Selected net</button>
+			<button id="dc" class="primary" title="DC return current of a power rail, with the wizard">DC current…</button>
+		</div>
+		<div class="row" style="margin-top: 6px">
+			<button id="rerun" title="Read the board again and repeat the last analysis, without the wizard">Rerun last</button>
+			<button id="cancel" title="Stop the running analysis">Cancel</button>
+		</div>
+		<p id="lastRun" class="muted" style="margin: 6px 0 0"></p>
+
+		<h2>Overlay</h2>
+		<div class="row">
+			<button id="toggle">Hide</button>
+			<button id="clear">Clear</button>
+			<button id="log" title="Show the saved log">Log…</button>
+		</div>
+
+		<h2>Result</h2>
+		<pre id="result" class="muted">No result yet.</pre>
+
+		<h2>Colours and widths</h2>
+		<table id="styles"><tbody></tbody></table>
+		<div class="row" style="margin-top: 6px">
+			<button id="reset">Reset to defaults</button>
+		</div>
+
+		<script>
+			(function () {
+				var api = window.eda || (window.parent && window.parent.eda);
+				var COMMAND = 'returnpath.panel.command';
+				var STATE = 'returnpath.panel.state';
+				var CSS = { red: '#ff0000', yellow: '#ffff00', green: '#00ff00', cyan: '#00ffff', blue: '#0000ff', magenta: '#ff00ff', white: '#ffffff' };
+				var $ = function (id) { return document.getElementById(id); };
+				var last = null;
+
+				function send(message) {
+					if (!api || !api.sys_MessageBus) return;
+					api.sys_MessageBus.publish(COMMAND, message);
+				}
+
+				function render(s) {
+					last = s;
+					$('version').textContent = 'v' + s.version;
+					$('state').innerHTML = s.busy ? 'Running: <b></b>' : 'Overlay: <b></b>';
+					$('state').querySelector('b').textContent = s.busy || { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay];
+					['hf', 'dc', 'rerun', 'toggle', 'clear', 'log'].forEach(function (id) { $(id).disabled = !!s.busy; });
+					$('cancel').disabled = !s.busy;
+					$('rerun').disabled = !!s.busy || !s.lastRun;
+					$('toggle').disabled = !!s.busy || s.overlay === 'none';
+					$('toggle').textContent = s.overlay === 'hidden' ? 'Show' : 'Hide';
+					$('clear').disabled = !!s.busy || s.overlay === 'none';
+					$('lastRun').textContent = s.lastRun ? 'Last: ' + s.lastRun : '';
+
+					var pre = $('result');
+					pre.textContent = '';
+					if (s.result) {
+						pre.classList.remove('muted');
+						var head = document.createElement('div');
+						head.className = 'muted';
+						head.textContent = s.result.title + ' · ' + s.result.at;
+						pre.appendChild(head);
+						s.result.lines.forEach(function (line) {
+							var div = document.createElement('div');
+							if (/^warning:|\[warn/i.test(line)) div.className = 'warn';
+							if (/^\[(error|fail)/i.test(line)) div.className = 'err';
+							div.textContent = line;
+							pre.appendChild(div);
+						});
+					} else {
+						pre.classList.add('muted');
+						pre.textContent = 'No result yet.';
+					}
+
+					var body = $('styles').tBodies[0];
+					body.textContent = '';
+					s.roles.forEach(function (r) {
+						var tr = document.createElement('tr');
+						var label = document.createElement('td');
+						label.className = 'label';
+						var sw = document.createElement('span');
+						sw.className = 'swatch';
+						sw.style.borderTopColor = CSS[r.colour];
+						sw.style.borderTopWidth = Math.max(1, r.width) + 'px';
+						label.appendChild(sw);
+						label.appendChild(document.createTextNode(r.label));
+						var colour = document.createElement('td');
+						colour.className = 'ctl';
+						var sel = document.createElement('select');
+						sel.setAttribute('aria-label', r.label + ' colour');
+						s.palette.forEach(function (name) {
+							var o = document.createElement('option');
+							o.value = name;
+							o.textContent = r.role === 'returnInner' && name === s.innerCycle[0] ? name + ' / ' + s.innerCycle.slice(1).join(' / ') + ' by layer' : name;
+							if (name === r.colour) o.selected = true;
+							sel.appendChild(o);
+						});
+						sel.onchange = function () { change(r.role, { colour: sel.value }); };
+						colour.appendChild(sel);
+						var width = document.createElement('td');
+						width.className = 'ctl';
+						var num = document.createElement('input');
+						num.type = 'number';
+						num.min = '1';
+						num.max = '10';
+						num.step = '1';
+						num.value = String(r.width);
+						num.setAttribute('aria-label', r.label + ' width');
+						num.onchange = function () {
+							var v = Math.round(Number(num.value));
+							if (v >= 1 && v <= 10) change(r.role, { width: v });
+						};
+						width.appendChild(num);
+						tr.appendChild(label);
+						tr.appendChild(colour);
+						tr.appendChild(width);
+						body.appendChild(tr);
+					});
+				}
+
+				function change(role, patch) {
+					var style = {};
+					style[role] = patch;
+					send({ cmd: 'style', style: style });
+				}
+
+				['hf', 'dc', 'rerun', 'toggle', 'clear', 'cancel', 'log'].forEach(function (id) {
+					$(id).onclick = function () { send({ cmd: id }); };
+				});
+				$('reset').onclick = function () { send({ cmd: 'resetStyle' }); };
+
+				if (!api || !api.sys_MessageBus) {
+					$('state').textContent = 'This window cannot reach the EasyEDA API; use the Return Path menu.';
+					return;
+				}
+				api.sys_MessageBus.subscribe(STATE, render);
+				send({ cmd: 'hello' });
+				setTimeout(function () {
+					if (!last) $('state').textContent = 'No answer from the extension yet. Reopen the panel from the Return Path menu.';
+				}, 3000);
+			})();
+		</script>
 	</body>
 </html>
