@@ -1,0 +1,95 @@
+{"type":"DOCHEAD"}||{"docType":"PCB","client":"synthetic"}|
+{"type":"CANVAS","id":"","ticket":1}||{"originX":0,"originY":0,"unit":"mm"}|
+{"type":"LAYER","id":1,"ticket":1}||{"layerType":"TOP","layerName":"Top Layer","status":3}|
+{"type":"LAYER","id":2,"ticket":1}||{"layerType":"BOTTOM","layerName":"Bottom Layer","status":3}|
+{"type":"LAYER","id":3,"ticket":1}||{"layerType":"TOP_SILK","layerName":"Top Silkscreen Layer","status":3}|
+{"type":"LAYER","id":11,"ticket":1}||{"layerType":"OUTLINE","layerName":"Board Outline Layer","status":3}|
+{"type":"LAYER","id":12,"ticket":1}||{"layerType":"MULTI","layerName":"Multi-Layer","status":3}|
+{"type":"LAYER","id":50,"ticket":1}||{"layerType":"SUBSTRATE","layerName":"Dielectric1","status":3}|
+{"type":"LAYER","id":15,"ticket":1}||{"layerType":"SIGNAL","layerName":"Inner1","status":3}|
+{"type":"LAYER","id":51,"ticket":1}||{"layerType":"SUBSTRATE","layerName":"Dielectric2","status":3}|
+{"type":"LAYER","id":16,"ticket":1}||{"layerType":"SIGNAL","layerName":"Inner2","status":3}|
+{"type":"LAYER","id":52,"ticket":1}||{"layerType":"SUBSTRATE","layerName":"Dielectric3","status":3}|
+{"type":"LAYER_PHYS","id":1,"ticket":1}||{"material":"COPPER","thickness":1,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":15,"ticket":1}||{"material":"COPPER","thickness":0.5,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":16,"ticket":1}||{"material":"COPPER","thickness":0.5,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":2,"ticket":1}||{"material":"COPPER","thickness":1,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":50,"ticket":1}||{"material":"PP","thickness":0.2104,"permittivity":4.4,"lossTangent":0.02}|
+{"type":"LAYER_PHYS","id":51,"ticket":1}||{"material":"CORE","thickness":1.065,"permittivity":4.6,"lossTangent":0.02}|
+{"type":"LAYER_PHYS","id":52,"ticket":1}||{"material":"PP","thickness":0.2104,"permittivity":4.4,"lossTangent":0.02}|
+{"type":"NET","id":"VBUS","ticket":1}||{"netType":"Power"}|
+{"type":"NET","id":"3V3","ticket":1}||{"netType":"Power"}|
+{"type":"NET","id":"GND","ticket":1}||{"netType":"Power"}|
+{"type":"POLY","id":"e1","ticket":1}||{"groupId":0,"netName":"","layerId":11,"width":5.906,"path":[0,0,"L",1968.504,0,1968.504,1338.583,0,1338.583]}|
+{"type":"POUR","id":"e2","ticket":1}||{"groupId":0,"netName":"GND","layerId":15,"width":9.843,"name":"In1 GND","order":1,"path":[[11.811,11.811,"L",1956.693,11.811,1956.693,1326.772,11.811,1326.772]],"pourType":["SOLID",0],"keepIsland":0}|
+{"type":"REGION","id":"e3","ticket":1}||{"groupId":0,"layerId":15,"width":0,"prohibitType":[7],"path":[[866.142,236.22,"L",905.512,236.22,905.512,1338.583,866.142,1338.583]],"name":"slot"}|
+{"type":"POUR","id":"e4","ticket":1}||{"groupId":0,"netName":"3V3","layerId":16,"width":9.843,"name":"In2 3V3","order":1,"path":[[590.551,78.74,"L",1889.764,78.74,1889.764,1259.843,590.551,1259.843]],"pourType":["SOLID",0],"keepIsland":0}|
+{"type":"POUR","id":"e5","ticket":1}||{"groupId":0,"netName":"GND","layerId":2,"width":9.843,"name":"Bottom GND","order":1,"path":[[944.882,11.811,"L",1956.693,11.811,1956.693,1326.772,944.882,1326.772]],"pourType":["SOLID",0],"keepIsland":0}|
+{"type":"COMPONENT","id":"e6","ticket":1}||{"groupId":0,"layerId":1,"positionX":118.11,"positionY":669.291,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e7","ticket":1}||{"parentId":"e6","layerId":3,"key":"Designator","value":"J1"}|
+{"type":"ATTR","id":"e8","ticket":1}||{"parentId":"e6","layerId":3,"key":"Footprint","value":"fp-hdr2"}|
+{"type":"ATTR","id":"e9","ticket":1}||{"parentId":"e6","layerId":3,"key":"Name","value":"USB power input"}|
+{"type":"PAD_NET","id":"e6","ticket":1}||{"padNum":"1","padNet":"VBUS","padId":""}|
+{"type":"PAD_NET","id":"e6","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"COMPONENT","id":"e10","ticket":1}||{"groupId":0,"layerId":1,"positionX":472.441,"positionY":669.291,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e11","ticket":1}||{"parentId":"e10","layerId":3,"key":"Designator","value":"U1"}|
+{"type":"ATTR","id":"e12","ticket":1}||{"parentId":"e10","layerId":3,"key":"Footprint","value":"fp-sot223"}|
+{"type":"ATTR","id":"e13","ticket":1}||{"parentId":"e10","layerId":3,"key":"Name","value":"AMS1117-3.3"}|
+{"type":"PAD_NET","id":"e10","ticket":1}||{"padNum":"1","padNet":"GND","padId":""}|
+{"type":"PAD_NET","id":"e10","ticket":1}||{"padNum":"2","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e10","ticket":1}||{"padNum":"3","padNet":"VBUS","padId":""}|
+{"type":"COMPONENT","id":"e14","ticket":1}||{"groupId":0,"layerId":1,"positionX":354.331,"positionY":433.071,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e15","ticket":1}||{"parentId":"e14","layerId":3,"key":"Designator","value":"C1"}|
+{"type":"ATTR","id":"e16","ticket":1}||{"parentId":"e14","layerId":3,"key":"Footprint","value":"fp-c0402"}|
+{"type":"ATTR","id":"e17","ticket":1}||{"parentId":"e14","layerId":3,"key":"Name","value":"10uF"}|
+{"type":"PAD_NET","id":"e14","ticket":1}||{"padNum":"1","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e14","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"COMPONENT","id":"e18","ticket":1}||{"groupId":0,"layerId":1,"positionX":1181.102,"positionY":354.331,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e19","ticket":1}||{"parentId":"e18","layerId":3,"key":"Designator","value":"U2"}|
+{"type":"ATTR","id":"e20","ticket":1}||{"parentId":"e18","layerId":3,"key":"Footprint","value":"fp-load2"}|
+{"type":"ATTR","id":"e21","ticket":1}||{"parentId":"e18","layerId":3,"key":"Name","value":"STM32F103C8T6"}|
+{"type":"PAD_NET","id":"e18","ticket":1}||{"padNum":"1","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e18","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"COMPONENT","id":"e22","ticket":1}||{"groupId":0,"layerId":1,"positionX":1181.102,"positionY":255.906,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e23","ticket":1}||{"parentId":"e22","layerId":3,"key":"Designator","value":"C2"}|
+{"type":"ATTR","id":"e24","ticket":1}||{"parentId":"e22","layerId":3,"key":"Footprint","value":"fp-c0402"}|
+{"type":"ATTR","id":"e25","ticket":1}||{"parentId":"e22","layerId":3,"key":"Name","value":"100nF"}|
+{"type":"PAD_NET","id":"e22","ticket":1}||{"padNum":"1","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e22","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"COMPONENT","id":"e26","ticket":1}||{"groupId":0,"layerId":1,"positionX":1574.803,"positionY":1062.992,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e27","ticket":1}||{"parentId":"e26","layerId":3,"key":"Designator","value":"U3"}|
+{"type":"ATTR","id":"e28","ticket":1}||{"parentId":"e26","layerId":3,"key":"Footprint","value":"fp-load2"}|
+{"type":"ATTR","id":"e29","ticket":1}||{"parentId":"e26","layerId":3,"key":"Name","value":"BME280"}|
+{"type":"PAD_NET","id":"e26","ticket":1}||{"padNum":"1","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e26","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"COMPONENT","id":"e30","ticket":1}||{"groupId":0,"layerId":1,"positionX":1811.024,"positionY":393.701,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e31","ticket":1}||{"parentId":"e30","layerId":3,"key":"Designator","value":"J2"}|
+{"type":"ATTR","id":"e32","ticket":1}||{"parentId":"e30","layerId":3,"key":"Footprint","value":"fp-hdr2"}|
+{"type":"ATTR","id":"e33","ticket":1}||{"parentId":"e30","layerId":3,"key":"Name","value":"Header 2P"}|
+{"type":"PAD_NET","id":"e30","ticket":1}||{"padNum":"1","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e30","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"LINE","id":"e34","ticket":1}||{"groupId":0,"netName":"VBUS","layerId":1,"startX":118.11,"startY":719.291,"endX":196.85,"endY":826.772,"width":23.622}|
+{"type":"LINE","id":"e35","ticket":1}||{"groupId":0,"netName":"VBUS","layerId":1,"startX":196.85,"startY":826.772,"endX":562.992,"endY":826.772,"width":23.622}|
+{"type":"LINE","id":"e36","ticket":1}||{"groupId":0,"netName":"VBUS","layerId":1,"startX":562.992,"startY":826.772,"endX":562.992,"endY":669.291,"width":23.622}|
+{"type":"LINE","id":"e37","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":472.441,"startY":669.291,"endX":472.441,"endY":511.811,"width":23.622}|
+{"type":"LINE","id":"e38","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":472.441,"startY":511.811,"endX":629.921,"endY":511.811,"width":23.622}|
+{"type":"VIA","id":"e39","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":629.921,"centerY":511.811,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"VIA","id":"e40","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":661.417,"centerY":535.433,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e41","ticket":1}||{"groupId":0,"netName":"GND","layerId":1,"startX":381.89,"startY":669.291,"endX":381.89,"endY":570.866,"width":15.748}|
+{"type":"VIA","id":"e42","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":381.89,"centerY":570.866,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e43","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":1141.732,"startY":354.331,"endX":1141.732,"endY":433.071,"width":15.748}|
+{"type":"VIA","id":"e44","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":1141.732,"centerY":433.071,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e45","ticket":1}||{"groupId":0,"netName":"GND","layerId":1,"startX":1220.472,"startY":354.331,"endX":1220.472,"endY":433.071,"width":15.748}|
+{"type":"VIA","id":"e46","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1220.472,"centerY":433.071,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e47","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":1535.433,"startY":1062.992,"endX":1535.433,"endY":984.252,"width":15.748}|
+{"type":"VIA","id":"e48","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":1535.433,"centerY":984.252,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e49","ticket":1}||{"groupId":0,"netName":"GND","layerId":1,"startX":1614.173,"startY":1062.992,"endX":1614.173,"endY":984.252,"width":15.748}|
+{"type":"VIA","id":"e50","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1614.173,"centerY":984.252,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"VIA","id":"e51","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":196.85,"centerY":196.85,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e52","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":196.85,"centerY":1181.102,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e53","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":708.661,"centerY":118.11,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e54","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1023.622,"centerY":118.11,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e55","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1771.654,"centerY":118.11,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e56","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1023.622,"centerY":1220.472,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e57","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1771.654,"centerY":1220.472,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e58","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1377.953,"centerY":708.661,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|

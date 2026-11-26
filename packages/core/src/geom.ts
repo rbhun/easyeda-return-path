@@ -87,7 +87,9 @@ export function arcPoints(a: Pt, b: Pt, sweepDeg: number, maxSegDeg = 10): Path 
 export function union(...sets: Paths[]): Paths {
   const all = sets.flat();
   if (!all.length) return [];
-  return Clipper.unionD(all, FillRule.NonZero);
+  // The two-argument overload rounds to 0.01 mm; some real pour fills (R-Com dongle, POUR2)
+  // rounded that coarsely send Clipper into an endless loop that exhausts memory.
+  return Clipper.unionD(all, [], FillRule.NonZero, PREC);
 }
 
 export function intersect(a: Paths, b: Paths): Paths {
@@ -104,7 +106,7 @@ export function difference(a: Paths, b: Paths): Paths {
 /** Enclosed area of a closed, possibly self-intersecting path (even-odd). */
 export function enclosedArea(path: Path): number {
   if (path.length < 3) return 0;
-  return Math.abs(area(Clipper.unionD([path], FillRule.EvenOdd)));
+  return Math.abs(area(Clipper.unionD([path], [], FillRule.EvenOdd, PREC)));
 }
 
 export function inflate(paths: Paths, delta: number): Paths {
@@ -195,12 +197,30 @@ export class Polyline {
   get length() {
     return this.cum[this.cum.length - 1];
   }
+  private segIndex(s: number): number {
+    let lo = 1;
+    let hi = this.cum.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.cum[mid] < s) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
   at(s: number): Pt {
     s = Math.max(0, Math.min(this.length, s));
-    let i = 1;
-    while (i < this.cum.length - 1 && this.cum[i] < s) i++;
+    if (this.pts.length < 2) return this.pts[0];
+    const i = this.segIndex(s);
     const seg = this.cum[i] - this.cum[i - 1];
     return lerp(this.pts[i - 1], this.pts[i], seg ? (s - this.cum[i - 1]) / seg : 0);
+  }
+  /** Unit tangent at arc length s. */
+  dirAt(s: number): Pt {
+    if (this.pts.length < 2) return { x: 1, y: 0 };
+    const i = this.segIndex(Math.max(0, Math.min(this.length, s)));
+    const d = sub(this.pts[i], this.pts[i - 1]);
+    const l = Math.hypot(d.x, d.y) || 1;
+    return { x: d.x / l, y: d.y / l };
   }
   /** Sub-polyline between arc lengths s0 < s1. */
   slice(s0: number, s1: number): Path {
@@ -213,20 +233,40 @@ export class Polyline {
 
 /** Region of the paths as a list of polygons with their holes (outer first). */
 export function splitIslands(paths: Paths): Paths[] {
-  const outers = paths.filter((p) => signedArea(p) > 0);
-  const holes = paths.filter((p) => signedArea(p) <= 0);
-  const groups: Paths[] = outers.map((o) => [o]);
-  for (const h of holes) {
-    let best = -1;
-    let bestArea = Infinity;
-    outers.forEach((o, i) => {
-      const a = signedArea(o);
-      if (pointInPaths(h[0], [o]) && a < bestArea) {
-        best = i;
-        bestArea = a;
-      }
-    });
-    if (best >= 0) groups[best].push(h);
+  const areas = paths.map(signedArea);
+  // Smallest first, so the first outer that contains a hole is the tightest one.
+  const outers = paths.map((p, i) => ({ p, a: areas[i], b: bbox([p]), group: [p] as Paths })).filter((o) => o.a > 0);
+  const bySize = [...outers].sort((x, y) => x.a - y.a);
+  for (let i = 0; i < paths.length; i++) {
+    if (areas[i] > 0) continue;
+    const q = paths[i][0];
+    if (!q) continue;
+    const o = bySize.find((o) => q.x >= o.b.minX && q.x <= o.b.maxX && q.y >= o.b.minY && q.y <= o.b.maxY && pointInPaths(q, [o.p]));
+    if (o) o.group.push(paths[i]);
   }
-  return groups;
+  return outers.map((o) => o.group);
+}
+
+export function scalePaths(paths: Paths, k: number): Paths {
+  return k === 1 ? paths : paths.map((p) => p.map((q) => ({ x: q.x * k, y: q.y * k })));
+}
+
+/**
+ * Factor that brings a pour's computed fill onto its outline. EasyEDA Pro 3.2 stores pour fills
+ * (POURED, and what the API returns for them) in units of 10 mil while everything else is in mil;
+ * decoded as mil, the fill shrinks towards the origin. Picks 1 or 10, whichever overlaps the outline's
+ * bounding box best.
+ */
+export function pouredScale(outline: Paths, fill: Paths): number {
+  const o = bbox(outline);
+  const f = bbox(fill);
+  if (!Number.isFinite(o.minX) || !Number.isFinite(f.minX)) return 1;
+  const overlap = (k: number) => {
+    const w = Math.min(o.maxX, f.maxX * k) - Math.max(o.minX, f.minX * k);
+    const h = Math.min(o.maxY, f.maxY * k) - Math.max(o.minY, f.minY * k);
+    const inter = w > 0 && h > 0 ? w * h : 0;
+    const area = (b: BBox) => (b.maxX - b.minX) * (b.maxY - b.minY);
+    return inter / (area(o) + area({ minX: f.minX * k, minY: f.minY * k, maxX: f.maxX * k, maxY: f.maxY * k }) - inter || 1);
+  };
+  return overlap(10) > overlap(1) ? 10 : 1;
 }

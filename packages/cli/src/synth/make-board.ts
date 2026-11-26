@@ -18,17 +18,17 @@ import { strToU8, zipSync } from 'fflate';
 import { ARRAY_FIELDS } from '../easyeda/records.js';
 import { MIL } from '../easyeda/parse.js';
 
-type Payload = Record<string, unknown>;
-interface Line {
+export type Payload = Record<string, unknown>;
+export interface Line {
   type: string;
   id: string | number;
   payload: Payload;
 }
 
-const m = (mm: number) => Math.round((mm / MIL) * 1000) / 1000;
-const rectPoly = (x0: number, y0: number, x1: number, y1: number) => [m(x0), m(y0), 'L', m(x1), m(y0), m(x1), m(y1), m(x0), m(y1)];
+export const m = (mm: number) => Math.round((mm / MIL) * 1000) / 1000;
+export const rectPoly = (x0: number, y0: number, x1: number, y1: number) => [m(x0), m(y0), 'L', m(x1), m(y0), m(x1), m(y1), m(x0), m(y1)];
 
-function serialize(lines: Line[], form: 'object' | 'array', docType: string): string {
+export function serialize(lines: Line[], form: 'object' | 'array', docType: string): string {
   if (form === 'object') {
     const head = `{"type":"DOCHEAD"}||${JSON.stringify({ docType, client: 'synthetic' })}|`;
     return [head, ...lines.map((l) => `${JSON.stringify({ type: l.type, id: l.id, ticket: 1 })}||${JSON.stringify(l.payload)}|`)].join('\n') + '\n';
@@ -47,19 +47,23 @@ function serialize(lines: Line[], form: 'object' | 'array', docType: string): st
   return out.join('\n') + '\n';
 }
 
-interface FootprintPad {
+export interface FootprintPad {
   num: string;
   x: number;
   y: number;
   w: number;
   h: number;
+  /** Plated hole diameter, mm: a round through-hole pad on the multi-layer. */
+  hole?: number;
 }
 
-function footprint(uuid: string, pads: FootprintPad[], form: 'object' | 'array'): string {
+export function footprint(uuid: string, pads: FootprintPad[], form: 'object' | 'array'): string {
   const lines: Line[] = pads.map((p, i) => ({
     type: 'PAD',
     id: `e${i + 1}`,
-    payload: { groupId: 0, netName: '', layerId: 1, num: p.num, centerX: m(p.x), centerY: m(p.y), padAngle: 0, hole: null, defaultPad: ['RECT', m(p.w), m(p.h), 0], specialPad: [], padOffsetX: 0, padOffsetY: 0, relativeAngle: 0, plated: 1 },
+    payload: p.hole
+      ? { groupId: 0, netName: '', layerId: 12, num: p.num, centerX: m(p.x), centerY: m(p.y), padAngle: 0, hole: ['ROUND', m(p.hole), m(p.hole)], defaultPad: ['ELLIPSE', m(p.w), m(p.h)], specialPad: [], padOffsetX: 0, padOffsetY: 0, relativeAngle: 0, plated: 1 }
+      : { groupId: 0, netName: '', layerId: 1, num: p.num, centerX: m(p.x), centerY: m(p.y), padAngle: 0, hole: null, defaultPad: ['RECT', m(p.w), m(p.h), 0], specialPad: [], padOffsetX: 0, padOffsetY: 0, relativeAngle: 0, plated: 1 },
   }));
   return serialize(lines, form, 'FOOTPRINT').replace('"docType":"FOOTPRINT"', `"docType":"FOOTPRINT","uuid":"${uuid}"`);
 }
@@ -174,8 +178,12 @@ export function buildBoard(variant: 'demo' | 'fixed'): { pcb: Line[]; fps: Recor
 
 export function buildEpro(variant: 'demo' | 'fixed', form: 'object' | 'array'): Uint8Array {
   const { pcb, fps } = buildBoard(variant);
+  return packEpro(`${variant} 4-layer`, pcb, fps, form);
+}
+
+export function packEpro(title: string, pcb: Line[], fps: Record<string, FootprintPad[]>, form: 'object' | 'array'): Uint8Array {
   const files: Record<string, Uint8Array> = {
-    'project.json': strToU8(JSON.stringify({ pcbs: { 'pcb-1': { title: `${variant} 4-layer` } }, footprints: Object.fromEntries(Object.keys(fps).map((k) => [k, { title: k }])) }, null, 2)),
+    'project.json': strToU8(JSON.stringify({ pcbs: { 'pcb-1': { title } }, footprints: Object.fromEntries(Object.keys(fps).map((k) => [k, { title: k }])) }, null, 2)),
     'PCB/pcb-1.epcb': strToU8(serialize(pcb, form, 'PCB')),
   };
   for (const [uuid, pads] of Object.entries(fps)) files[`FOOTPRINT/${uuid}.efoo`] = strToU8(footprint(uuid, pads, form));

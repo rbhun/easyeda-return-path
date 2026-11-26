@@ -2,5 +2,10 @@
 	"Return Path": "回流路径",
 	"Show for Selected Net": "显示所选网络",
 	"Clear Overlay": "清除叠加层",
-	"About...": "关于..."
+	"About...": "关于...",
+	"DC Return Current...": "直流回流电流...",
+	"Cancel Running Analysis": "取消正在运行的分析",
+	"Show Saved Log...": "显示保存的日志...",
+	"Rerun Last Analysis": "重新运行上次分析",
+	"Hide/Show Overlay": "隐藏/显示叠加层"
 }

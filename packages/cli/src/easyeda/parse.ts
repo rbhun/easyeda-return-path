@@ -1,4 +1,4 @@
-import { add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
+import { pouredScale, scalePaths, add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
 import { parseRecords, type Rec } from './records.js';
 
 /** EasyEDA Pro PCB data is in mil. */
@@ -12,7 +12,7 @@ const LAYER_MULTI = 12;
 const NO_POUR = new Set([4, 7, 8]);
 
 export interface ParseOptions {
-  /** Unit of LAYER_PHYS dielectric thickness. 'auto': mm if any value < 1, else mil. */
+  /** Unit of LAYER_PHYS dielectric thickness. 'auto': whichever makes the board 0.2–10 mm thick; if both do, mm when any value < 1. */
   physUnit?: 'auto' | 'mil' | 'mm';
   /** Dielectric thickness used when the stackup gives none, mm. */
   defaultDielectricMm?: number;
@@ -102,7 +102,7 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
         const target = str(r.targetId);
         const sw = num(r.strokeWidth) * MIL;
         let paths: Paths;
-        if (num(r.fill, 1)) paths = decodeComplex(r.path, conv, MIL);
+        if (typeof r.fill === 'boolean' ? r.fill : num(r.fill, 1)) paths = decodeComplex(r.path, conv, MIL);
         else if (sw > 0) paths = union(...decodeRings(r.path, conv, MIL).map((ring) => strokePath([...ring, ring[0]], sw)));
         else break;
         pouredByPour.set(target, [...(pouredByPour.get(target) ?? []), paths]);
@@ -123,7 +123,10 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
 
   for (const p of pours) {
     const fills = pouredByPour.get(p.id);
-    if (fills) p.poured = union(...fills);
+    if (fills) {
+      const merged = union(...fills);
+      p.poured = scalePaths(merged, pouredScale(p.outline, merged));
+    }
   }
   if (pours.some((p) => !p.poured))
     warnings.push('Some pours have no stored fill (POURED); their copper was recomputed from outlines with a uniform clearance.');
@@ -159,7 +162,13 @@ function buildStackup(recs: Rec[], opts: ParseOptions, warnings: string[]): Boar
 
   const subThk = middle.filter((l) => l.layerType === 'SUBSTRATE').map((l) => num(phys.get(num(l.id))?.thickness, NaN)).filter(isFinite);
   let unit = opts.physUnit ?? 'auto';
-  if (unit === 'auto') unit = subThk.some((t) => t < 1) ? 'mm' : 'mil';
+  if (unit === 'auto') {
+    // A board is roughly 0.2–10 mm thick: pick the unit that makes the stack plausible.
+    const total = subThk.reduce((a, t) => a + t, 0);
+    if (total * MIL < 0.2) unit = 'mm';
+    else if (total > 10) unit = 'mil';
+    else unit = subThk.some((t) => t < 1) ? 'mm' : 'mil';
+  }
   const toMm = (v: number) => (unit === 'mm' ? v : v * MIL);
   const dflt = opts.defaultDielectricMm ?? 0.2;
 
@@ -185,10 +194,19 @@ function buildStackup(recs: Rec[], opts: ParseOptions, warnings: string[]): Boar
       z += thk;
     }
     pending = [];
-    copper.push({ id, name: str(l.layerName) || `L${id}`, index: copper.length, z });
+    copper.push({ id, name: str(l.layerName) || `L${id}`, index: copper.length, z, thicknessMm: copperThicknessMm(num(phys.get(id)?.thickness, NaN)) });
   }
   if (subThk.length) warnings.push(`LAYER_PHYS dielectric thickness read as ${unit}.`);
+  if (copper.some((c) => c.thicknessMm)) warnings.push('LAYER_PHYS copper thickness read as oz (0.25–6), mm (< 0.25) or µm (> 6); unverified against a real export.');
   return { copper, dielectrics };
+}
+
+/** Copper LAYER_PHYS thickness: the unit is undocumented, so guess it from the magnitude. */
+function copperThicknessMm(t: number): number | undefined {
+  if (!isFinite(t) || t <= 0) return undefined;
+  if (t < 0.25) return t;
+  if (t <= 6) return t * 0.035;
+  return t / 1000;
 }
 
 interface Xform {
@@ -261,7 +279,8 @@ function buildComponents(recs: Rec[], footprints: Map<string, string>, copperIds
     const fpId = a.get('footprint') ?? str(attrMap['Footprint']);
     const layer = num(r.layerId, LAYER_TOP);
     const xf: Xform = { at: conv(num(r.positionX), num(r.positionY)), angle: num(r.angle), mirror: layer === LAYER_BOTTOM };
-    const comp: Component = { id: r.id, designator: a.get('designator') || str(attrMap['Designator']) || r.id, at: xf.at, rotation: xf.angle, layer, padIds: [] };
+    const name = a.get('name') || str(attrMap['Name']) || a.get('manufacturer part') || undefined;
+    const comp: Component = { id: r.id, designator: a.get('designator') || str(attrMap['Designator']) || r.id, name, at: xf.at, rotation: xf.angle, layer, padIds: [] };
     const fpText = footprints.get(fpId);
     if (!fpText) {
       missing++;

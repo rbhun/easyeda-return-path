@@ -1,27 +1,32 @@
 {
   "name": "@returnpath/cli",
-  "version": "0.1.0",
+  "version": "0.1.13",
   "description": "Offline return-path analysis of EasyEDA Pro files: file parser, SVG/PNG overlay and JSON report",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
   "exports": {
     "./parse": "./src/easyeda/parse.ts",
-    "./synth": "./src/synth/make-board.ts"
+    "./synth": "./src/synth/make-board.ts",
+    "./synth-dc": "./src/synth/make-dc-board.ts",
+    "./synth-2layer": "./src/synth/make-2layer-board.ts",
+    "./dc": "./src/dc.ts"
   },
   "bin": {
     "returnpath": "src/cli.ts"
   },
   "scripts": {
-    "synth": "tsx src/synth/make-board.ts examples",
+    "synth": "tsx src/synth/make-board.ts examples && tsx src/synth/make-dc-board.ts examples && tsx src/synth/make-2layer-board.ts examples",
     "analyze": "tsx src/cli.ts",
     "demo": "npm run synth && tsx src/cli.ts examples/demo-4layer.epro --net CLK --name demo-clk --png && tsx src/cli.ts examples/fixed-4layer.epro --net CLK --name fixed-clk --png",
     "typecheck": "tsc -p .",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "demo:2layer": "tsx src/synth/make-2layer-board.ts examples && tsx src/cli.ts examples/2layer-coplanar.epro --net CLK --png && tsx src/cli.ts examples/2layer-coplanar.epro --net DATA --png && tsx src/cli.ts examples/2layer-bottom-only.epro --net CLK --png && tsx src/cli.ts examples/2layer-coplanar.epro --dc 3V3 --png && tsx src/cli.ts examples/2layer-bottom-only.epro --dc 3V3 --png",
+    "demo:dc": "tsx src/synth/make-dc-board.ts examples && tsx src/cli.ts examples/dc-4layer.epro --dc 3V3 --name dc-3v3 --png && tsx src/cli.ts examples/dc-4layer.epro --dc VBUS --name dc-vbus --png"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
-    "@returnpath/core": "0.1.0",
+    "@returnpath/core": "0.1.13",
     "fflate": "^0.8.3"
   }
 }
