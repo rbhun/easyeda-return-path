@@ -60,5 +60,8 @@
 	"None: skip the driver loop": "None: skip the driver loop",
 	"Which part drives ${1}? Its supply pins and decap close the loop for the edge that does not return straight into its ground pin.": "Which part drives ${1}? Its supply pins and decap close the loop for the edge that does not return straight into its ground pin.",
 	"Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.": "Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.",
-	"Show for Selected Net: ${1}, driver ${2}": "Show for Selected Net: ${1}, driver ${2}"
+	"Show for Selected Net: ${1}, driver ${2}": "Show for Selected Net: ${1}, driver ${2}",
+	"Select all": "Select all",
+	"OK": "OK",
+	"${1} of ${2} selected": "${1} of ${2} selected"
 }

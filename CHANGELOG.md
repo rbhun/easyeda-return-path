@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.26] - 2026-11-26
+
+Numbered above 0.1.25, which the HF fix takes (#8 takes 0.1.24).
+
+From the owner's look at the DC wizard's load step: the list needs a select-all box, the parts show `={Value}` and `={Manufacturer Part}` instead of their values, and the open dropdown covers the OK button.
+
+- **Picker window for multi-choice questions** (the loads, and the power rails when they are asked). It has a select-all box (ticked, cleared, or partly ticked to match the list) with an "n of m selected" count, a list that scrolls on its own, and OK and Cancel below it that the list cannot cover. Enter accepts and Esc cancels. Closing the window cancels the wizard, as the system dialog did. It talks to the extension over the message bus like the panel; if its page has not connected after 4 s, the question goes to the system dialog, and later questions in that editor session go there directly. The system dialog then gets a "Select all" entry at the top of its list.
+- **Part names show their attribute values.** EasyEDA gives part names such as `={Value}` or `={Manufacturer Part}` that point at the part's attributes; they are now filled in from the part's attributes (and its manufacturer and supplier part numbers), so the load list reads "C1 (100nF)" and "U3 (AMS1117-3.3)". A name whose attributes are all empty is left out, so the line shows just the designator. The filled-in names also reach the rail and source guesses, which look at part names.
+
 ## [0.1.23] - 2026-11-26
 
 High-frequency view, milestone 3 of `docs/hf-plan.md`: the loop at the driver. Until now each end of the net closed the return into the nearest pin of the same part on the reference net (usually GND). That is only half of it: when a CMOS output drives high, the current comes from its supply pin, so on a ground reference the rising edge returns through a decap into the driver's supply pin.

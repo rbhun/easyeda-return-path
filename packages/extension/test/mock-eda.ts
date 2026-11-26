@@ -28,6 +28,8 @@ export interface MockHost {
 	pouredUnitMil?: number;
 	/** Thermal spokes served as unfilled pour-fill strokes (mm, with their pour id). */
 	spokes?: { pourId: string; a: Pt; b: Pt; width: number }[];
+	/** The picker window's page: 'page' (default) answers like a user, 'silent' never connects, 'refused' is not opened. */
+	picker?: 'page' | 'silent' | 'refused';
 }
 
 /** Answers every dialog with its default unless `answer` says otherwise. */
@@ -57,6 +59,15 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	/** Sends a message as the panel would. */
 	const panelSend = (message: unknown) => {
 		for (const fn of subscribers.get('returnpath.panel.command') ?? []) fn(message);
+	};
+	const pickers: { title: string; prompt: string; options: { value: string; label: string }[]; selected: string[]; labels: Record<string, string> }[] = [];
+	/** The picker page: records the question as a multi dialog and answers with `answer`. */
+	const pickerPage = (q: any) => {
+		pickers.push(q);
+		const options = q.options.map((o: { value: string; label: string }) => ({ value: o.value, displayContent: o.label }));
+		dialogs.push({ kind: 'multi', prompt: q.prompt, options: options.map((o: { value: string }) => o.value), dflt: q.selected });
+		const v = answer({ kind: 'multi', prompt: q.prompt, title: q.title, options, dflt: q.selected }) as string[] | undefined;
+		queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.picker.reply', v === undefined ? { cmd: 'cancel', id: q.id } : { cmd: 'answer', id: q.id, values: v }));
 	};
 	const fsCall = <T>(fn: () => T) => async () => {
 		if (host.fileSystem === 'denied')
@@ -158,6 +169,14 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		},
 		sys_IFrame: {
 			openIFrame: async (html: string, width: number, height: number, id: string, props: Record<string, unknown>) => {
+				if (html === '/iframe/pick.html') {
+					if (host.picker === 'refused')
+						return false;
+					if (!subscribers.get('returnpath.picker.ask')?.includes(pickerPage))
+						eda.sys_MessageBus.subscribe('returnpath.picker.ask', pickerPage);
+					if (host.picker !== 'silent')
+						queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.picker.reply', { cmd: 'hello' }));
+				}
 				iframes.set(id, { html, width, height, props, shown: true });
 				return true;
 			},
@@ -263,5 +282,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues };
+	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, pickers };
 }
