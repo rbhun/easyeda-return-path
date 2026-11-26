@@ -78,7 +78,7 @@
 	"Speed": "速率",
 	"Speed of ${1}, for example 400k, 12 MHz or 115200.": "${1} 的速率，例如 400k、12 MHz 或 115200。",
 	"Speed of ${1}: the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.": "${1} 的速率：比特率或时钟频率。它决定边沿时间，从而决定走线是否表现为传输线。",
-	"Step 2/5: rail to solve.": "第 2/5 步：要求解的电源轨。",
+	"Step 2/5: rail to solve. Tick several nets of one rail (for example both sides of a fuse, shunt or jumper) to solve them together; the parts between them are taken as shorts.": "第 2/5 步：要求解的电源轨。可勾选同一电源轨的多个网络（例如保险丝、分流电阻或跳线两侧）一起求解；它们之间的元件按短路处理。",
 	"Step 3/5: ground that carries the return current of ${1}.": "第 3/5 步：承载 ${1} 回流电流的地。",
 	"Step 4/5: active source of ${1}. ${2}": "第 4/5 步：${1} 的有效源。${2}",
 	"Step 4/5: active source of ${1}. Guessed ${2} (${3}).": "第 4/5 步：${1} 的有效源。推测为 ${2}（${3}）。",

@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.59] - 2026-11-26
+
+From Balazs: make DC wizard step 2 a tick list, so several parts of the same rail can be picked.
+
+- **Step 2 ("rail to solve") is a tick list.** Tick several nets of one rail, for example both sides of a fuse, shunt or jumper, to solve them as one rail. The parts between them are taken as shorts, as on the neighbours page. One net is ticked to start with: the selected rail, else the last run's rail together with the nets it was solved with. Nets already ticked here are not offered again on the neighbours page. Step 2 is still skipped when only one rail is confirmed or a rail is selected on the canvas.
+
 ## [0.1.58] - 2026-11-26
 
 From Balazs (0.1.54, EasyEDA Pro 2.2.32.4 on a Mac): the panel's check buttons stayed greyed out. His log showed `log file disabled: writing <Run folder>/returnpath-log.txt failed: sys_FileSystem.saveFileToFileSystem did not answer within 2 s`.
