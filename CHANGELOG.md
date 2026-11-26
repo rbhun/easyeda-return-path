@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.50] - 2026-11-26
+
+From Balazs, on 0.1.48: DC lines still had corners, one of them nearly 90°, where a line left a via and joined another line. "It's unlikely current has a 90 degrees joint by itself." The join beside C11, a long shallow merge, is how it should look.
+
+- **Smoothing that shows**: the drawn lines are smoothed with a Gaussian over 0.35 mm (at least one cell) along their length. The 0.1.48 smoothing worked on steps a fraction of a cell long, and thinning the points afterwards put the corners back. The ends (pads, vias, joins) stay where they are, and the smoothing never moves a point off its layer's copper, so a line still turns tightly around a copper corner.
+- **Shallow joins**: a line joining another meets it at least 2.5 times as far ahead as the other line lies to the side (and at least 1 mm or three cells). In 0.1.48 the target could lie only 0.6 mm ahead of a line 0.8 mm to the side, so the curve onto it was almost vertical, as beside R21.
+- Every line still reaches its load, and the layer changes are the same on the rack display (3V3, 9V, 12V) and the R-Com dongle (+12V). The drawn lines have about twice as many short pieces as before.
+
 ## [0.1.49] - 2026-11-26
 
 HF check: return lines that follow the real copper (SD0 on the rack display board).
