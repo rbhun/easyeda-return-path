@@ -117,5 +117,21 @@
 	"${1} has no pad on a power rail, so it draws no DC current to show.": "${1} 没有焊盘连接到电源轨，因此没有可显示的直流电流。",
 	"${1} is the source of ${2}. Select a pad of a part it supplies.": "${1} 是 ${2} 的电源。请选择由它供电的元件的焊盘。",
 	"Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.": "聚焦 ${1}：仅求解并绘制它从 ${4} 经 ${2} / ${3} 的自身电流。重新运行上次分析会再次绘制所有负载。",
-	"No current given for ${1}: values are per amp of its current.": "未给出 ${1} 的电流：数值为其每安培电流。"
+	"No current given for ${1}: values are per amp of its current.": "未给出 ${1} 的电流：数值为其每安培电流。",
+	"Choose a CSV file with the board info of ${1}. Its first line names the columns, in any order, separated by commas or semicolons. The first column, row, says what each line describes:": "选择包含 ${1} 电路板信息的 CSV 文件。第一行为列名，顺序不限，用逗号或分号分隔。第一列 row 说明每行描述的对象：",
+	"row = net: one signal, power or ground net.": "row = net：一个信号、电源或地网络。",
+	"    kind: ${1}.": "    kind（类型）：${1}。",
+	"    speed in Hz: 400k, 8 MHz, 115200. Several driver parts separated by ;, or none for a net without a driver.": "    speed 单位为 Hz：400k、8 MHz、115200。多个驱动器件用 ; 分隔，无驱动的网络填 none。",
+	"    reference: the intended return reference, such as GND on In1. target: an impedance or length target.": "    reference：预期的回流参考，例如 GND on In1。target：阻抗或长度目标。",
+	"row = load: one load on a power rail.": "row = load：电源轨上的一个负载。",
+	"    net: the rail. voltage in V: 3.3 or 3V3. Currents: 150mA, or amps such as 0.15.": "    net：电源轨。voltage 单位为 V：3.3 或 3V3。电流：150mA，或以安培为单位，如 0.15。",
+	"row = layer: one copper layer.": "row = layer：一个铜层。",
+	"    pours: the nets poured on it. splits: intentional splits and star grounds.": "    pours：该层铺铜的网络。splits：有意的分割和星形接地。",
+	"Leave a cell blank when it does not apply or is not known; a column the file leaves out is blank in every row.": "不适用或未知的单元格留空；文件中缺少的列在每一行都视为空。",
+	"${1} has no board info yet, so the file becomes its board info.": "${1} 还没有电路板信息，该文件将成为它的电路板信息。",
+	"${1} already has board info (${2} nets, ${3} loads, ${4} layers). After the file is read you choose: Replace drops it and keeps only the file; Add keeps it and adds the rows of the file: a row for a net, a load (same rail and load part) or a layer that is already stored updates it, and its blank cells keep the stored values.": "${1} 已有电路板信息（${2} 个网络、${3} 个负载、${4} 个层）。读取文件后由您选择：替换会丢弃现有信息，只保留文件内容；添加会保留现有信息并加入文件中的行：已存储的网络、负载（相同电源轨和负载器件）或层会被该行更新，其空单元格保留已存储的值。",
+	"The sample is a complete example to start from.": "示例文件是一个完整的范例，可以从它开始。",
+	"Choose the CSV file…": "选择 CSV 文件…",
+	"Save the sample CSV as a template (${1})": "将示例 CSV 保存为模板（${1}）",
+	"Sample saved as ${1}: edit it and load it here.": "示例已保存为 ${1}：编辑后在此加载。"
 }

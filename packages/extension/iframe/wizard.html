@@ -38,8 +38,8 @@
 			}
 			#step:empty { display: none; }
 			#title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-			#prompt { margin: 0; white-space: pre-wrap; word-break: break-word; }
-			#body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+			#prompt { flex: 0 1 auto; min-height: 3em; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+			#body { flex: 1 1 auto; min-height: 80px; display: flex; flex-direction: column; gap: 6px; }
 			.all {
 				display: flex;
 				justify-content: space-between;
@@ -166,6 +166,7 @@
 					$('title').textContent = q.title;
 					var text = m ? q.prompt.slice(m[0].length) : q.prompt;
 					$('prompt').textContent = text.charAt(0).toUpperCase() + text.slice(1);
+					$('prompt').scrollTop = 0;
 					$('prompt').classList.remove('muted');
 					$('ok').textContent = q.ok;
 					$('cancel').textContent = q.labels.cancel;

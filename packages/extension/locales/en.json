@@ -116,5 +116,21 @@
 	"${1} has no pad on a power rail, so it draws no DC current to show.": "${1} has no pad on a power rail, so it draws no DC current to show.",
 	"${1} is the source of ${2}. Select a pad of a part it supplies.": "${1} is the source of ${2}. Select a pad of a part it supplies.",
 	"Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.": "Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.",
-	"No current given for ${1}: values are per amp of its current.": "No current given for ${1}: values are per amp of its current."
+	"No current given for ${1}: values are per amp of its current.": "No current given for ${1}: values are per amp of its current.",
+	"Choose a CSV file with the board info of ${1}. Its first line names the columns, in any order, separated by commas or semicolons. The first column, row, says what each line describes:": "Choose a CSV file with the board info of ${1}. Its first line names the columns, in any order, separated by commas or semicolons. The first column, row, says what each line describes:",
+	"row = net: one signal, power or ground net.": "row = net: one signal, power or ground net.",
+	"    kind: ${1}.": "    kind: ${1}.",
+	"    speed in Hz: 400k, 8 MHz, 115200. Several driver parts separated by ;, or none for a net without a driver.": "    speed in Hz: 400k, 8 MHz, 115200. Several driver parts separated by ;, or none for a net without a driver.",
+	"    reference: the intended return reference, such as GND on In1. target: an impedance or length target.": "    reference: the intended return reference, such as GND on In1. target: an impedance or length target.",
+	"row = load: one load on a power rail.": "row = load: one load on a power rail.",
+	"    net: the rail. voltage in V: 3.3 or 3V3. Currents: 150mA, or amps such as 0.15.": "    net: the rail. voltage in V: 3.3 or 3V3. Currents: 150mA, or amps such as 0.15.",
+	"row = layer: one copper layer.": "row = layer: one copper layer.",
+	"    pours: the nets poured on it. splits: intentional splits and star grounds.": "    pours: the nets poured on it. splits: intentional splits and star grounds.",
+	"Leave a cell blank when it does not apply or is not known; a column the file leaves out is blank in every row.": "Leave a cell blank when it does not apply or is not known; a column the file leaves out is blank in every row.",
+	"${1} has no board info yet, so the file becomes its board info.": "${1} has no board info yet, so the file becomes its board info.",
+	"${1} already has board info (${2} nets, ${3} loads, ${4} layers). After the file is read you choose: Replace drops it and keeps only the file; Add keeps it and adds the rows of the file: a row for a net, a load (same rail and load part) or a layer that is already stored updates it, and its blank cells keep the stored values.": "${1} already has board info (${2} nets, ${3} loads, ${4} layers). After the file is read you choose: Replace drops it and keeps only the file; Add keeps it and adds the rows of the file: a row for a net, a load (same rail and load part) or a layer that is already stored updates it, and its blank cells keep the stored values.",
+	"The sample is a complete example to start from.": "The sample is a complete example to start from.",
+	"Choose the CSV file…": "Choose the CSV file…",
+	"Save the sample CSV as a template (${1})": "Save the sample CSV as a template (${1})",
+	"Sample saved as ${1}: edit it and load it here.": "Sample saved as ${1}: edit it and load it here."
 }

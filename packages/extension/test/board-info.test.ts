@@ -24,6 +24,7 @@ function load(epro: Uint8Array) {
 const hfBoard = load(buildEpro('demo', 'object'));
 const dcBoard = load(buildDcEpro());
 const ext = await import('../src/index.ts');
+const { BOARD_INFO_SAMPLE_CSV } = await import('../src/board-info-sample.ts');
 const sample = readFileSync(new URL('../examples/board-info-sample.csv', import.meta.url), 'utf8');
 const KEY = 'boardInfo:demo-project';
 const stored = (storage: Map<string, unknown>, key = KEY) => JSON.parse(storage.get(key) as string) as BoardInfo;
@@ -53,12 +54,52 @@ test('Load Board Info reads the CSV into the open project; Save Board Info write
 	assert.match(other.toasts.at(-1)!, /No board info for Other yet/);
 });
 
+test('Load Board Info shows the CSV format before the file is picked, and can save the sample as a template', async () => {
+	let helps = 0;
+	const mock = install(hfBoard, '', (d) => {
+		if (d.kind === 'select' && /The first column, row, says/.test(d.prompt))
+			return ++helps === 1 ? 'template' : 'pick';
+		return d.dflt;
+	}, { openFile: { name: 'mine.csv', text: 'row,net,speed\nnet,CLK,1M\n' } });
+	await ext.loadBoardInfo();
+	const help = mock.dialogs.filter(d => /The first column, row, says/.test(d.prompt));
+	assert.equal(help.length, 2, 'after saving the template the format is shown again');
+	const text = help[0].prompt;
+	for (const part of [
+		/board info of Demo board/,
+		/row = net: .*\n {4}net, kind, protocol, speed, driver_part, driver_pin, driver_pin_name, receivers, diff_partner, reference, target, notes\n {4}kind: clock, data, bus, diff pair, power, ground, analog, control\./,
+		/speed in Hz: 400k, 8 MHz, 115200/,
+		/row = load: .*\n {4}net, voltage, source_part, source_pin, load_part, load_pin, typical_current, peak_current, notes\n.*voltage in V.*150mA, or amps/,
+		/row = layer: .*\n {4}layer, pours, splits, notes/,
+		/Leave a cell blank/,
+		/Demo board has no board info yet/,
+	])
+		assert.match(text, part);
+	assert.deepEqual(help[0].options, ['pick', 'template']);
+	assert.equal(help[0].dflt, 'pick');
+	assert.deepEqual(mock.downloads, [{ name: 'board-info-template.csv', text: sample }]);
+	assert.match(mock.toasts.at(-1)!, /Sample saved as board-info-template\.csv/);
+	assert.deepEqual(stored(mock.storage).nets, [{ net: 'CLK', speedHz: 1e6 }], 'then the picked file is loaded');
+});
+
+test('the sample shipped in the extension is examples/board-info-sample.csv', () => {
+	assert.equal(BOARD_INFO_SAMPLE_CSV, sample);
+});
+
+test('Cancel on the CSV format closes Load Board Info without a file dialog', async () => {
+	const mock = install(hfBoard, '', () => undefined, { openFile: { name: 'mine.csv', text: 'row,net\nnet,CLK\n' } });
+	await ext.loadBoardInfo();
+	assert.equal(mock.storage.has(KEY), false);
+});
+
 test('loading into a project that has board info asks whether to replace it or add the file; unreadable cells are listed', async () => {
 	const storage = new Map<string, unknown>([[KEY, JSON.stringify(csvInfo(sample))]]);
 	const extra = 'row,net,speed,notes,colour\nnet,I2C_SCL,,changed note,\nnet,NEW_NET,fast,,\n';
 	const added = install(hfBoard, '', d => (d.kind === 'select' && /Replace it with/.test(d.prompt) ? 'add' : d.dflt), { storage, openFile: { name: 'extra.csv', text: extra } });
 	await ext.loadBoardInfo();
-	const q = added.dialogs.find(d => /already has board info \(11 nets, 5 loads, 4 layers\)/.test(d.prompt))!;
+	const help = added.dialogs[0];
+	assert.match(help.prompt, /already has board info \(11 nets, 5 loads, 4 layers\)\. After the file is read you choose: Replace drops it .*; Add keeps it/);
+	const q = added.dialogs.find(d => /already has board info \(11 nets, 5 loads, 4 layers\)\. Replace it with/.test(d.prompt))!;
 	assert.equal(q.dflt, 'replace');
 	const info = stored(storage);
 	assert.equal(info.nets.length, 12);

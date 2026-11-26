@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.51] - 2026-11-26
+
+From Balazs: show the board info CSV format at the import.
+
+- **Return Path → Load Board Info... shows the CSV format before the file is picked**, in the wizard window: the `row` column (net, load or layer), the columns of each row type, the allowed kinds, units (speed in Hz such as `400k` or `8 MHz`, voltage such as `3.3` or `3V3`, currents such as `150mA` or `0.15`), that blank cells mean not applicable, and what Replace and Add do when the project already has board info. In English and Chinese.
+- **Save the sample CSV as a template** there saves the sample (`examples/board-info-sample.csv`, now shipped inside the extension) as `board-info-template.csv`, then shows the format again; **Choose the CSV file…** opens the file dialog.
+- The wizard window's question text scrolls when it is longer than the window, and starts at the top for each question.
+
 ## [0.1.50] - 2026-11-26
 
 From Balazs, on 0.1.48: DC lines still had corners, one of them nearly 90°, where a line left a via and joined another line. "It's unlikely current has a 90 degrees joint by itself." The join beside C11, a long shallow merge, is how it should look.
