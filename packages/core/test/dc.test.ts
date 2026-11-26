@@ -274,12 +274,20 @@ test('drawn streamlines: one per load, later ones end where they meet an earlier
   const angle = (Math.acos((along.x * away.x + along.y * away.y) / Math.hypot(along.x, along.y) / Math.hypot(away.x, away.y)) * 180) / Math.PI;
   assert.ok(angle < 30, `joins at ${angle.toFixed(0)}° to the first`);
   // The joining line bends; it has no copper corner to turn around (the first turns at the neck's).
-  const turns = second.slice(2).map((c, i) => {
-    const [a, m] = [second[i], second[i + 1]];
+  // Direction change over 0.25 mm before and after each point, so it does not depend on how the points are thinned
+  // (a bend of 0.5 mm radius turns about 30° over that length, a corner its whole angle).
+  const even: { x: number; y: number }[] = [second[0]];
+  for (let i = 1; i < second.length; i++) {
+    const [a, b] = [second[i - 1], second[i]];
+    const n = Math.max(1, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / 0.05));
+    for (let m = 1; m <= n; m++) even.push({ x: a.x + ((b.x - a.x) * m) / n, y: a.y + ((b.y - a.y) * m) / n });
+  }
+  const turns = even.slice(10, -5).map((m, i) => {
+    const [a, c] = [even[i + 5], even[i + 15]];
     const t = Math.atan2(c.y - m.y, c.x - m.x) - Math.atan2(m.y - a.y, m.x - a.x);
     return Math.abs(Math.atan2(Math.sin(t), Math.cos(t))) * (180 / Math.PI);
   });
-  assert.ok(Math.max(...turns) < 25, `sharpest turn ${Math.max(...turns).toFixed(0)}°`);
+  assert.ok(Math.max(...turns) < 40, `sharpest turn ${Math.max(...turns).toFixed(0)}° over 0.25 mm`);
 });
 
 test('focusInput: one part of the rail, with its own current when one was given', () => {
