@@ -300,18 +300,21 @@ test('SD tied to ground draws no return; the sink is GND, EP, -Vo or VSS, and a 
     ['U1', 'isolated', [['6', '12V', '+Vo'], ['7', 'GND', '-Vo'], ['8', 'GND', 'SD']]],
     ['U2', 'LDO', [['2', '3V3', 'VOUT'], ['3', 'GND', 'VSS'], ['4', 'GND', 'EN']]],
     ['U3', 'QFN', [['1', '3V3', 'VDD'], ['17', 'GND', 'EP'], ['18', 'GND', 'SD']]],
+    ['U4', 'MCU', [['1', '3V3', 'VDD'], ['2', 'GND', 'IOVSS'], ['3', 'GND', 'DVSS'], ['4', 'GND', 'AVSS'], ['5', 'GND', 'NRST']]],
   ]);
-  const setup = buildDcSetup(b, { rail: '5V', ground: 'GND', source: 'J1', loads: ['U8', 'U1', 'U2', 'U3'] });
+  const setup = buildDcSetup(b, { rail: '5V', ground: 'GND', source: 'J1', loads: ['U8', 'U1', 'U2', 'U3', 'U4'] });
   const by = (des: string) => setup.loads.find((l) => l.designator === des)!;
   assert.deepEqual(by('U8').groundPads.map((p) => p.pinName), ['GND']);
   assert.deepEqual(by('U1').groundPads.map((p) => p.pinName), ['-Vo']);
   assert.deepEqual(by('U2').groundPads.map((p) => p.pinName), ['VSS']);
   assert.deepEqual(by('U3').groundPads.map((p) => p.pinName), ['EP']);
+  assert.deepEqual(by('U4').groundPads.map((p) => p.pinName), ['IOVSS', 'DVSS', 'AVSS']);
   assert.deepEqual(setup.source.groundPads.map((p) => p.pinName), ['2', '3'], 'a header whose pins are only numbers still returns through each ground pin');
   const warnings = setup.warnings.join('\n');
   assert.match(warnings, /U8: SD is tied to GND but carries no supply current; the return starts at GND/);
   assert.match(warnings, /U1: SD is tied to GND but carries no supply current; the return starts at -Vo/);
   assert.match(warnings, /U2: EN is tied to GND but carries no supply current; the return starts at VSS/);
+  assert.match(warnings, /U4: NRST is tied to GND but carries no supply current; the return starts at IOVSS, DVSS, AVSS/);
   assert.doesNotMatch(warnings, /^J1:/m);
 });
 

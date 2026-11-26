@@ -280,16 +280,17 @@ export interface DcSetupInput {
 }
 
 /**
- * Pin names that sink a part's supply current: GND (and AGND, PGND, …), VSS, VEE, the exposed
- * pad, and a converter's −Vo. An enable or address pin tied to the same net (SD, EN, A0) does not.
+ * Pin names that sink a part's supply current: GND (and AGND, PGND, …), anything with VSS in it
+ * (VSS, IOVSS, DVSS, AVSS), VEE, the exposed pad, and a converter's −Vo. An enable or address pin
+ * tied to the same net (SD, EN, A0) does not.
  */
-const SUPPLY_GROUND_PIN_RE = /^(?:[ADPS]?GND\w*|V(?:SS|EE)\w*|0V|E?PAD|EP\d*|THERMAL\w*|TAB|SLUG|[-−–]VO(?:UT)?|VO(?:UT)?[-−–])$/i;
-const isSupplyGroundPin = (name: string) => name.split(/[\s/(),;|]+/).some((tok) => SUPPLY_GROUND_PIN_RE.test(tok));
+const SUPPLY_GROUND_PIN_RE = /^(?:[ADPS]?GND\w*|VEE\w*|0V|E?PAD|EP\d*|THERMAL\w*|TAB|SLUG|[-−–]VO(?:UT)?|VO(?:UT)?[-−–])$/i;
+const isSupplyGroundPin = (name: string) => name.split(/[\s/(),;|]+/).some((tok) => /VSS/i.test(tok) || SUPPLY_GROUND_PIN_RE.test(tok));
 
 /**
- * A part's pads on the ground that carry its return current. The sink is GND, EP, −Vo or VSS.
- * An enable pin such as SD, tied to that net, does not start one. With no such name, every pad
- * on the ground counts, including a header pin whose name is only its number.
+ * A part's pads on the ground that carry its return current. The sink is GND, EP, −Vo, or a pin
+ * with VSS in its name. An enable pin such as SD, tied to that net, does not start one. With no
+ * such name, every pad on the ground counts, including a header pin whose name is only its number.
  */
 export function returnPads(pads: Pad[], ground: string): { pads: Pad[]; tied: Pad[] } {
   const on = pads.filter((p) => p.net === ground);
