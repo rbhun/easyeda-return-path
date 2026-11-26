@@ -88,6 +88,32 @@ const RULES: [RegExp, Omit<SignalKind, 'speeds' | 'dflt' | 'edges'>, Pick<Signal
   [/PWM/, { type: 'pwm', label: 'PWM' }, PWM],
 ];
 
+/** Protocol names a board-info file may give, most specific first; the label is the protocol as given. */
+const PROTOCOLS: [RegExp, string, Pick<SignalKind, 'speeds' | 'dflt' | 'edges'>][] = [
+  [/USB/, 'usb', USB],
+  [/SWD|JTAG/, 'swd', SWD],
+  [/I2C|IIC|TWI|SMBUS|PMBUS/, 'i2c', I2C],
+  [/MCLK/, 'i2s-mclk', MCLK],
+  [/I2S|PCM|TDM/, 'i2s', I2S_BIT],
+  [/SDIO|SDMMC|EMMC|^SD$/, 'sdio', SDIO],
+  [/SPI/, 'spi', SPI],
+  [/ETH|RMII|MII|100BASE|10BASE/, 'ethernet', ETHERNET],
+  [/CAN/, 'can', CAN],
+  [/U?S?ART|RS-?232|RS-?485|SERIAL/, 'uart', UART],
+  [/PWM/, 'pwm', PWM],
+  [/CLOCK|CLK|XTAL|OSC|CRYSTAL|MCO/, 'clock', CLOCK],
+];
+
+/** The signal kind for a protocol named in a board-info file (`I2C`, `SPI`, `UART`…); undefined when it is not known. */
+export function signalKindForProtocol(protocol: string): SignalKind | undefined {
+  const p = protocol.toUpperCase().replace(/[\s_²]+/g, (c) => (c === '²' ? '2' : ''));
+  const hit = PROTOCOLS.find(([re]) => re.test(p));
+  return hit && { type: hit[1], label: protocol.trim(), ...hit[2] };
+}
+
+/** The usual clock speeds, for a net a board-info file calls a clock without naming a protocol. */
+export const CLOCK_KIND: SignalKind = { type: 'clock', label: 'clock', ...CLOCK };
+
 const norm = (s: string) => s.toUpperCase().replace(/^[/\\]+/, '').replace(/[\s.-]+(?=[A-Z0-9])/g, '_');
 
 /** The kind of data line a net is, or undefined when neither its name nor its pins say. */

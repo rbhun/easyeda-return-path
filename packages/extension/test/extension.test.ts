@@ -157,6 +157,8 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	const without = await hf();
 	assert.match(without.result.lines.join('\n'), /Driver: not chosen/);
 	const hopsWithout = mock.markers.filter(m => JSON.stringify(m.color) === yellow).length;
+	assert.deepEqual(JSON.parse(mock.storage.get('boardInfo:demo-project') as string).nets, [{ net: 'CLK', driver: { parts: [] } }], 'the answer None is saved to the board info');
+	mock.storage.delete('boardInfo:demo-project');
 
 	driver = 'U1';
 	const done = await hf();

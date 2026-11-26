@@ -3,5 +3,7 @@
 	"About...": "About...",
 	"Show Saved Log...": "Show Saved Log...",
 	"Open Panel...": "Open Panel...",
-	"Run Folder...": "Run Folder..."
+	"Run Folder...": "Run Folder...",
+	"Load Board Info...": "Load Board Info...",
+	"Save Board Info...": "Save Board Info..."
 }

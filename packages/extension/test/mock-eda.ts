@@ -36,6 +36,10 @@ export interface MockHost {
 	spokes?: { pourId: string; a: Pt; b: Pt; width: number }[];
 	/** The wizard window's page: 'page' (default) answers like a user, 'silent' never connects, 'refused' is not opened. */
 	wizardWindow?: 'page' | 'silent' | 'refused';
+	/** The open project; null: none is open. Default: a demo project. */
+	project?: { uuid: string; friendlyName: string } | null;
+	/** The file the open-file dialog returns; omitted: the user closes the dialog. */
+	openFile?: { name: string; text: string };
 }
 
 /** Answers every dialog with its default unless `answer` says otherwise. */
@@ -142,6 +146,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		},
 		sys_FileSystem: {
 			saveFile: async (data: Blob, name?: string) => void downloads.push({ name, text: await data.text() }),
+			openReadFileDialog: async () => (host.openFile ? new File([host.openFile.text], host.openFile.name) : undefined),
 			...(host.fileSystem
 				? {
 						getEdaPath: fsCall(() => 'C:\\Users\\me\\Documents\\EasyEDA-Pro'),
@@ -223,6 +228,9 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 				dialogs.push({ kind: 'input', prompt: before, options: [], dflt: value });
 				cb(answer({ kind: 'input', prompt: before, title, options: [], dflt: value }));
 			},
+		},
+		dmt_Project: {
+			getCurrentProjectInfo: async () => (host.project === null ? undefined : host.project ?? { uuid: 'demo-project', friendlyName: 'Demo board' }),
 		},
 		dmt_EditorControl: {
 			generateIndicatorMarkers: async (shapes: Record<string, unknown>[], color: unknown, width?: number, zoom?: boolean) => {
