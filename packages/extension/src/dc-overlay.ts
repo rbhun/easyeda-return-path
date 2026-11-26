@@ -1,7 +1,7 @@
 // DC return-current overlay (D7) as temporary indicator markers: streamlines per net, density
 // contours on each net's dominant layer with one marker call per colour bin, and the bottleneck.
 import { densityContours, dominantLayer, type DcNetResult, type DcResult, type Pt, type Streamline } from '@returnpath/core';
-import { clearOverlay, markerKit, type Marker, type Rgba } from './overlay';
+import { clearOverlay, coloursWork, markerColour, markerKit, type Marker, type Rgba } from './overlay';
 
 export const DC_COLORS = {
 	supply: { r: 251, g: 191, b: 36, alpha: 0.95 },
@@ -18,16 +18,16 @@ export const DC_COLORS = {
 /** Cap per marker call; marker performance in the thousands is a D1 test item. */
 const MAX_PER_CALL = 4000;
 
-/** Dash and gap of supply streamlines, mm. */
-const DASH = 0.8;
-const GAP = 0.6;
+/** Dash patterns, mm: [dash, gap]. */
+export const SUPPLY_DASH: [number, number] = [1, 0.7];
+export const OTHER_LAYER_DOTS: [number, number] = [0.25, 0.35];
 
-/** Pieces of a polyline: DASH long, GAP apart. */
-export function dashes(pts: Pt[]): Pt[][] {
+/** Pieces of a polyline: `dash` long, `gap` apart. */
+export function dashes(pts: Pt[], [dash, gap]: [number, number] = SUPPLY_DASH): Pt[][] {
 	const out: Pt[][] = [];
 	let cur: Pt[] = [];
 	let on = true;
-	let left = DASH;
+	let left = dash;
 	for (let i = 1; i < pts.length; i++) {
 		let a = pts[i - 1];
 		const b = pts[i];
@@ -47,7 +47,7 @@ export function dashes(pts: Pt[]): Pt[][] {
 			}
 			on = !on;
 			len -= left;
-			left = on ? DASH : GAP;
+			left = on ? dash : gap;
 			a = p;
 		}
 		left -= len;
@@ -64,37 +64,48 @@ export const carriesCurrent = (n: DcNetResult) => n.layers.some(l => l.flow > 0)
 
 export interface DcDrawn {
 	markers: number;
-	/** Layer whose contours were drawn, per net. */
+	/** Layer whose contours were drawn, per net; empty when markers show no colour. */
 	contourLayers: { net: string; layer: number }[];
 }
 
+/**
+ * Markers may all come out white (EasyEDA Pro 3.2), so line style carries the meaning: the return
+ * is thick, solid on the top copper layer and dotted on the others, with a circle where it changes
+ * layer; the supply is thin and dashed. Density contours need colour and are drawn only when
+ * Check Marker Colours confirmed it.
+ */
 export async function drawDc(res: DcResult, streams: { supply: Streamline[]; ret: Streamline[] }): Promise<DcDrawn> {
 	const { segs, dot } = await markerKit();
 	const groups: { color: Rgba; markers: Marker[]; width: number }[] = [];
-	const streamMarkers = (lines: Streamline[], dashed: boolean) => lines.flatMap(l => l.segments.flatMap(s => (dashed ? dashes(s.pts) : [s.pts]).flatMap(p => segs(p, false))));
-	// EasyEDA Pro 3.2 draws every indicator marker white whatever colour is passed, so the supply
-	// is dashed to tell it from the return.
-	groups.push({ color: DC_COLORS.supply, markers: streamMarkers(streams.supply, true), width: 3 });
-	groups.push({ color: DC_COLORS.return, markers: streamMarkers(streams.ret, false), width: 3 });
+	const top = res.supply.layers[0].layer;
+	const supply = streams.supply.flatMap(l => l.segments.flatMap(s => dashes(s.pts).flatMap(p => segs(p, false))));
+	const ret = streams.ret.flatMap(l => l.segments.flatMap(s => (s.layer === top ? [s.pts] : dashes(s.pts, OTHER_LAYER_DOTS)).flatMap(p => segs(p, false))));
+	const hops = streams.ret.flatMap(l => l.segments.slice(1).map(s => dot(s.pts[0], 0.35)));
+	groups.push({ color: DC_COLORS.supply, markers: supply, width: 1 });
+	groups.push({ color: DC_COLORS.return, markers: [...ret, ...hops], width: 3 });
 
 	const nets = [res.supply, res.ret].filter((n): n is DcNetResult => !!n && carriesCurrent(n));
 	const contourLayers: DcDrawn['contourLayers'] = [];
-	const bins: Marker[][] = DC_COLORS.bins.map(() => []);
-	for (const net of nets) {
-		const layer = dominantLayer(net);
-		const field = net.layers.find(l => l.layer === layer)!;
-		contourLayers.push({ net: net.net, layer });
-		densityContours(res.grid, field, field.peak?.j || net.fullScale).forEach((lines, k) => bins[k].push(...lines.flatMap(l => segs(l, false))));
+	if (coloursWork()) {
+		const bins: Marker[][] = DC_COLORS.bins.map(() => []);
+		for (const net of nets) {
+			const layer = dominantLayer(net);
+			const field = net.layers.find(l => l.layer === layer)!;
+			contourLayers.push({ net: net.net, layer });
+			densityContours(res.grid, field, field.peak?.j || net.fullScale).forEach((lines, k) => bins[k].push(...lines.flatMap(l => segs(l, false))));
+		}
+		bins.forEach((markers, k) => groups.push({ color: DC_COLORS.bins[k], markers, width: 1 }));
 	}
-	bins.forEach((markers, k) => groups.push({ color: DC_COLORS.bins[k], markers, width: 1 }));
 	groups.push({ color: DC_COLORS.bottleneck, markers: nets.flatMap(n => n.bottleneck ? [dot(n.bottleneck.at, 1)] : []), width: 3 });
 
 	await clearOverlay();
 	let n = 0;
 	for (const grp of groups) {
-		const markers = grp.markers.slice(0, MAX_PER_CALL);
-		if (markers.length && await eda.dmt_EditorControl.generateIndicatorMarkers(markers, grp.color, grp.width, false))
-			n += markers.length;
+		for (let k = 0; k < grp.markers.length; k += MAX_PER_CALL) {
+			const markers = grp.markers.slice(k, k + MAX_PER_CALL);
+			if (await eda.dmt_EditorControl.generateIndicatorMarkers(markers, markerColour(grp.color), grp.width, false))
+				n += markers.length;
+		}
 	}
 	return { markers: n, contourLayers };
 }

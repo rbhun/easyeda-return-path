@@ -47,11 +47,15 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.match(msg, /^3V3 \/ GND: source U1, loads U2, U3, J2\./);
 	assert.match(msg, /3V3: drop \d+\.\d+ mV\/A/);
 	assert.match(msg, /GND: drop \d+\.\d+ mV\/A/);
-	assert.match(msg, /Contours drawn on: 3V3 Inner2, GND Inner1\./);
-	const colors = mock.markers.map(m => JSON.stringify(m.color));
-	for (const c of [DC_COLORS.supply, DC_COLORS.return, DC_COLORS.bottleneck, ...DC_COLORS.bins])
-		assert.ok(colors.includes(JSON.stringify(c)), `markers in ${JSON.stringify(c)}`);
+	assert.doesNotMatch(msg, /Contours drawn/, 'no contours until colours are confirmed');
+	assert.match(msg, /Streamlines: GND return thick, solid on Top Layer and dotted on other layers, with a circle where it changes layer; 3V3 supply thin and dashed\./);
+	assert.match(msg, /Density contours need marker colours: run Return Path > Check Marker Colours\.\.\. once\./);
+	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
+	assert.deepEqual(colors, new Set([DC_COLORS.supply, DC_COLORS.return, DC_COLORS.bottleneck].map(c => JSON.stringify(c))));
 	assert.ok(mock.markers.every(m => m.shape.type === 'line' || m.shape.type === 'circle'));
+	const of = (c: unknown) => mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(c));
+	assert.ok(of(DC_COLORS.supply).every(m => m.width === 1) && of(DC_COLORS.return).every(m => m.width === 3), 'supply thin, return thick');
+	assert.ok(of(DC_COLORS.return).some(m => m.shape.type === 'circle'), 'GND changes layer at vias on this board, marked with circles');
 
 	await ext.clearReturnPath();
 	assert.equal(mock.markers.length, 0);
@@ -97,20 +101,47 @@ test('a ground with no copper path from any load is reported in words and gets n
 	const msg = mock.messages.at(-1)!;
 	assert.match(msg, /GND: no load has a copper path to U1; nothing is drawn for it\./);
 	assert.doesNotMatch(msg, /GND: drop/);
-	assert.match(msg, /Contours drawn on: 3V3 [^,\n]+\.\n/);
-	assert.match(msg, /Streamlines: GND return current solid, 3V3 supply current dashed\./);
+	assert.match(msg, /Streamlines: GND return thick/);
 	assert.ok(mock.logs.some(l => /GND: .* not reached from U1; source pads .*; pours on GND: none/.test(l.message)));
 	const supply = mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(DC_COLORS.supply));
 	const len = (m: { shape: Record<string, unknown> }) => Math.hypot((m.shape.endX as number) - (m.shape.startX as number), (m.shape.endY as number) - (m.shape.startY as number));
-	assert.ok(supply.length > 0 && supply.every(m => len(m) <= 0.8 / 0.0254 + 1e-6), 'supply streamlines in dashes of at most 0.8 mm');
+	assert.ok(supply.length > 0 && supply.every(m => len(m) <= 1 / 0.0254 + 1e-6), 'supply streamlines in dashes of at most 1 mm');
 });
 
-test('dashes split a polyline into 0.8 mm dashes 0.6 mm apart, across its corners', async () => {
+test('dashes split a polyline into dashes of the given pattern, across its corners', async () => {
 	const { dashes } = await import('../src/dc-overlay.ts');
-	const d = dashes([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }]);
+	const d = dashes([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }], [0.8, 0.6]);
 	const length = (p: { x: number; y: number }[]) => p.slice(1).reduce((s, q, i) => s + Math.hypot(q.x - p[i].x, q.y - p[i].y), 0);
 	assert.equal(d.length, 8);
 	assert.ok(d.slice(0, 7).every(p => Math.abs(length(p) - 0.8) < 1e-9));
 	assert.ok(Math.abs(length(d[7]) - 0.2) < 1e-9);
 	assert.ok(d.some(p => p.length === 3), 'a dash bends around the corner');
+});
+
+test('Check Marker Colours draws red on both RGB scales, stores the answer, and contours follow it', async () => {
+	const { COLOUR_SCALE } = await import('../src/overlay.ts');
+	for (const [answer, red] of [['255', { r: 255, g: 0, b: 0 }], ['1', { r: 1, g: 0, b: 0 }], ['0', undefined]] as const) {
+		const storage = new Map<string, unknown>();
+		const check = createMockEda(board, '3V3', [], () => answer, { storage });
+		(globalThis as Record<string, unknown>).eda = check.eda;
+		let drawn: typeof check.markers = [];
+		await ext.runColourCheck({ select: async () => (drawn = [...check.markers], answer), multi: async () => undefined, input: async () => undefined, confirm: async () => false } as never);
+		assert.ok(drawn.length >= 2 && drawn.every(m => m.zoom === true), 'circles drawn and zoomed to before asking');
+		assert.equal(check.markers.length, 0, 'cleared afterwards');
+		assert.equal(storage.get(COLOUR_SCALE), Number(answer));
+
+		const mock = createMockEda(board, '3V3', [], undefined, { storage });
+		(globalThis as Record<string, unknown>).eda = mock.eda;
+		await ext.showDcReturn();
+		const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
+		if (red) {
+			assert.match(mock.messages.at(-1)!, /Contours drawn on: 3V3 Inner2, GND Inner1\./);
+			const k = red.r === 1 ? 255 : 1;
+			for (const c of [DC_COLORS.supply, DC_COLORS.return, DC_COLORS.bottleneck, ...DC_COLORS.bins])
+				assert.ok(colors.has(JSON.stringify({ r: c.r / k, g: c.g / k, b: c.b / k, alpha: c.alpha })), `markers in ${JSON.stringify(c)} on the 0-${255 / k} scale`);
+		}
+		else {
+			assert.doesNotMatch(mock.messages.at(-1)!, /Contours drawn|Check Marker Colours/);
+		}
+	}
 });

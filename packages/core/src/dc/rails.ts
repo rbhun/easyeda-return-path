@@ -265,11 +265,11 @@ export interface DcSetupInput {
 }
 
 /** Ground pads that close the loop at the source: its own, else those of the nearest part sharing another net with it (a switcher's IC behind its inductor). */
-function sourceGroundPads(board: Board, c: Component, rail: string, ground: string): Pad[] {
+function sourceGroundPads(board: Board, c: Component, rail: string, ground: string): { pads: Pad[]; from?: { designator: string; net: string } } {
   const own = padsOf(board, c).filter((p) => p.net === ground);
-  if (own.length) return own;
+  if (own.length) return { pads: own };
   const otherNets = new Set(padsOf(board, c).map((p) => p.net).filter((n) => n && n !== rail && n !== ground));
-  let best: Pad[] = [];
+  let best: { pads: Pad[]; from?: { designator: string; net: string } } = { pads: [] };
   let bestD = Infinity;
   for (const n of otherNets) {
     for (const o of componentsOnNet(board, n)) {
@@ -277,7 +277,7 @@ function sourceGroundPads(board: Board, c: Component, rail: string, ground: stri
       const g = padsOf(board, o).filter((p) => p.net === ground);
       const d = dist(o.at, c.at);
       if (g.length && d < bestD) {
-        best = g;
+        best = { pads: g, from: { designator: o.designator, net: n } };
         bestD = d;
       }
     }
@@ -300,8 +300,9 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
 
   const srcRail = padsOf(board, src).filter((p) => p.net === input.rail);
   if (!srcRail.length) throw new Error(`source ${src.designator} has no pad on ${input.rail}`);
-  const srcGnd = sourceGroundPads(board, src, input.rail, input.ground);
+  const { pads: srcGnd, from } = sourceGroundPads(board, src, input.rail, input.ground);
   if (!srcGnd.length) warnings.push(`Source ${src.designator} has no ${input.ground} pad nearby; the return half is not solved.`);
+  else if (from) warnings.push(`Source ${src.designator} has no ${input.ground} pad; the return ends at the ${input.ground} pads of ${from.designator}, the nearest part on ${from.net}.`);
   const currents = input.currents ?? {};
   const given = loadComps.filter((c) => currents[c.designator] !== undefined);
   const normalised = given.length === 0;

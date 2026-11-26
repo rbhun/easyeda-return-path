@@ -35,5 +35,13 @@
 	"Save as file...": "Save as file...",
 	"If the editor froze, reopen it and use Return Path > Show Saved Log...": "If the editor froze, reopen it and use Return Path > Show Saved Log...",
 	"${1}: no load has a copper path to ${2}; nothing is drawn for it.": "${1}: no load has a copper path to ${2}; nothing is drawn for it.",
-	"Streamlines: ${1} return current solid, ${2} supply current dashed.": "Streamlines: ${1} return current solid, ${2} supply current dashed."
+	"Streamlines: ${1} return thick, solid on ${2} and dotted on other layers, with a circle where it changes layer; ${3} supply thin and dashed.": "Streamlines: ${1} return thick, solid on ${2} and dotted on other layers, with a circle where it changes layer; ${3} supply thin and dashed.",
+	"Density contours need marker colours: run Return Path > Check Marker Colours... once.": "Density contours need marker colours: run Return Path > Check Marker Colours... once.",
+	"Check Marker Colours": "Check Marker Colours",
+	"Two sets of circles are drawn at the board origin. Which one is red?": "Two sets of circles are drawn at the board origin. Which one is red?",
+	"The left one": "The left one",
+	"The right one": "The right one",
+	"Neither: both look the same": "Neither: both look the same",
+	"Markers stay in line styles; density contours are not drawn.": "Markers stay in line styles; density contours are not drawn.",
+	"Markers are drawn in colour, with density contours.": "Markers are drawn in colour, with density contours."
 }

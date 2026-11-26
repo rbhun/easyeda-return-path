@@ -39,7 +39,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const fillOf = (p: Board['pours'][number]): Paths => p.poured ?? intersect(refCopper.get(p.layer)?.byNet.get(p.net) ?? [], p.outline);
 	const isPlane = (p: Board['pours'][number]) => planeLayers.includes(p.layer);
 
-	const markers: { shape: Record<string, unknown>; color: unknown }[] = [];
+	const markers: { shape: Record<string, unknown>; color: unknown; width?: number; zoom?: boolean }[] = [];
 	const messages: string[] = [];
 	const logs: { message: string; type: string }[] = [];
 	const progress: { progress?: number; title?: string }[] = [];
@@ -137,8 +137,8 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			},
 		},
 		dmt_EditorControl: {
-			generateIndicatorMarkers: async (shapes: Record<string, unknown>[], color: unknown) => {
-				markers.push(...shapes.map(shape => ({ shape, color })));
+			generateIndicatorMarkers: async (shapes: Record<string, unknown>[], color: unknown, width?: number, zoom?: boolean) => {
+				markers.push(...shapes.map(shape => ({ shape, color, width, zoom })));
 				return true;
 			},
 			removeIndicatorMarkers: async () => {

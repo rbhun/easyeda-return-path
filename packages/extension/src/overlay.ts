@@ -2,6 +2,7 @@
 // undo history (design decision D6). Markers have no fill, so regions are drawn as outlines.
 import { type Analysis, type Path, type Paths, type Pt } from '@returnpath/core';
 import { MIL } from './eda-board';
+import { readStored } from './runner';
 
 export type Rgba = { r: number; g: number; b: number; alpha: number };
 
@@ -13,6 +14,16 @@ export const COLORS = {
 } satisfies Record<string, Rgba>;
 
 export type Marker = IDMT_IndicatorMarkerShape;
+
+/** Stored answer of Check Marker Colours: 255 or 1 for the RGB scale the client reads, 0 when markers show no colour. */
+export const COLOUR_SCALE = 'markerColourScale';
+
+/** Whether markers are known to show their colours. Unknown or no counts as no. */
+export const coloursWork = () => [255, 1].includes(readStored(COLOUR_SCALE) as number);
+
+export function markerColour(c: Rgba): Rgba {
+	return readStored(COLOUR_SCALE) === 1 ? { r: c.r / 255, g: c.g / 255, b: c.b / 255, alpha: c.alpha } : c;
+}
 
 export async function clearOverlay(): Promise<void> {
 	await eda.dmt_EditorControl.removeIndicatorMarkers();
@@ -62,7 +73,7 @@ export async function drawAnalysis(an: Analysis): Promise<number> {
 	await clearOverlay();
 	let n = 0;
 	for (const [key, markers] of Object.entries(groups) as [keyof typeof COLORS, Marker[]][]) {
-		if (markers.length && await eda.dmt_EditorControl.generateIndicatorMarkers(markers, COLORS[key], 2, false))
+		if (markers.length && await eda.dmt_EditorControl.generateIndicatorMarkers(markers, markerColour(COLORS[key]), 2, false))
 			n += markers.length;
 	}
 	return n;

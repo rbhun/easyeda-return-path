@@ -7,8 +7,8 @@ import { analyzeNetSteps, buildDcSetup, hfApplicability, solveDcSteps, traceStre
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { readBoard, selectedNet } from './eda-board';
-import { clearOverlay, drawAnalysis } from './overlay';
-import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, runSteps, savedLog, saveLogAs, timed, toast } from './runner';
+import { clearOverlay, COLOUR_SCALE, drawAnalysis, markerKit } from './overlay';
+import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, readStored, runSteps, savedLog, saveLogAs, timed, toast, writeStored } from './runner';
 import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
 
 const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
@@ -150,11 +150,42 @@ export async function runDcReturn(ask: Ask, preferredRail?: string): Promise<voi
 				? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
 				: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
 			drawn.contourLayers.length ? t('Contours drawn on: ${1}.', drawn.contourLayers.map(c => `${c.net} ${layerName(c.layer)}`).join(', ')) : '',
-			t('Streamlines: ${1} return current solid, ${2} supply current dashed.', setup.ground, setup.rail),
+			t('Streamlines: ${1} return thick, solid on ${2} and dotted on other layers, with a circle where it changes layer; ${3} supply thin and dashed.', setup.ground, layerName(board.stackup.copper[0].id), setup.rail),
+			readStored(COLOUR_SCALE) === undefined ? t('Density contours need marker colours: run Return Path > Check Marker Colours... once.') : '',
 			t('${1} overlay marker(s).', String(drawn.markers)),
 			...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 		].filter(Boolean);
 		eda.sys_Dialog.showInformationMessage(lines.join('\n'), title);
+	});
+}
+
+/**
+ * Finds out whether this client draws indicator markers in colour, and on which RGB scale: two
+ * circles at the canvas origin, red on the 0-255 scale (left) and on the 0-1 scale (right).
+ */
+export async function checkMarkerColours(): Promise<void> {
+	await runColourCheck(dialogAsk());
+}
+
+export async function runColourCheck(ask: Ask): Promise<void> {
+	const title = t('Check Marker Colours');
+	await guarded(title, async () => {
+		const { dot } = await markerKit();
+		const rings = (x: number) => [0.5, 1, 1.5, 2].map(r => dot({ x, y: 0 }, r));
+		await clearOverlay();
+		await eda.dmt_EditorControl.generateIndicatorMarkers(rings(-3), { r: 255, g: 0, b: 0, alpha: 1 }, 3, true);
+		await eda.dmt_EditorControl.generateIndicatorMarkers(rings(3), { r: 1, g: 0, b: 0, alpha: 1 }, 3, true);
+		const answer = await ask.select(title, t('Two sets of circles are drawn at the board origin. Which one is red?'), [
+			{ value: '255', label: t('The left one') },
+			{ value: '1', label: t('The right one') },
+			{ value: '0', label: t('Neither: both look the same') },
+		], '0');
+		await clearOverlay();
+		if (answer === undefined)
+			return;
+		await writeStored(COLOUR_SCALE, Number(answer));
+		log(`marker colours: ${answer === '0' ? 'not shown by this client' : `RGB scale 0-${answer}`}`);
+		toast(answer === '0' ? t('Markers stay in line styles; density contours are not drawn.') : t('Markers are drawn in colour, with density contours.'));
 	});
 }
 

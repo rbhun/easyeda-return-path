@@ -191,3 +191,14 @@ test('ground pairing by name', () => {
   assert.equal(pairGround(b, '3V3', ['AGND', 'GND']), 'GND');
   assert.equal(pairGround(b, 'VDD_ISO', ['GND', 'GND_ISO']), 'GND_ISO');
 });
+
+test('a source without a ground pad: the return ends at the nearest part on its other net, and the setup says so', () => {
+  const b = partsBoard([
+    ['J1', 'Jumper', [['1', '9V'], ['2', 'VIN']]],
+    ['C7', 'Cap', [['1', 'VIN'], ['2', 'GND']]],
+    ['OLED1', 'Display', [['1', '9V'], ['2', 'GND']]],
+  ]);
+  const setup = buildDcSetup(b, { rail: '9V', ground: 'GND', source: 'J1', loads: ['OLED1'] });
+  assert.deepEqual(setup.source.groundPads.map((p) => p.net), ['GND']);
+  assert.ok(setup.warnings.includes('Source J1 has no GND pad; the return ends at the GND pads of C7, the nearest part on VIN.'));
+});

@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.10] - 2026-11-26
+
+From 0.1.8 runs on the rack display board (9V from J1 to the OLEDs). The return now reaches GND there, but the overlay was hard to read: streamlines seemed to jump around and cross traces, and outlines sat around the bends.
+
+- **Return path by line style:** the return is thick, solid on the top copper layer and dotted on the other layers, with a circle wherever it changes layer through a via. On that board the GND return hops between the Top and Bottom pours at GND vias, because the long SC/SD traces cut the Bottom pour into strips. Drawn in one style, a Top-layer stretch looked as if it crossed Bottom traces. The supply is thin and dashed (1 mm dashes).
+- **Density contours only with colour:** the thin outlines were the current-density contours (5, 15, 35 and 70 % of the peak), which mean nothing when every marker is white. They are drawn only after **Return Path → Check Marker Colours...** confirms that this client shows colours. That check draws two red circles at the board origin, one on the 0–255 RGB scale and one on the 0–1 scale, and asks which one is red. The answer is stored, and markers then use that scale (the high-frequency overlay too).
+- **Source without a ground pin:** when the source has no ground pad (J1 there is a jumper between 9V and another net), the return ends at the ground pads of the nearest part on the source's other net, as before. The summary now names that part ("the return ends at the GND pads of C7, the nearest part on $1N235").
+- Groups of more than 4000 markers are drawn in several calls instead of cut off at 4000.
+
 ## [0.1.9] - 2026-11-26
 
 From a test on a second 2-layer board (rack display, 12V and 9V), where GND came out with no copper path from any load and every streamline was the supply.
