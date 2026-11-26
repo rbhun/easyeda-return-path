@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.56] - 2026-11-26
+
+From Balazs: on the R-Com dongle, the +12V return looped through the ground vias of U19 and C115 instead of going straight back from U5 and C23.
+
+- **The rail is followed back to the converter that makes it.** The +12V rail starts at J3, a jumper with no ground pin. In front of J3 are the shunt R7 and U1's +Vo pin. The DC wizard now lists the nets along that chain ($1N260 and $1N261), even though they have no names. This happens when the chain ends at a converter output (pins named +Vo, VOUT, VO and the like) or at a power-like net. The nets are ticked by default, and U1 is offered as the source, so the return closes at U1's −Vo. The chain stops at a switching node (SW or LX), so a buck's output inductor never joins its input to its output.
+- **A sense chip across a shunt is neither a load nor a short.** U19 has pins on both sides of R7, but it also has pins elsewhere. It is left out of the loads with the reason "sits across", and R7 alone is taken as the 1 mΩ link.
+- **A source with no ground pin borrows the supply behind it.** If you keep J3 alone as the source, the return ends at U1's ground, reached through the series parts, and no longer at the nearest part, which was U19. A warning suggests ticking the chain and picking U1, so the copper in between is solved too.
+
 ## [0.1.55] - 2026-11-26
 
 HF check: return lines run into the GND pins and vias the current leaves through, instead of hopping to them through the air.

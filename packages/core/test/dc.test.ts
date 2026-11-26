@@ -11,6 +11,7 @@ import {
   looksLikePowerNet,
   pairGround,
   parseCurrents,
+  guessRailGroup,
   railBridges,
   railLabel,
   railNeighbours,
@@ -323,6 +324,30 @@ test('a rail of two nets joined by a fuse: solved as one, the line runs through 
   const pts = line.segments.flatMap((sg) => sg.pts);
   for (const fp of f1) assert.ok(pts.some((q) => Math.hypot(q.x - fp.at.x, q.y - fp.at.y) < 0.3), `through F1 pad ${fp.id}`);
   assert.ok(Math.hypot(pts[0].x - 0.6, pts[0].y - 2) < 0.6 && Math.hypot(pts.at(-1)!.x - 19.4, pts.at(-1)!.y - 2) < 0.6, 'from the connector to the load');
+});
+
+test('a converter behind a shunt and a jumper: the chain to it is offered, it is the source, the sense IC is no load and no short', () => {
+  // U1 +Vo → $1N261 → R7 (shunt) → $1N260 → J3 (jumper) → +12V; U19 senses across R7; U5 bucks 12 V to 3V3 through L4.
+  const b = partsBoard([
+    ['U1', 'isolated DC-DC', [['2', '48V', 'Vin'], ['1', '48V_PGND', 'GND'], ['6', '$1N261', '+Vo'], ['7', 'GND', '-Vo']]],
+    ['R7', '10m', [['1', '$1N261'], ['2', '$1N260']]],
+    ['J3', 'jumper', [['1', '+12V'], ['2', '$1N260']]],
+    ['U19', 'INA219', [['10', '$1N261', 'VIN+'], ['9', '$1N260', 'VIN-'], ['7', 'GND', 'GND'], ['6', '3V3', 'VS+'], ['4', 'SDA', 'SDA']]],
+    ['U4', 'buck', [['3', '+12V', 'VIN'], ['1', 'GND', 'GND'], ['2', '$SWA', 'SW']]],
+    ['L4', '10uH', [['1', '$SWA'], ['2', '3V3']]],
+    ['U2', 'MCU', [['1', '3V3', 'VDD'], ['2', 'GND', 'GND']]],
+  ]);
+  assert.deepEqual(railNeighbours(b, '+12V'), [{ net: '$1N260', via: 'J3' }, { net: '$1N261', via: 'R7' }], 'the unnamed nets count because the chain ends at a converter output');
+  assert.deepEqual(railNeighbours(b, '3V3'), [], 'not through an output inductor onto a switch node');
+  const nets = ['+12V', '$1N260', '$1N261'];
+  const g = guessRailGroup(b, nets);
+  assert.equal(g.source?.designator, 'U1', '+Vo is a converter output');
+  assert.deepEqual(g.loads.map((l) => l.designator), ['U4']);
+  assert.ok(g.excluded.some((e) => e.designator === 'U19' && /sits across/.test(e.why)));
+  assert.deepEqual(railBridges(b, nets).map((x) => x.designator), ['R7', 'J3'], 'U19 has pads elsewhere: not a short between the nets');
+  const alone = buildDcSetup(b, { rail: '+12V', ground: 'GND', source: 'J3' });
+  assert.deepEqual(alone.source.groundPads.map((p) => p.pinName), ['-Vo'], 'J3 alone: the return still ends at the converter, not at the sense IC beside it');
+  assert.ok(alone.warnings.some((w) => /the supply behind it on \$1N261/.test(w)));
 });
 
 test('focusInput: one part of the rail, with its own current when one was given', () => {

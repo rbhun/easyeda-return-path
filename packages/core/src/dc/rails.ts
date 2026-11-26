@@ -11,8 +11,8 @@ const POWER_RE =
 const INPUT_RE = /^(?:V(?:IN|BUS|BAT|BATT|USB|SYS|EXT|DC)\w*|BATT?\+?|DC_?IN\w*)$/i;
 
 /** Pin names of a regulator's output and input. */
-const OUT_PIN_RE = /^(?:V?OUT\d*|VO|SW|LX|VREG)$/i;
-const IN_PIN_RE = /^(?:V?IN\d*|VI|VCC|VDD|PVIN|AVIN)$/i;
+const OUT_PIN_RE = /^(?:\+?V?OUT\d*\+?|\+?VO\+?|SW|LX|VREG)$/i;
+const IN_PIN_RE = /^(?:\+?V?IN\d*\+?|VI|VCC|VDD|PVIN|AVIN)$/i;
 const REGULATOR_NAME_RE =
   /LDO|REGULATOR|AMS1117|LM1117|LD1117|NCP1117|LM317|LM78|L78|78[0-9]{2}|XC62|RT90|RT80|AP211|AP736|AP2127|MCP17|TLV7|HT7[0-9]|ME62|SPX3819|TPS[0-9]|LM259|MP[0-9]{4}|SY80|BUCK|BOOST|DC-?DC/i;
 const REGULATOR_DES_RE = /^(?:VR|REG|PS)\d/i;
@@ -296,10 +296,19 @@ export function returnPads(pads: Pad[], ground: string): { pads: Pad[]; tied: Pa
 }
 
 /** Ground pads that close the loop at the source: its own, else those of the nearest part sharing another net with it (a switcher's IC behind its inductor). */
-function sourceGroundPads(board: Board, c: Component, rail: string, ground: string): { pads: Pad[]; from?: { designator: string; net: string } } {
+function sourceGroundPads(board: Board, c: Component, rail: string, ground: string): { pads: Pad[]; from?: { designator: string; net: string; supply?: boolean } } {
   const own = returnPads(padsOf(board, c), ground).pads;
   if (own.length) return { pads: own };
   const otherNets = new Set(padsOf(board, c).map((p) => p.net).filter((n) => n && n !== rail && n !== ground));
+  // A jumper or link with no ground of its own: the supply beyond it along series parts closes the loop.
+  const powerNets = new Set(guessRails(board).rails.map((r) => r.net));
+  for (const hop of railNeighbours(board, rail)) {
+    for (const o of componentsOnNet(board, hop.net)) {
+      if (o.id === c.id || regulatorRole(board, o, hop.net, powerNets) !== 'out') continue;
+      const g = returnPads(padsOf(board, o), ground).pads;
+      if (g.length) return { pads: g, from: { designator: o.designator, net: hop.net, supply: true } };
+    }
+  }
   let best: { pads: Pad[]; from?: { designator: string; net: string } } = { pads: [] };
   let bestD = Infinity;
   for (const n of otherNets) {
@@ -326,52 +335,100 @@ export function railLabel(input: Pick<DcSetupInput, 'rail' | 'railNets'>): strin
   return railNetsOf(input).join(' + ');
 }
 
-/** Parts with pads on two or more of the nets: they carry the rail's current from one net to the next. */
+/** Parts with every pad on the rail's nets, on two or more of them (a fuse, shunt, jumper): they carry its current from one net to the next. */
 export function railBridges(board: Board, nets: string[]): DcBridge[] {
-  if (nets.length < 2) return [];
-  const out: DcBridge[] = [];
-  for (const c of board.components) {
-    const pads = padsOf(board, c).filter((p) => nets.includes(p.net));
-    if (new Set(pads.map((p) => p.net)).size >= 2) out.push({ designator: c.designator, pads });
+  return acrossNets(board, nets).filter((x) => x.all).map((x) => ({ designator: x.c.designator, pads: x.pads }));
+}
+
+/** Two-pad parts that pass a rail's current on to another net: fuses, ferrites, inductors, diodes, resistors (a 0 Ω link or shunt), jumpers. */
+const SERIES_DES_RE = /^(?:F|FB|L|D|R|J|JP|W|SJ)\d/i;
+/** How many series parts away from the rail an unnamed net may lie on the way to a power net or a source. */
+const CHAIN_DEPTH = 3;
+
+/**
+ * Nets that continue a rail through a series part (VBUS_R → fuse → VBUS_RAW → diode → VBUS; or
+ * +12V → jumper → shunt → a converter's output), the candidates to solve with it as one rail.
+ * Through two-pad series parts with no ground pad: power-like nets (by name or pour) and nets with
+ * a regulator output, and the unnamed nets on the way to one, each with the part it is reached through.
+ */
+export function railNeighbours(board: Board, rail: string): { net: string; via: string }[] {
+  const pourNets = new Set(board.pours.map((p) => p.net));
+  const powerNets = new Set(guessRails(board).rails.map((r) => r.net));
+  // A switcher's switch node carries pulses, not the rail's DC: the chain stops before it.
+  const switchNode = (n: string) => SW_NET_RE.test(bare(n)) || board.pads.some((p) => p.net === n && !!p.pinName && /^(?:SW|LX)\d*$/i.test(p.pinName));
+  const wanted = (n: string) =>
+    looksLikePowerNet(n) || pourNets.has(n) || componentsOnNet(board, n).some((c) => regulatorRole(board, c, n, powerNets) === 'out' || isOutputInductor(board, c, n));
+  const out: { net: string; via: string }[] = [];
+  const found = new Set([rail]);
+  // Breadth first; an unnamed net counts only once a wanted net is found beyond it.
+  let frontier: { net: string; path: { net: string; via: string }[] }[] = [{ net: rail, path: [] }];
+  const visited = new Set([rail]);
+  for (let depth = 0; depth < CHAIN_DEPTH && frontier.length; depth++) {
+    const next: typeof frontier = [];
+    for (const { net: from, path } of frontier) {
+      for (const c of componentsOnNet(board, from)) {
+        if (!SERIES_DES_RE.test(c.designator)) continue;
+        const pads = padsOf(board, c);
+        const nets = [...new Set(pads.map((p) => p.net))];
+        if (pads.length !== 2 || nets.length !== 2 || nets.some((n) => !n || isGroundNet(n))) continue;
+        const other = nets.find((n) => n !== from)!;
+        if (visited.has(other) || switchNode(other)) continue;
+        visited.add(other);
+        const step = [...path, { net: other, via: c.designator }];
+        if (wanted(other))
+          for (const hop of step) if (!found.has(hop.net)) (found.add(hop.net), out.push(hop));
+        next.push({ net: other, path: wanted(other) ? [] : step });
+      }
+    }
+    frontier = next;
   }
   return out;
 }
 
-/** Two-pad parts that pass a rail's current on to another net: fuses, ferrites, inductors, diodes, resistors (a 0 Ω link or shunt). */
-const SERIES_DES_RE = /^(?:F|FB|L|D|R)\d/i;
-
-/**
- * Nets that continue a rail through a series part (VBUS_R → fuse → VBUS_RAW → diode → VBUS), the
- * candidates to solve with it as one rail: power-like nets (by name or pour) reached through
- * two-pad series parts, also further along, each with the part it is reached through.
- */
-export function railNeighbours(board: Board, rail: string): { net: string; via: string }[] {
-  const pourNets = new Set(board.pours.map((p) => p.net));
-  const powerLike = (n: string) => !!n && !isGroundNet(n) && (looksLikePowerNet(n) || pourNets.has(n));
-  const out: { net: string; via: string }[] = [];
-  const seen = new Set([rail]);
-  for (let k = 0; k < seen.size; k++) {
-    const from = [...seen][k];
-    for (const c of componentsOnNet(board, from)) {
-      if (!SERIES_DES_RE.test(c.designator)) continue;
-      const pads = padsOf(board, c);
-      const nets = [...new Set(pads.map((p) => p.net))];
-      if (pads.length !== 2 || nets.length !== 2) continue;
-      const other = nets.find((n) => n !== from)!;
-      if (seen.has(other) || !powerLike(other)) continue;
-      seen.add(other);
-      out.push({ net: other, via: c.designator });
-    }
+/** Parts with pads on two or more of the rail's nets: a series part between them, or one sensing across them. */
+function acrossNets(board: Board, nets: string[]): { c: Component; pads: Pad[]; all: boolean }[] {
+  if (nets.length < 2) return [];
+  const out: { c: Component; pads: Pad[]; all: boolean }[] = [];
+  for (const c of board.components) {
+    const own = padsOf(board, c);
+    const pads = own.filter((p) => nets.includes(p.net));
+    if (new Set(pads.map((p) => p.net)).size >= 2) out.push({ c, pads, all: pads.length === own.length });
   }
   return out;
+}
+
+/**
+ * The rail's guess over all its nets: source candidates from each (a converter's output beyond a
+ * shunt counts), without the parts that sit across two of them.
+ */
+export function guessRailGroup(board: Board, nets: string[]): RailGuess {
+  const g = guessRails(board);
+  const powerNets = new Set(g.rails.map((r) => r.net));
+  const per = nets.map((n) => g.rails.find((r) => r.net === n) ?? guessRail(board, n, 'name', g.grounds, powerNets));
+  if (nets.length < 2) return per[0];
+  const across = new Set(acrossNets(board, nets).map((x) => x.c.id));
+  const candidates = [...new Map(per.flatMap((r) => r.candidates).filter((c) => !across.has(c.componentId)).map((c) => [c.componentId, c])).values()];
+  const sources = per.map((r) => r.source).filter((s): s is SourceCandidate => !!s && !across.has(s.componentId));
+  const regs = candidates.filter((c) => c.reason === 'regulator output' || c.reason === 'switcher output inductor');
+  const source = sources[0] && (sources.length === 1 || sources.every((s) => s.componentId === sources[0].componentId)) ? sources[0] : regs.length === 1 ? regs[0] : undefined;
+  const { loads, excluded } = railLoadsFor(board, nets, source?.componentId, candidates.map((c) => c.componentId));
+  return {
+    ...per[0],
+    source,
+    candidates,
+    rule: source ? (source.kind === 'regulator' ? 'regulator' : 'connector') : 'ask',
+    askReason: source ? undefined : candidates.length ? `No clear source on ${nets.join(' + ')}: confirm which part supplies it.` : `No regulator, connector or battery found on ${nets.join(' + ')}: pick the source.`,
+    loads,
+    excluded,
+  };
 }
 
 /** loadsFor() over every net of the rail, without the parts that bridge its nets. */
 export function railLoadsFor(board: Board, nets: string[], sourceId: string | undefined, candidateIds: string[]): { loads: LoadGuess[]; excluded: RailGuess['excluded'] } {
-  const bridges = new Set(railBridges(board, nets).map((b) => b.designator));
+  const across = acrossNets(board, nets);
   const loads: LoadGuess[] = [];
-  const excluded: RailGuess['excluded'] = [...bridges].map((d) => ({ designator: d, why: `joins ${nets.join(' and ')}` }));
-  const seen = new Set<string>([...bridges]);
+  const excluded: RailGuess['excluded'] = across.map((x) => ({ designator: x.c.designator, why: x.all ? `joins ${nets.join(' and ')}` : `sits across ${[...new Set(x.pads.map((p) => p.net))].join(' and ')}` }));
+  const seen = new Set<string>(across.map((x) => x.c.designator));
   for (const n of nets) {
     const r = loadsFor(board, n, sourceId, candidateIds);
     for (const l of r.loads) if (!seen.has(l.designator)) (seen.add(l.designator), loads.push(l));
@@ -417,6 +474,7 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
   if (!srcRail.length) throw new Error(`source ${src.designator} has no pad on ${label}`);
   const { pads: srcGnd, from } = sourceGroundPads(board, src, input.rail, input.ground);
   if (!srcGnd.length) warnings.push(`Source ${src.designator} has no ${input.ground} pad nearby; the return half is not solved.`);
+  else if (from?.supply) warnings.push(`Source ${src.designator} has no ${input.ground} pad; the return ends at the ${input.ground} pads of ${from.designator}, the supply behind it on ${from.net}. Tick ${from.net} as part of the rail and pick ${from.designator} as the source to solve the copper between them too.`);
   else if (from) warnings.push(`Source ${src.designator} has no ${input.ground} pad; the return ends at the ${input.ground} pads of ${from.designator}, the nearest part on ${from.net}.`);
   const currents = input.currents ?? {};
   const given = loadComps.filter((c) => currents[c.designator] !== undefined);
