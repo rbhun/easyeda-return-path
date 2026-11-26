@@ -1,0 +1,34 @@
+{
+  "name": "@returnpath/extension",
+  "version": "0.1.0",
+  "description": "EasyEDA Pro extension: return-path overlay for the selected net",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "prebuild": "node -e \"for (const f of ['LICENSE', 'NOTICE']) require('node:fs').copyFileSync('../../' + f, f)\"",
+    "compile": "rimraf ./dist/ && tsx ./config/esbuild.prod.ts",
+    "build": "npm run compile && tsx ./build/packaged.ts",
+    "debug": "tsx ./build/dev.ts",
+    "typecheck": "tsc -p . && tsc -p test",
+    "update:check": "tsx ./build/update.ts check",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@returnpath/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@jlceda/pro-api-types": "^0.4.30",
+    "@returnpath/cli": "0.1.0",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^26.6.10",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.24.2",
+    "fflate": "^0.8.3",
+    "fs-extra": "^11.3.0",
+    "ignore": "^7.0.3",
+    "jszip": "^3.10.1",
+    "rimraf": "^6.0.1",
+    "ws": "^8.18.0"
+  }
+}

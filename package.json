@@ -1,0 +1,25 @@
+{
+  "name": "easyeda-return-path",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.17.0"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/cli",
+    "packages/extension"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm test --workspaces --if-present",
+    "build:extension": "npm run build -w @returnpath/extension",
+    "demo": "npm run demo -w @returnpath/cli"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.10",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,81 @@
+{"type":"DOCHEAD"}||{"docType":"PCB","client":"synthetic"}|
+{"type":"CANVAS","id":"","ticket":1}||{"originX":0,"originY":0,"unit":"mm"}|
+{"type":"LAYER","id":1,"ticket":1}||{"layerType":"TOP","layerName":"Top Layer","status":3}|
+{"type":"LAYER","id":2,"ticket":1}||{"layerType":"BOTTOM","layerName":"Bottom Layer","status":3}|
+{"type":"LAYER","id":3,"ticket":1}||{"layerType":"TOP_SILK","layerName":"Top Silkscreen Layer","status":3}|
+{"type":"LAYER","id":11,"ticket":1}||{"layerType":"OUTLINE","layerName":"Board Outline Layer","status":3}|
+{"type":"LAYER","id":12,"ticket":1}||{"layerType":"MULTI","layerName":"Multi-Layer","status":3}|
+{"type":"LAYER","id":13,"ticket":1}||{"layerType":"DOCUMENT","layerName":"Document Layer","status":3}|
+{"type":"LAYER","id":50,"ticket":1}||{"layerType":"SUBSTRATE","layerName":"Dielectric1","status":3}|
+{"type":"LAYER","id":15,"ticket":1}||{"layerType":"SIGNAL","layerName":"Inner1","status":3}|
+{"type":"LAYER","id":51,"ticket":1}||{"layerType":"SUBSTRATE","layerName":"Dielectric2","status":3}|
+{"type":"LAYER","id":16,"ticket":1}||{"layerType":"SIGNAL","layerName":"Inner2","status":3}|
+{"type":"LAYER","id":52,"ticket":1}||{"layerType":"SUBSTRATE","layerName":"Dielectric3","status":3}|
+{"type":"LAYER_PHYS","id":1,"ticket":1}||{"material":"COPPER","thickness":1,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":15,"ticket":1}||{"material":"COPPER","thickness":1,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":16,"ticket":1}||{"material":"COPPER","thickness":1,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":2,"ticket":1}||{"material":"COPPER","thickness":1,"permittivity":0,"lossTangent":0}|
+{"type":"LAYER_PHYS","id":50,"ticket":1}||{"material":"PP","thickness":0.2104,"permittivity":4.4,"lossTangent":0.02}|
+{"type":"LAYER_PHYS","id":51,"ticket":1}||{"material":"CORE","thickness":1.065,"permittivity":4.6,"lossTangent":0.02}|
+{"type":"LAYER_PHYS","id":52,"ticket":1}||{"material":"PP","thickness":0.2104,"permittivity":4.4,"lossTangent":0.02}|
+{"type":"NET","id":"CLK","ticket":1}||{"netType":"High Speed"}|
+{"type":"NET","id":"GND","ticket":1}||{"netType":"Power"}|
+{"type":"NET","id":"3V3","ticket":1}||{"netType":"Power"}|
+{"type":"POLY","id":"e1","ticket":1}||{"groupId":0,"netName":"","layerId":11,"width":5.906,"path":[0,0,"L",2362.205,0,2362.205,1574.803,0,1574.803]}|
+{"type":"POUR","id":"e2","ticket":1}||{"groupId":0,"netName":"GND","layerId":15,"width":9.843,"name":"In1 GND","order":1,"path":[[11.811,11.811,"L",2350.394,11.811,2350.394,1562.992,11.811,1562.992]],"pourType":["SOLID",0],"keepIsland":0}|
+{"type":"REGION","id":"e3","ticket":1}||{"groupId":0,"layerId":15,"width":0,"prohibitType":[7],"path":[[787.402,472.441,"L",846.457,472.441,846.457,1574.803,787.402,1574.803]],"name":"slot"}|
+{"type":"REGION","id":"e4","ticket":1}||{"groupId":0,"layerId":15,"width":0,"prohibitType":[7],"path":[[1771.654,801.181,"L",2204.724,801.181,2204.724,1023.622,1771.654,1023.622]],"name":"cut-out"}|
+{"type":"POUR","id":"e5","ticket":1}||{"groupId":0,"netName":"GND","layerId":16,"width":9.843,"name":"In2 GND","order":1,"path":[[11.811,11.811,"L",1328.74,11.811,1328.74,1562.992,11.811,1562.992]],"pourType":["SOLID",0],"keepIsland":0}|
+{"type":"POUR","id":"e6","ticket":1}||{"groupId":0,"netName":"3V3","layerId":16,"width":9.843,"name":"In2 3V3","order":2,"path":[[1348.425,11.811,"L",2350.394,11.811,2350.394,1562.992,1348.425,1562.992]],"pourType":["SOLID",0],"keepIsland":0}|
+{"type":"COMPONENT","id":"e7","ticket":1}||{"groupId":0,"layerId":1,"positionX":314.961,"positionY":787.402,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e8","ticket":1}||{"parentId":"e7","layerId":3,"key":"Designator","value":"U1"}|
+{"type":"ATTR","id":"e9","ticket":1}||{"parentId":"e7","layerId":3,"key":"Footprint","value":"fp-ic3"}|
+{"type":"PAD_NET","id":"e7","ticket":1}||{"padNum":"1","padNet":"CLK","padId":""}|
+{"type":"PAD_NET","id":"e7","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"PAD_NET","id":"e7","ticket":1}||{"padNum":"3","padNet":"3V3","padId":""}|
+{"type":"COMPONENT","id":"e10","ticket":1}||{"groupId":0,"layerId":1,"positionX":2047.244,"positionY":787.402,"angle":180,"attrs":{}}|
+{"type":"ATTR","id":"e11","ticket":1}||{"parentId":"e10","layerId":3,"key":"Designator","value":"U2"}|
+{"type":"ATTR","id":"e12","ticket":1}||{"parentId":"e10","layerId":3,"key":"Footprint","value":"fp-ic3"}|
+{"type":"PAD_NET","id":"e10","ticket":1}||{"padNum":"1","padNet":"CLK","padId":""}|
+{"type":"PAD_NET","id":"e10","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"PAD_NET","id":"e10","ticket":1}||{"padNum":"3","padNet":"3V3","padId":""}|
+{"type":"COMPONENT","id":"e13","ticket":1}||{"groupId":0,"layerId":1,"positionX":314.961,"positionY":944.882,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e14","ticket":1}||{"parentId":"e13","layerId":3,"key":"Designator","value":"C1"}|
+{"type":"ATTR","id":"e15","ticket":1}||{"parentId":"e13","layerId":3,"key":"Footprint","value":"fp-c0402"}|
+{"type":"PAD_NET","id":"e13","ticket":1}||{"padNum":"1","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e13","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"COMPONENT","id":"e16","ticket":1}||{"groupId":0,"layerId":1,"positionX":1870.079,"positionY":177.165,"angle":0,"attrs":{}}|
+{"type":"ATTR","id":"e17","ticket":1}||{"parentId":"e16","layerId":3,"key":"Designator","value":"C2"}|
+{"type":"ATTR","id":"e18","ticket":1}||{"parentId":"e16","layerId":3,"key":"Footprint","value":"fp-c0402"}|
+{"type":"PAD_NET","id":"e16","ticket":1}||{"padNum":"1","padNet":"3V3","padId":""}|
+{"type":"PAD_NET","id":"e16","ticket":1}||{"padNum":"2","padNet":"GND","padId":""}|
+{"type":"LINE","id":"e19","ticket":1}||{"groupId":0,"netName":"CLK","layerId":1,"startX":374.016,"startY":787.402,"endX":1181.102,"endY":787.402,"width":7.874}|
+{"type":"VIA","id":"e20","ticket":1}||{"groupId":0,"netName":"CLK","ruleName":"","centerX":1181.102,"centerY":787.402,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e21","ticket":1}||{"groupId":0,"netName":"CLK","layerId":2,"startX":1181.102,"startY":787.402,"endX":1181.102,"endY":314.961,"width":7.874}|
+{"type":"LINE","id":"e22","ticket":1}||{"groupId":0,"netName":"CLK","layerId":2,"startX":1181.102,"startY":314.961,"endX":1732.283,"endY":314.961,"width":7.874}|
+{"type":"VIA","id":"e23","ticket":1}||{"groupId":0,"netName":"CLK","ruleName":"","centerX":1732.283,"centerY":314.961,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e24","ticket":1}||{"groupId":0,"netName":"CLK","layerId":1,"startX":1732.283,"startY":314.961,"endX":1732.283,"endY":787.402,"width":7.874}|
+{"type":"LINE","id":"e25","ticket":1}||{"groupId":0,"netName":"CLK","layerId":1,"startX":1732.283,"startY":787.402,"endX":1988.189,"endY":787.402,"width":7.874}|
+{"type":"LINE","id":"e26","ticket":1}||{"groupId":0,"netName":"GND","layerId":1,"startX":255.906,"startY":748.031,"endX":204.724,"endY":748.031,"width":11.811}|
+{"type":"VIA","id":"e27","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":204.724,"centerY":748.031,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e28","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":255.906,"startY":826.772,"endX":204.724,"endY":826.772,"width":11.811}|
+{"type":"VIA","id":"e29","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":204.724,"centerY":826.772,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e30","ticket":1}||{"groupId":0,"netName":"GND","layerId":1,"startX":2106.299,"startY":826.772,"endX":2157.48,"endY":826.772,"width":11.811}|
+{"type":"VIA","id":"e31","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":2157.48,"centerY":826.772,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e32","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":2106.299,"startY":748.031,"endX":2157.48,"endY":748.031,"width":11.811}|
+{"type":"VIA","id":"e33","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":2157.48,"centerY":748.031,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e34","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":295.276,"startY":944.882,"endX":295.276,"endY":992.126,"width":11.811}|
+{"type":"VIA","id":"e35","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":295.276,"centerY":992.126,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e36","ticket":1}||{"groupId":0,"netName":"GND","layerId":1,"startX":334.646,"startY":944.882,"endX":334.646,"endY":992.126,"width":11.811}|
+{"type":"VIA","id":"e37","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":334.646,"centerY":992.126,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e38","ticket":1}||{"groupId":0,"netName":"3V3","layerId":1,"startX":1850.394,"startY":177.165,"endX":1850.394,"endY":129.921,"width":11.811}|
+{"type":"VIA","id":"e39","ticket":1}||{"groupId":0,"netName":"3V3","ruleName":"","centerX":1850.394,"centerY":129.921,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"LINE","id":"e40","ticket":1}||{"groupId":0,"netName":"GND","layerId":1,"startX":1889.764,"startY":177.165,"endX":1889.764,"endY":129.921,"width":11.811}|
+{"type":"VIA","id":"e41","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1889.764,"centerY":129.921,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":0}|
+{"type":"VIA","id":"e42","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":118.11,"centerY":118.11,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e43","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":2244.094,"centerY":118.11,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e44","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":118.11,"centerY":1456.693,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e45","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":2244.094,"centerY":1456.693,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e46","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":984.252,"centerY":1377.953,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e47","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":590.551,"centerY":196.85,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
+{"type":"VIA","id":"e48","ticket":1}||{"groupId":0,"netName":"GND","ruleName":"","centerX":1267.717,"centerY":846.457,"holeDiameter":11.811,"viaDiameter":23.622,"viaType":1}|
