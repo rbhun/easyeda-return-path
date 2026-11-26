@@ -2,6 +2,20 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.36] - 2026-11-26
+
+Numbered above 0.1.35, main's version. First pushed as 0.1.35; renumbered after #15 took 0.1.35 and merged.
+
+From Balazs, after 0.1.34: the prefilled currents are fine, but he wants to enter the rail's full current and set roughly how much each component gets with small sliders.
+
+- **Total current and share sliders** on the currents page of the wizard window:
+  - a **Total current** field at the top. Typing a new total scales every load and keeps their ratios.
+  - each load has a slider for its share of the total, with the share in percent and the current beside it. Moving one slider keeps the total; the other loads keep their ratios and share what is left.
+  - a load's current can still be typed exactly, and the total follows.
+  - **Equal** shares the total equally.
+  - the values are prefilled as in 0.1.33: 100 mA per load, or the last run's currents on the same rail. Clearing the total still gives the per-amp view.
+- The reply to the extension is unchanged (`U2=240mA, U3=…`), so the system-dialog fallback and saved runs work as before.
+
 ## [0.1.35] - 2026-11-26
 
 Numbered above 0.1.34, main's version.

@@ -49,7 +49,8 @@
 	"OK": "确定",
 	"${1} of ${2} selected": "已选 ${1} / ${2}",
 	"Step ${1} of ${2}": "第 ${1} 步，共 ${2} 步",
-	"All loads": "所有负载",
-	"Apply": "应用",
-	"${1}: done; open the Return Path panel to see the result.": "${1}：完成；打开回流路径面板查看结果。"
+	"${1}: done; open the Return Path panel to see the result.": "${1}：完成；打开回流路径面板查看结果。",
+	"Total current": "总电流",
+	"Equal": "平分",
+	"Share the total equally between the loads": "在负载之间平分总电流"
 }

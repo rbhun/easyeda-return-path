@@ -199,7 +199,7 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	const known = previous?.rail === rail ? previous.currents ?? {} : {};
 	const loadRows = loads.map(id => ({ value: designator(id), label: loadOptions.find(o => o.value === id)?.label ?? designator(id) }));
 	const values = loadRows.map(o => currentField(known[o.value] ?? DEFAULT_LOAD_CURRENT));
-	const currentText = await ask.currents(title, t('Current of each load: 150mA, or 0.15 for amps. Prefilled with ${1}, or with the last run\'s value on this rail. Clear every field to split 1 A equally and show normalised density.', currentField(DEFAULT_LOAD_CURRENT)), loadRows, values);
+	const currentText = await ask.currents(title, t('Total current of the rail, shared between the loads with the sliders; a load\'s current can also be typed (150mA, or 0.15 for amps). Prefilled with ${1} per load, or with the last run\'s values on this rail. Clear the total to split 1 A equally and show normalised density.', currentField(DEFAULT_LOAD_CURRENT)), loadRows, values);
 	if (currentText === undefined)
 		return undefined;
 
