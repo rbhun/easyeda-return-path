@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { strFromU8, unzipSync } from 'fflate';
-import { guessRails } from '@returnpath/core';
+import { guessRails, traceStreamlines } from '@returnpath/core';
 import { dcReport, dcViews, runDc } from '../src/dc.js';
 import { parseEasyEdaPcb } from '../src/easyeda/parse.js';
 import { buildDcEpro } from '../src/synth/make-dc-board.js';
@@ -55,7 +55,9 @@ test('DC board: both halves of the 3V3 loop', () => {
 test('DC board: streamlines reach the source, and the GND return of U3 goes round the slot', () => {
   for (const [name, lines] of [['3V3', run.streamlines.supply], ['GND', run.streamlines.ret]] as const)
     for (const load of ['U2', 'U3', 'J2']) assert.ok(lines.some((l) => l.load === load && l.complete), `${name}: a complete streamline from ${load}`);
-  const u3 = run.streamlines.ret.filter((l) => l.load === 'U3' && l.complete);
+  // Drawn streamlines merge where they meet, so U3's own path is traced unmerged.
+  const u3 = traceStreamlines(run.result.grid, run.result.ret!).filter((l) => l.load === 'U3' && l.complete);
+  assert.ok(u3.length > 0);
   for (const l of u3) {
     const pts = l.segments.filter((s) => s.layer === IN1).flatMap((s) => s.pts);
     assert.ok(pts.some((p) => p.x > 21.5 && p.x < 23.5 && p.y < 6), 'crosses x = 22.5 through the neck (y < 6 mm)');

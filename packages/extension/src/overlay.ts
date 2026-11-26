@@ -2,28 +2,18 @@
 // undo history (design decision D6). Markers have no fill, so regions are drawn as outlines.
 import { type Analysis, type Path, type Paths, type Pt } from '@returnpath/core';
 import { MIL } from './eda-board';
-import { readStored } from './runner';
 
 export type Rgba = { r: number; g: number; b: number; alpha: number };
 
+// Markers with alpha below 1 come out white in EasyEDA Pro 3.2; only opaque colours show.
 export const COLORS = {
-	band: { r: 46, g: 158, b: 79, alpha: 0.5 },
-	gap: { r: 229, g: 57, b: 53, alpha: 0.9 },
-	detour: { r: 251, g: 140, b: 0, alpha: 0.9 },
-	link: { r: 30, g: 136, b: 229, alpha: 0.9 },
+	band: { r: 46, g: 158, b: 79, alpha: 1 },
+	gap: { r: 229, g: 57, b: 53, alpha: 1 },
+	detour: { r: 251, g: 140, b: 0, alpha: 1 },
+	link: { r: 30, g: 136, b: 229, alpha: 1 },
 } satisfies Record<string, Rgba>;
 
 export type Marker = IDMT_IndicatorMarkerShape;
-
-/** Stored answer of Check Marker Colours: 255 or 1 for the RGB scale the client reads, 0 when markers show no colour. */
-export const COLOUR_SCALE = 'markerColourScale';
-
-/** Whether markers are known to show their colours. Unknown or no counts as no. */
-export const coloursWork = () => [255, 1].includes(readStored(COLOUR_SCALE) as number);
-
-export function markerColour(c: Rgba): Rgba {
-	return readStored(COLOUR_SCALE) === 1 ? { r: c.r / 255, g: c.g / 255, b: c.b / 255, alpha: c.alpha } : c;
-}
 
 export async function clearOverlay(): Promise<void> {
 	await eda.dmt_EditorControl.removeIndicatorMarkers();
@@ -73,7 +63,7 @@ export async function drawAnalysis(an: Analysis): Promise<number> {
 	await clearOverlay();
 	let n = 0;
 	for (const [key, markers] of Object.entries(groups) as [keyof typeof COLORS, Marker[]][]) {
-		if (markers.length && await eda.dmt_EditorControl.generateIndicatorMarkers(markers, markerColour(COLORS[key]), 2, false))
+		if (markers.length && await eda.dmt_EditorControl.generateIndicatorMarkers(markers, COLORS[key], 2, false))
 			n += markers.length;
 	}
 	return n;

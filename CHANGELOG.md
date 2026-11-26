@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.11] - 2026-11-26
+
+From 0.1.10 on the rack display: both test circles of Check Marker Colours came out red, the return still had a bundle of short lines between the OLED pin and the first via, and with many loads the thin lines criss-crossed.
+
+- **Colours:** markers with an alpha below 1 come out white in EasyEDA Pro 3.2, and only the check circles were opaque. Every marker is now opaque, so colours show in the DC and the high-frequency overlay. Check Marker Colours is removed.
+- **DC overlay colours:** supply thin amber; return thick, magenta on the top copper layer and cyan on the others, with a circle where it changes layer. No dashes or dots any more.
+- **Fewer, cleaner streamlines** (extension and CLI renders): one streamline per load instead of three. They used to run side by side from the pad to the same via, which made the bundle of short lines. A streamline now ends where it comes within 0.6 mm of an earlier one on the same layer, so shared paths are drawn once and the lines form a tree. The cell staircase through narrow copper is smoothed. On the R-Com dongle's 3V3 rail this cuts the drawn segments from 849 to 132 (supply) and from 472 to 152 (GND return).
+- **No density contours in the extension:** with many loads they were most of the criss-crossing thin lines. The bottleneck circle stays; the CLI renders keep the contours.
+
 ## [0.1.10] - 2026-11-26
 
 From 0.1.8 runs on the rack display board (9V from J1 to the OLEDs). The return now reaches GND there, but the overlay was hard to read: streamlines seemed to jump around and cross traces, and outlines sat around the bends.

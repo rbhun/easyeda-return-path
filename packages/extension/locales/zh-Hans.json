@@ -18,13 +18,5 @@
 	"Save as file...": "另存为文件...",
 	"If the editor froze, reopen it and use Return Path > Show Saved Log...": "如果编辑器卡死，请重新打开并使用 回流路径 > 显示保存的日志...",
 	"${1}: no load has a copper path to ${2}; nothing is drawn for it.": "${1}：没有负载经铜箔连到 ${2}；该网络不绘制。",
-	"Streamlines: ${1} return thick, solid on ${2} and dotted on other layers, with a circle where it changes layer; ${3} supply thin and dashed.": "流线：${1} 回流为粗线，在 ${2} 上为实线、在其他层上为点线，换层处画圆；${3} 供电为细虚线。",
-	"Density contours need marker colours: run Return Path > Check Marker Colours... once.": "电流密度等值线需要标记颜色：请运行一次 回流路径 > 检查标记颜色...。",
-	"Check Marker Colours": "检查标记颜色",
-	"Two sets of circles are drawn at the board origin. Which one is red?": "在板原点画了两组圆。哪一组是红色？",
-	"The left one": "左边一组",
-	"The right one": "右边一组",
-	"Neither: both look the same": "都不是：两组看起来一样",
-	"Markers stay in line styles; density contours are not drawn.": "标记以线型区分；不绘制电流密度等值线。",
-	"Markers are drawn in colour, with density contours.": "标记以颜色绘制，并绘制电流密度等值线。"
+	"Streamlines: ${1} supply thin amber; ${2} return thick, magenta on ${3} and cyan on other layers, with a circle where it changes layer.": "流线：${1} 供电为细琥珀色线；${2} 回流为粗线，在 ${3} 上为品红色、在其他层上为青色，换层处画圆。"
 }

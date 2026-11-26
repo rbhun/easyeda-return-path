@@ -23,7 +23,17 @@ export interface Streamline {
 export interface StreamOptions {
   perLoad: number;
   maxSteps: number;
+  /** End a streamline where it meets an earlier one on the same layer, so shared paths are drawn once (a tree). */
+  merge: boolean;
+  /** Round off the cell staircase of streamlines through narrow copper. */
+  smooth: boolean;
 }
+
+/** Streamlines closer than this, mm, merge when drawn. */
+const MERGE_MM = 0.6;
+
+/** For drawing: one streamline per load, merged where paths meet and smoothed; several per load crowd the view. */
+export const DRAWN_STREAMS: Partial<StreamOptions> = { perLoad: 1, merge: true, smooth: true };
 
 /** Index of the density bin of a value: 0 below the first level … DENSITY_LEVELS.length at or above the last. */
 export function densityBin(j: number, fullScale: number, levels = DENSITY_LEVELS): number {
@@ -65,7 +75,7 @@ function sample(g: Grid, f: DcLayerField, p: Pt): Pt {
  * with the strongest flow, spread apart.
  */
 export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<StreamOptions> = {}): Streamline[] {
-  const opts: StreamOptions = { perLoad: 3, maxSteps: 4 * (g.nx + g.ny) * 4, ...options };
+  const opts: StreamOptions = { perLoad: 3, maxSteps: 4 * (g.nx + g.ny) * 4, merge: false, smooth: false, ...options };
   // Walk towards the source: along the current on the ground, against it on the rail.
   const dir = r.role === 'return' ? 1 : -1;
   const byLayer = new Map(r.layers.map((f) => [f.layer, f]));
@@ -73,6 +83,27 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   for (const v of r.vias) if (v.cell >= 0) viaAt.set(v.cell, v);
   const step = g.cell * 0.4;
   const out: Streamline[] = [];
+  /** Streamlines closer than this (cells) are drawn as one. */
+  const reach = Math.max(2, Math.ceil(MERGE_MM / g.cell));
+  /** Per layer: a point of an earlier streamline in each cell it passed. */
+  const taken = new Map<number, Map<number, Pt>>();
+  const meets = (layer: number, c: number): Pt | undefined => {
+    const t = taken.get(layer);
+    if (!t) return undefined;
+    const i = c % g.nx;
+    const j = (c - i) / g.nx;
+    let best: Pt | undefined;
+    let bestD = Infinity;
+    for (let dj = -reach; dj <= reach; dj++)
+      for (let di = -reach; di <= reach; di++) {
+        const hit = inGrid(g, i + di, j + dj) ? t.get((j + dj) * g.nx + i + di) : undefined;
+        if (hit && di * di + dj * dj < bestD) {
+          best = hit;
+          bestD = di * di + dj * dj;
+        }
+      }
+    return best;
+  };
 
   for (const ld of r.loadCells) {
     if (ld.current <= 0) continue;
@@ -87,6 +118,8 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
     }
     for (const s of chosen) out.push(trace(ld.designator, s.layer, centreOf(g, s.c)));
   }
+  // Supply streamlines are traced from the loads and reversed afterwards, so merging always
+  // happens on the way to the source.
   return out;
 
   function trace(load: string, layer: number, start: Pt): Streamline {
@@ -104,6 +137,14 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       if (r.sourceCells.get(layer)?.has(c)) {
         complete = true;
         break;
+      }
+      if (opts.merge && k > 0) {
+        const hit = meets(layer, c);
+        if (hit) {
+          segments[segments.length - 1].pts.push(hit);
+          complete = true;
+          break;
+        }
       }
       const via = viaAt.get(c);
       if (via && !usedVias.has(via.id)) {
@@ -153,7 +194,24 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       p = next;
       segments[segments.length - 1].pts.push(p);
     }
-    const segs = segments.filter((s) => s.pts.length > 1).map((s) => ({ layer: s.layer, pts: simplifyLine(s.pts, g.cell * 0.25) }));
+    if (opts.merge)
+      for (const sg of segments) {
+        let t = taken.get(sg.layer);
+        if (!t) taken.set(sg.layer, (t = new Map()));
+        for (let q = 1; q < sg.pts.length; q++) {
+          const a = sg.pts[q - 1];
+          const b = sg.pts[q];
+          const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (g.cell * 0.5)));
+          for (let m = 0; m <= n; m++) {
+            const pt = { x: a.x + ((b.x - a.x) * m) / n, y: a.y + ((b.y - a.y) * m) / n };
+            const [pi, pj] = cellOf(g, pt);
+            if (inGrid(g, pi, pj) && !t.has(pj * g.nx + pi)) t.set(pj * g.nx + pi, pt);
+          }
+        }
+      }
+    const segs = segments
+      .filter((s) => s.pts.length > 1)
+      .map((s) => ({ layer: s.layer, pts: opts.smooth ? simplifyLine(chaikin(s.pts, 2), g.cell * 0.5) : simplifyLine(s.pts, g.cell * 0.25) }));
     // Present every streamline in the direction the current flows.
     if (r.role === 'supply') {
       segs.reverse();
@@ -200,6 +258,22 @@ const centreOf = (g: Grid, c: number) => {
   const i = c % g.nx;
   return cellCentre(g, i, (c - i) / g.nx);
 };
+
+/** Corner cutting (Chaikin), keeping both end points. */
+export function chaikin(pts: Path, rounds: number): Path {
+  let p = pts;
+  for (let r = 0; r < rounds && p.length > 2; r++) {
+    const q: Path = [p[0]];
+    for (let k = 0; k + 1 < p.length; k++) {
+      const a = p[k];
+      const b = p[k + 1];
+      q.push({ x: 0.75 * a.x + 0.25 * b.x, y: 0.75 * a.y + 0.25 * b.y }, { x: 0.25 * a.x + 0.75 * b.x, y: 0.25 * a.y + 0.75 * b.y });
+    }
+    q.push(p[p.length - 1]);
+    p = q;
+  }
+  return p;
+}
 
 /** Douglas–Peucker. */
 export function simplifyLine(pts: Path, eps: number): Path {

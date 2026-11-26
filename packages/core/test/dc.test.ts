@@ -13,6 +13,8 @@ import {
   rect,
   solveDc,
   traceStreamlines,
+  DRAWN_STREAMS,
+  distPointSeg,
   type Board,
   type Component,
   type DcSetup,
@@ -201,4 +203,30 @@ test('a source without a ground pad: the return ends at the nearest part on its 
   const setup = buildDcSetup(b, { rail: '9V', ground: 'GND', source: 'J1', loads: ['OLED1'] });
   assert.deepEqual(setup.source.groundPads.map((p) => p.net), ['GND']);
   assert.ok(setup.warnings.includes('Source J1 has no GND pad; the return ends at the GND pads of C7, the nearest part on VIN.'));
+});
+
+test('drawn streamlines: one per load, later ones end where they meet an earlier one, smoothing keeps the ends', () => {
+  // A narrow neck from the source on the left to a wide area with two loads, one above the other.
+  const src = pad('s', 'P', 1, 0.2, 2, 0.4, 0.6);
+  const l1 = pad('l1', 'P', 1, 19.8, 3.5, 0.4, 1);
+  const l2 = pad('l2', 'P', 1, 19.8, 0.5, 0.4, 1);
+  const b = board(1, { pours: [pour('P', 1, [rect(5, 2, 10, 0.6)]), pour('P', 1, [rect(15, 2, 10, 4)])], pads: [src, l1, l2] });
+  const setup: DcSetup = {
+    ...terminalSetup(src, l1, 'P'),
+    loads: [l1, l2].map((p) => ({ componentId: p.id, designator: p.id.toUpperCase(), railPads: [p], groundPads: [], current: 0.5 })),
+  };
+  const res = solveDc(b, setup, { cell: 0.2 });
+  const all = traceStreamlines(res.grid, res.supply);
+  const drawn = traceStreamlines(res.grid, res.supply, DRAWN_STREAMS);
+  assert.ok(all.length > 2, 'three per load by default');
+  assert.deepEqual(drawn.map((l) => l.load), ['L1', 'L2']);
+  assert.ok(drawn.every((l) => l.complete));
+  const pts = (i: number) => drawn[i].segments.flatMap((s) => s.pts);
+  const first = pts(0);
+  const second = pts(1);
+  assert.ok(Math.abs(first[0].x - 0.2) < 0.5, 'the first streamline starts at the source');
+  assert.ok(second[0].x > 1, 'the second starts on the first, not at the source');
+  const gap = Math.min(...first.slice(1).map((q, i) => distPointSeg(second[0], first[i], q)));
+  assert.ok(gap < 0.2, `on the first (${gap.toFixed(3)} mm away)`);
+  assert.ok(Math.abs(second.at(-1)!.x - 19.8) < 0.3, 'and ends at its load');
 });
