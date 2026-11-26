@@ -189,7 +189,7 @@ test('every text the extension translates has an entry in each locale, so EasyED
 	const keys = new Set<string>();
 	for (const f of readdirSync(dir).filter(f => f.endsWith('.ts'))) {
 		for (const m of readFileSync(new URL(f, dir), 'utf8').matchAll(/\bt\((['`])((?:\\.|(?!\1).)*)\1/g))
-			keys.add(m[2].replace(/\\'/g, '\''));
+			keys.add(m[2].replace(/\\(.)/g, (_, c: string) => (c === 'n' ? '\n' : c)));
 	}
 	assert.ok(keys.size > 50);
 	for (const locale of ['en', 'zh-Hans']) {
