@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.12] - 2026-11-26
+
+From a DC run on SDA on the rack display, made with 0.1.10. The white dashed and dotted lines and the thin angled outlines in those screenshots are 0.1.10's supply dashes, other-layer return dots and density contours, which 0.1.11 already removed. Each TCA9548 started several returns.
+
+- **Only ground pins start a return:** a load used to return its current through every pad on the ground, so a TCA9548 with A0, A1 and A2 tied to GND started four returns. Pin names are now read from the board's netlist (`pcb_Net.getNetlist`), and a part whose ground pads are all named returns only through its ground pins (GND, VSS, AGND, PGND, EP, PAD and similar). The summary lists the pins left out ("U1: A0, A1, A2 are tied to GND but carry no supply current; the return starts at GND."). Without names, or when no name matches, every ground pad still counts. The same applies at the source.
+- **Signal nets in the DC view:** solving a net that is not a power rail (SDA) now warns that the view treats the source as a supply whose current the loads draw at their pins, and points to Show for Selected Net for a signal's return path.
+
 ## [0.1.11] - 2026-11-26
 
 From 0.1.10 on the rack display: both test circles of Check Marker Colours came out red, the return still had a bundle of short lines between the OLED pin and the first via, and with many loads the thin lines criss-crossed.

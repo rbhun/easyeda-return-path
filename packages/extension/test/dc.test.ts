@@ -94,6 +94,20 @@ test('wizard: with several grounds, the ground is asked once, for the rail being
 	assert.ok(mock.markers.length > 0);
 });
 
+test('pin names from the netlist: a load returns only through its GND pin, not through an address pin tied to GND', async () => {
+	const u2 = board.components.find(c => c.designator === 'U2')!;
+	const gnd = board.pads.find(p => p.componentId === u2.id && p.net === 'GND')!;
+	const a0 = { ...gnd, id: `${gnd.id}-a0`, number: '99', at: { x: gnd.at.x + 0.6, y: gnd.at.y }, shape: gnd.shape.map(r => r.map(q => ({ x: q.x + 0.6, y: q.y }))), pinName: 'A0' };
+	const pads = board.pads.map(p => (p.componentId === u2.id ? { ...p, pinName: p.net === 'GND' ? 'GND' : 'VCC' } : p));
+	const named = { ...board, pads: [...pads, a0], components: board.components.map(c => (c.id === u2.id ? { ...c, padIds: [...c.padIds, a0.id] } : c)) };
+	const mock = createMockEda(named, '3V3');
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showDcReturn();
+	assert.match(mock.messages.at(-1)!, /U2: A0 is tied to GND but carries no supply current; the return starts at GND\./);
+	assert.ok(mock.logs.some(l => /pin names: \d+ of \d+ component pads named from the netlist/.test(l.message)));
+	assert.ok(mock.logs.some(l => /DC setup:/.test(l.message)));
+});
+
 test('a ground with no copper path from any load is reported in words and gets no contours', async () => {
 	const noGnd = { ...board, pours: board.pours.filter(p => p.net !== 'GND'), tracks: board.tracks.filter(t => t.net !== 'GND'), vias: board.vias.filter(v => v.net !== 'GND') };
 	const mock = createMockEda(noGnd, '3V3');

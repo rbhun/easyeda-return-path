@@ -11,6 +11,7 @@ import {
   parseCurrents,
   railVoltage,
   rect,
+  returnPads,
   solveDc,
   traceStreamlines,
   DRAWN_STREAMS,
@@ -185,6 +186,23 @@ test('source guess: several candidates or conflicting rules → ask; the solve k
   const v5 = g.rails.find((r) => r.net === '5V')!;
   assert.equal(v5.rule, 'ask', 'connector on a rail that is not VIN/VBUS/VBAT: ask');
   assert.deepEqual(v5.candidates.map((c) => c.designator), ['J3']);
+});
+
+test('only ground pins start a return: address pins tied to GND do not; without pin names every GND pad does', () => {
+  const b = partsBoard([
+    ['CN1', 'Header', [['1', '12V'], ['2', 'GND'], ['3', 'SDA'], ['4', 'GND']]],
+    ['U1', 'TCA9548APWR', [['1', 'GND', 'A0'], ['2', 'GND', 'A1'], ['12', 'GND', 'GND'], ['21', 'GND', 'A2'], ['23', 'SDA', 'SDA'], ['24', '3V3', 'VCC']]],
+    ['U2', 'TCA9548APWR', [['1', 'GND'], ['2', 'GND'], ['12', 'GND'], ['23', 'SDA']]],
+    ['U3', 'QFN', [['1', 'SDA', 'SDA'], ['2', 'GND', 'GND'], ['17', 'GND', 'EP']]],
+  ]);
+  const setup = buildDcSetup(b, { rail: 'SDA', ground: 'GND', source: 'CN1', loads: ['U1', 'U2', 'U3'] });
+  const [u1, u2, u3] = setup.loads;
+  assert.deepEqual(u1.groundPads.map((p) => p.pinName), ['GND']);
+  assert.equal(u2.groundPads.length, 3, 'no pin names: every GND pad');
+  assert.deepEqual(u3.groundPads.map((p) => p.pinName), ['GND', 'EP']);
+  assert.ok(setup.warnings.some((w) => /U1: A0, A1, A2 are tied to GND but carry no supply current; the return starts at GND/.test(w)), setup.warnings.join('\n'));
+  assert.ok(setup.warnings.some((w) => /SDA does not look like a power rail/.test(w)));
+  assert.deepEqual(returnPads(b.pads.filter((p) => p.componentId === 'c0'), 'GND').pads.map((p) => p.number), ['c0.2', 'c0.4']);
 });
 
 test('ground pairing by name', () => {

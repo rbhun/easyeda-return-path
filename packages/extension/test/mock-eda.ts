@@ -165,6 +165,15 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			getAll: async () => board.components.map(c => getters({ PrimitiveId: c.id, Designator: c.designator, Name: c.name, X: m(c.at.x), Y: m(c.at.y), Rotation: c.rotation, Layer: c.layer })),
 			getAllPinsByPrimitiveId: async (id: string) => board.pads.filter(p => p.componentId === id).map(padObj),
 		},
+		pcb_Net: {
+			getNetlist: async () => JSON.stringify({
+				version: '2.0.0',
+				components: Object.fromEntries(board.components.map(c => [`gge${c.id}`, {
+					props: { Designator: c.designator },
+					pinInfoMap: Object.fromEntries(board.pads.filter(p => p.componentId === c.id && p.pinName).map(p => [p.number, { name: p.pinName, number: p.number, net: p.net }])),
+				}])),
+			}),
+		},
 		pcb_PrimitivePoured: {
 			getAllPrimitiveId: async () => board.pours.map(p => `${p.id}-fill`),
 			get: async (id: string) => pouredObjs().find(o => o.getState_PrimitiveId() === id),

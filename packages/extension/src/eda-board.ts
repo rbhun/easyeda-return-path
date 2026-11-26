@@ -94,6 +94,69 @@ async function call<T>(name: string, fn: () => Promise<T> | T, timeoutMs = apiTi
 	return withTimeout(fn(), timeoutMs, name);
 }
 
+/**
+ * Schematic pin names by designator, then pad number, from an EasyEDA netlist: components keyed by
+ * id, each with props.Designator and a pinInfoMap of { number, name }. Unknown shapes give none.
+ */
+export function parsePinNames(text: string): Map<string, Map<string, string>> {
+	const out = new Map<string, Map<string, string>>();
+	let doc: unknown;
+	try {
+		doc = JSON.parse(text);
+	}
+	catch {
+		return out;
+	}
+	const obj = (v: unknown) => (v && typeof v === 'object' ? v as Record<string, unknown> : undefined);
+	const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : undefined);
+	const comps = obj(obj(doc)?.components) ?? obj(doc) ?? {};
+	for (const c of Object.values(comps).map(obj)) {
+		const props = obj(c?.props) ?? {};
+		const des = str(props.Designator ?? props.designator ?? c?.designator);
+		const pins = obj(c?.pinInfoMap ?? c?.pins);
+		if (!des || !pins)
+			continue;
+		const names = new Map<string, string>();
+		for (const [key, p] of Object.entries(pins)) {
+			const pin = obj(p);
+			const name = str(pin?.name ?? pin?.pinName);
+			if (name)
+				names.set(str(pin?.number ?? pin?.pinNumber) ?? key, name);
+		}
+		if (names.size)
+			out.set(des, names);
+	}
+	return out;
+}
+
+/** Fills Pad.pinName from the board's netlist, so DC loads return only through their ground pins. */
+export async function addPinNames(board: Board): Promise<number> {
+	let text: string | undefined;
+	try {
+		text = await call('pcb_Net.getNetlist', () => eda.pcb_Net.getNetlist('EasyEDA' as ESYS_NetlistType), apiTimeouts.stackupMs);
+	}
+	catch (e) {
+		log(`pin names: netlist not available (${e instanceof Error ? e.message : String(e)}); every ground pad of a load starts a return`, 'warn');
+		return 0;
+	}
+	const names = parsePinNames(text ?? '');
+	if (!names.size) {
+		log(`pin names: none found in the netlist (${(text ?? '').length} characters, starts ${JSON.stringify((text ?? '').slice(0, 160))}); every ground pad of a load starts a return`, 'warn');
+		return 0;
+	}
+	const designators = new Map(board.components.map(c => [c.id, c.designator]));
+	let n = 0;
+	for (const p of board.pads) {
+		const name = p.componentId ? names.get(designators.get(p.componentId) ?? '')?.get(p.number) : undefined;
+		if (name) {
+			p.pinName = name;
+			n++;
+		}
+	}
+	log(`pin names: ${n} of ${board.pads.filter(p => p.componentId).length} component pads named from the netlist (${names.size} parts)`);
+	return n;
+}
+
 async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 	const copper: CopperLayer[] = [];
 	const dielectrics: Dielectric[] = [];

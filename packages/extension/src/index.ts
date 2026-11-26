@@ -6,7 +6,7 @@
 import { analyzeNetSteps, buildDcSetup, hfApplicability, solveDcSteps, traceStreamlines, DRAWN_STREAMS, type Pad, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
-import { readBoard, selectedNet } from './eda-board';
+import { addPinNames, readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis } from './overlay';
 import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, runSteps, savedLog, saveLogAs, timed, toast } from './runner';
 import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
@@ -108,6 +108,7 @@ export async function runDcReturn(ask: Ask, preferredRail?: string): Promise<voi
 		log(`DC Return Current (v${extensionConfig.version})`);
 		const rail = preferredRail ?? await timed('read selection', selectedNet, n => n ?? 'nothing selected');
 		const board = await timed('read board', readBoard, boardSizes);
+		await addPinNames(board);
 		const wiz = await runDcWizard(board, loggedAsk(ask), rail);
 		if (!wiz)
 			return;

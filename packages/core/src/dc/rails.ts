@@ -264,9 +264,25 @@ export interface DcSetupInput {
   currents?: Record<string, number>;
 }
 
+/** Ground pin names that carry a part's supply current; other ground pads (A0 tied low) carry none. */
+const SUPPLY_GROUND_PIN_RE = /^(?:[ADPS]?GND\w*|V(?:SS|EE)\w*|0V|E?PAD|EP\d*|THERMAL\w*|TAB|SLUG)$/i;
+const isSupplyGroundPin = (name: string) => name.split(/[\s/(),;|]+/).some((tok) => SUPPLY_GROUND_PIN_RE.test(tok));
+
+/**
+ * A part's pads on the ground that carry its return current. With pin names, only ground pins
+ * (GND, VSS, EP…) count, so address and strap pins tied to ground start no return; without names,
+ * or when no name matches, every pad on the ground counts.
+ */
+export function returnPads(pads: Pad[], ground: string): { pads: Pad[]; tied: Pad[] } {
+  const on = pads.filter((p) => p.net === ground);
+  const supply = on.filter((p) => p.pinName && isSupplyGroundPin(p.pinName));
+  if (!supply.length || !on.every((p) => p.pinName)) return { pads: on, tied: [] };
+  return { pads: supply, tied: on.filter((p) => !supply.includes(p)) };
+}
+
 /** Ground pads that close the loop at the source: its own, else those of the nearest part sharing another net with it (a switcher's IC behind its inductor). */
 function sourceGroundPads(board: Board, c: Component, rail: string, ground: string): { pads: Pad[]; from?: { designator: string; net: string } } {
-  const own = padsOf(board, c).filter((p) => p.net === ground);
+  const own = returnPads(padsOf(board, c), ground).pads;
   if (own.length) return { pads: own };
   const otherNets = new Set(padsOf(board, c).map((p) => p.net).filter((n) => n && n !== rail && n !== ground));
   let best: { pads: Pad[]; from?: { designator: string; net: string } } = { pads: [] };
@@ -274,7 +290,7 @@ function sourceGroundPads(board: Board, c: Component, rail: string, ground: stri
   for (const n of otherNets) {
     for (const o of componentsOnNet(board, n)) {
       if (o.id === c.id) continue;
-      const g = padsOf(board, o).filter((p) => p.net === ground);
+      const g = returnPads(padsOf(board, o), ground).pads;
       const d = dist(o.at, c.at);
       if (g.length && d < bestD) {
         best = { pads: g, from: { designator: o.designator, net: n } };
@@ -298,6 +314,8 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
       })
     : loadsFor(board, input.rail, src.id, (guessRails(board).rails.find((r) => r.net === input.rail)?.candidates ?? []).map((x) => x.componentId)).loads.map((l) => find(l.componentId)!);
 
+  if (!looksLikePowerNet(input.rail) && !board.pours.some((p) => p.net === input.rail))
+    warnings.push(`${input.rail} does not look like a power rail. The DC view treats ${src.designator} as a supply whose current the loads draw at their ${input.rail} pins and return through their ${input.ground} pins; for a signal's return path use Show for Selected Net.`);
   const srcRail = padsOf(board, src).filter((p) => p.net === input.rail);
   if (!srcRail.length) throw new Error(`source ${src.designator} has no pad on ${input.rail}`);
   const { pads: srcGnd, from } = sourceGroundPads(board, src, input.rail, input.ground);
@@ -310,7 +328,9 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
   const restTotal = normalised ? 1 : 0;
   const loads: DcTerminal[] = loadComps.map((c) => {
     const railPads = padsOf(board, c).filter((p) => p.net === input.rail);
-    const groundPads = padsOf(board, c).filter((p) => p.net === input.ground);
+    const { pads: groundPads, tied } = returnPads(padsOf(board, c), input.ground);
+    if (tied.length)
+      warnings.push(`${c.designator}: ${tied.map((p) => p.pinName).join(', ')} ${tied.length > 1 ? 'are' : 'is'} tied to ${input.ground} but carr${tied.length > 1 ? 'y' : 'ies'} no supply current; the return starts at ${groundPads.map((p) => p.pinName).join(', ')}.`);
     if (!railPads.length) warnings.push(`Load ${c.designator} has no pad on ${input.rail}.`);
     if (!groundPads.length) warnings.push(`Load ${c.designator} has no ${input.ground} pad; its return current is not modelled.`);
     const current = currents[c.designator] ?? (rest ? restTotal / rest : 0);
