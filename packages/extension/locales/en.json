@@ -64,5 +64,8 @@
 	"Run folder": "Run folder",
 	"Folder for the run files (absolute path). Leave empty for the default.": "Folder for the run files (absolute path). Leave empty for the default.",
 	"Each analysis now writes its .log and .results.json to: ${1}": "Each analysis now writes its .log and .results.json to: ${1}",
-	"Run files need file access: allow \"External Interaction\" for this extension in Advanced > Extension Manager (desktop client).": "Run files need file access: allow \"External Interaction\" for this extension in Advanced > Extension Manager (desktop client)."
+	"Run files need file access: allow \"External Interaction\" for this extension in Advanced > Extension Manager (desktop client).": "Run files need file access: allow \"External Interaction\" for this extension in Advanced > Extension Manager (desktop client).",
+	"Select all": "Select all",
+	"OK": "OK",
+	"${1} of ${2} selected": "${1} of ${2} selected"
 }

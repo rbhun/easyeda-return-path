@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<title>Return Path</title>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<style>
+			:root {
+				color-scheme: dark;
+				--bg: #1e1f22;
+				--panel: #2b2d31;
+				--line: #3c3f45;
+				--text: #e3e5e8;
+				--muted: #9aa0a6;
+				--accent: #4f8cff;
+			}
+			* { box-sizing: border-box; }
+			html, body { height: 100%; }
+			body {
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+				margin: 0;
+				padding: 10px;
+				background: var(--bg);
+				color: var(--text);
+				font: 12px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+			}
+			#prompt { margin: 0; }
+			.all {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				padding: 4px 8px;
+				border-bottom: 1px solid var(--line);
+			}
+			#list {
+				flex: 1 1 auto;
+				min-height: 60px;
+				margin: 0;
+				padding: 4px 0;
+				overflow: auto;
+				list-style: none;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+			}
+			label { display: flex; align-items: center; gap: 8px; padding: 3px 8px; cursor: pointer; }
+			label:hover { background: #33363b; }
+			input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+			.muted { color: var(--muted); }
+			.buttons { display: flex; justify-content: flex-end; gap: 6px; flex: 0 0 auto; }
+			button {
+				min-width: 80px;
+				padding: 6px 12px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+				color: var(--text);
+				font: inherit;
+				cursor: pointer;
+			}
+			button:hover:not(:disabled) { border-color: var(--accent); }
+			button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+			button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+			button:disabled { opacity: 0.45; cursor: default; }
+		</style>
+	</head>
+	<body>
+		<p id="prompt" class="muted">Connecting to the extension…</p>
+		<div class="all">
+			<label style="padding: 0"><input type="checkbox" id="all" /> <span id="allLabel">Select all</span></label>
+			<span id="count" class="muted"></span>
+		</div>
+		<ul id="list"></ul>
+		<div class="buttons">
+			<button id="cancel">Cancel</button>
+			<button id="ok" class="primary" disabled>OK</button>
+		</div>
+
+		<script>
+			(function () {
+				var api = window.eda || (window.parent && window.parent.eda);
+				var ASK = 'returnpath.picker.ask';
+				var REPLY = 'returnpath.picker.reply';
+				var $ = function (id) { return document.getElementById(id); };
+				var q = null;
+				var boxes = [];
+
+				function send(message) {
+					if (api && api.sys_MessageBus) api.sys_MessageBus.publish(REPLY, message);
+				}
+
+				function update() {
+					var n = boxes.filter(function (b) { return b.checked; }).length;
+					$('all').checked = n === boxes.length && n > 0;
+					$('all').indeterminate = n > 0 && n < boxes.length;
+					$('count').textContent = q.labels.count.replace('${1}', n).replace('${2}', boxes.length);
+					$('ok').disabled = n === 0;
+				}
+
+				function show(question) {
+					if (q && q.id === question.id) return;
+					q = question;
+					document.title = q.title;
+					$('prompt').textContent = q.prompt;
+					$('prompt').classList.remove('muted');
+					$('allLabel').textContent = q.labels.all;
+					$('ok').textContent = q.labels.ok;
+					$('cancel').textContent = q.labels.cancel;
+					var list = $('list');
+					list.textContent = '';
+					boxes = q.options.map(function (o) {
+						var li = document.createElement('li');
+						var label = document.createElement('label');
+						var box = document.createElement('input');
+						box.type = 'checkbox';
+						box.value = o.value;
+						box.checked = q.selected.indexOf(o.value) >= 0;
+						box.onchange = update;
+						label.appendChild(box);
+						label.appendChild(document.createTextNode(o.label));
+						li.appendChild(label);
+						list.appendChild(li);
+						return box;
+					});
+					update();
+					$('ok').focus();
+				}
+
+				$('all').onchange = function () {
+					var on = $('all').checked;
+					boxes.forEach(function (b) { b.checked = on; });
+					update();
+				};
+				$('ok').onclick = function () {
+					if (!q) return;
+					send({ cmd: 'answer', id: q.id, values: boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; }) });
+				};
+				$('cancel').onclick = function () {
+					if (q) send({ cmd: 'cancel', id: q.id });
+				};
+				document.addEventListener('keydown', function (e) {
+					if (e.key === 'Escape') $('cancel').click();
+					if (e.key === 'Enter' && !$('ok').disabled && e.target.tagName !== 'BUTTON') $('ok').click();
+				});
+
+				if (!api || !api.sys_MessageBus) {
+					$('prompt').textContent = 'This window cannot reach the EasyEDA API; close it to use the system dialog.';
+					return;
+				}
+				api.sys_MessageBus.subscribe(ASK, show);
+				send({ cmd: 'hello' });
+			})();
+		</script>
+	</body>
+</html>

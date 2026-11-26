@@ -81,6 +81,42 @@ function copperMm(t: number, warnings: string[]): number | undefined {
 	return undefined;
 }
 
+type PartState = Partial<Record<'getState_Name' | 'getState_Manufacturer' | 'getState_ManufacturerId' | 'getState_Supplier' | 'getState_SupplierId', () => string | undefined>> & {
+	getState_OtherProperty?: () => Record<string, string | number | boolean> | undefined;
+};
+
+/**
+ * The part's name with attribute references filled in. EasyEDA gives names such as "={Value}" or
+ * "={Manufacturer Part}", which point at the part's attributes; undefined when nothing is known.
+ */
+export function partName(c: PartState): string | undefined {
+	const name = c.getState_Name?.()?.trim();
+	if (!name?.startsWith('='))
+		return name || undefined;
+	let props: Record<string, string | number | boolean> = {};
+	try {
+		props = c.getState_OtherProperty?.() ?? {};
+	}
+	catch {}
+	const norm = (k: string) => k.toLowerCase().replace(/[\s_-]/g, '');
+	const builtIn: Record<string, string | undefined> = {
+		manufacturer: c.getState_Manufacturer?.(),
+		manufacturerpart: c.getState_ManufacturerId?.(),
+		manufacturerid: c.getState_ManufacturerId?.(),
+		supplier: c.getState_Supplier?.(),
+		supplierpart: c.getState_SupplierId?.(),
+		supplierid: c.getState_SupplierId?.(),
+	};
+	const attr = (key: string) => {
+		const k = norm(key);
+		const hit = Object.entries(props).find(([p]) => norm(p) === k)?.[1];
+		return hit !== undefined && String(hit).trim() ? String(hit).trim() : builtIn[k]?.trim() || undefined;
+	};
+	let missing = false;
+	const text = name.slice(1).replace(/\{([^}]*)\}/g, (_, key: string) => attr(key) ?? (missing = true, '')).trim();
+	return missing && !text ? undefined : text || undefined;
+}
+
 /** Time limits for API calls; tests shorten them. */
 export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, pinsMs: 20_000, pouredTotalMs: 20_000, pouredSlowMs: 3_000, decodeMs: 10_000 };
 
@@ -643,7 +679,7 @@ export async function readBoard(): Promise<Board> {
 		components.push({
 			id,
 			designator: c.getState_Designator() ?? id,
-			name: c.getState_Name(),
+			name: partName(c),
 			at: conv(c.getState_X(), c.getState_Y()),
 			rotation: c.getState_Rotation(),
 			layer: c.getState_Layer() as number,
