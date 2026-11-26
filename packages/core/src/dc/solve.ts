@@ -554,8 +554,9 @@ function* solveNetField(
       const inj = live[k];
       const rhs = new Float64Array(N);
       for (const n of inj.nodes) rhs[n] = inj.share;
-      // The line only needs the direction of the flow, which settles long before the drop's tolerance.
-      const one = yield* runCg(rhs, (1 + k) / (1 + live.length), (2 + k) / (1 + live.length), 1e-2, 400);
+      // Direction only, so this stops at 1e-2 while the drop above stays tight. It still has to be
+      // allowed to get there: cutting it off early leaves a line around a slot short of the source.
+      const one = yield* runCg(rhs, (1 + k) / (1 + live.length), (2 + k) / (1 + live.length), 1e-2, 2000);
       const own = fieldsOf(one.x, false);
       const lc = loadCells.find((l) => l.designator === inj.designator);
       if (lc) lc.own = { layers: own.layers, vias: own.vias, fullScale: own.fullScale };

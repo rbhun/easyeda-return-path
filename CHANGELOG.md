@@ -8,6 +8,7 @@ From Balazs: on the R-Com dongle the +12V ground return from U4 swept down acros
 
 - **Each line is that part's own current.** The line used to follow the sum of every ticked load at once. On a solid pour that sum bends: current spreading from the other parts (the 12V capacitors, each given a current when ticked) pulls the line off the straight path and it only meets the source after a loop down the pour. Nothing is in the way. The drop and the bottleneck are still for every ticked part together; only the lines changed. A part with no other loads draws the same line as before.
 - Core test: two loads on one solid rectangle, the far load's line stays within 3 mm of the straight line to the source.
+- A load's own line is solved far enough to go round a slot. Stopping that solve early left the line short of the source.
 
 ## [0.1.60] - 2026-11-26
 

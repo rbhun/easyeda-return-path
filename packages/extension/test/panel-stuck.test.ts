@@ -29,7 +29,7 @@ panelTimeouts.cancelMs = 100;
 
 const settle = async (until: () => boolean) => {
 	// A DC check solves each load on its own after the combined field, so a run takes longer than the button wait used to allow.
-	for (let i = 0; i < 1200 && !until(); i++)
+	for (let i = 0; i < 4000 && !until(); i++)
 		await new Promise(r => setTimeout(r, 10));
 };
 
