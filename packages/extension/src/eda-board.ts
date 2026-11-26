@@ -73,6 +73,27 @@ export async function selectedNet(): Promise<string | undefined> {
 	return undefined;
 }
 
+export interface SelectedPart {
+	kind: 'pad' | 'component';
+	/** Primitive id: the pad's id in the board read, or the component's. */
+	id: string;
+}
+
+/** The pad or part when exactly one is selected; undefined for anything else. */
+export async function selectedPart(): Promise<SelectedPart | undefined> {
+	const selected = await eda.pcb_SelectControl.getAllSelectedPrimitives();
+	if (selected?.length !== 1)
+		return undefined;
+	const p = selected[0] as { getState_PrimitiveType?: () => string | undefined; getState_PrimitiveId?: () => string | undefined };
+	const type = p.getState_PrimitiveType?.();
+	const id = p.getState_PrimitiveId?.();
+	if (!id)
+		return undefined;
+	if (type === 'ComponentPad' || type === 'Pad')
+		return { kind: 'pad', id };
+	return type === 'Component' ? { kind: 'component', id } : undefined;
+}
+
 /** Copper foil thickness in the stackup unit; values outside 5–210 µm are taken for a unit mix-up and dropped. */
 function copperMm(t: number, warnings: string[]): number | undefined {
 	if (!(t > 0))

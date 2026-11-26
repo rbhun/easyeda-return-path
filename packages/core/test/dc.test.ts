@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  focusInput,
   buildDcSetup,
   densityBin,
   densityContours,
@@ -265,6 +266,19 @@ test('drawn streamlines: one per load, later ones end where they meet an earlier
   const gap = Math.min(...first.slice(1).map((q, i) => distPointSeg(second[0], first[i], q)));
   assert.ok(gap < 0.2, `on the first (${gap.toFixed(3)} mm away)`);
   assert.ok(Math.abs(second.at(-1)!.x - 19.8) < 0.3, 'and ends at its load');
+  // It leaves the first along it, not at a corner.
+  const k = first.slice(1).reduce((best, q, i) => (distPointSeg(second[0], first[i], q) < distPointSeg(second[0], first[best], first[best + 1]) ? i : best), 0);
+  const along = { x: first[k + 1].x - first[k].x, y: first[k + 1].y - first[k].y };
+  const off = second.find((q) => Math.hypot(q.x - second[0].x, q.y - second[0].y) > 0.3)!;
+  const away = { x: off.x - second[0].x, y: off.y - second[0].y };
+  const angle = (Math.acos((along.x * away.x + along.y * away.y) / Math.hypot(along.x, along.y) / Math.hypot(away.x, away.y)) * 180) / Math.PI;
+  assert.ok(angle < 30, `joins at ${angle.toFixed(0)}° to the first`);
+});
+
+test('focusInput: one part of the rail, with its own current when one was given', () => {
+  const input = { rail: '3V3', ground: 'GND', source: 'U1', loads: ['U2', 'U3'], currents: { U2: 0.15, U3: 0.02 } };
+  assert.deepEqual(focusInput(input, 'U3'), { rail: '3V3', ground: 'GND', source: 'U1', loads: ['U3'], currents: { U3: 0.02 } });
+  assert.deepEqual(focusInput({ ...input, currents: undefined }, 'U2'), { rail: '3V3', ground: 'GND', source: 'U1', loads: ['U2'] }, 'none given: per amp');
 });
 
 /** Length over chord of each drawn piece, and the layers in order. */

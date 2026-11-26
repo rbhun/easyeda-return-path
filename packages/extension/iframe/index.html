@@ -110,7 +110,7 @@
 		</div>
 		<div class="row" style="margin-top: 6px">
 			<button id="rerun" title="Read the board again and repeat the last analysis, without the wizard">Rerun last</button>
-			<button id="trace" title="The check that fits the selected track, via or pad: HF for a signal net, DC for a power rail. While an analysis runs, this button cancels it.">Selected trace</button>
+			<button id="trace" title="The check that fits the selected track, via or pad: HF for a signal net, DC for a power rail. With a pad or part selected, DC shows only that part's current. While an analysis runs, this button cancels it.">Selected trace</button>
 		</div>
 		<p id="lastRun" class="muted" style="margin: 6px 0 0"></p>
 
@@ -160,7 +160,12 @@
 					$('state').querySelector('b').textContent = s.busy || (s.leftover ? 'left by v' + s.leftover : { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay]);
 					['hf', 'dc', 'rerun', 'toggle', 'clear'].forEach(function (id) { $(id).disabled = !!s.busy; });
 					$('trace').textContent = s.busy ? 'Cancel' : 'Selected trace';
-					$('rerun').disabled = !!s.busy || !s.lastRun;
+					var sel = s.selection;
+					$('rerun').textContent = sel ? (sel.kind === 'pad' ? 'Rerun for single pad' : 'Rerun for single part') : 'Rerun last';
+					$('rerun').title = sel
+						? 'Focus on ' + sel.label + ': solve and draw only the current of that part (on a signal pad: the HF check of its net)'
+						: 'Read the board again and repeat the last analysis, without the wizard';
+					$('rerun').disabled = !!s.busy || (!s.lastRun && !sel);
 					$('toggle').disabled = !!s.busy || s.overlay === 'none';
 					$('toggle').textContent = s.overlay === 'hidden' ? 'Show' : 'Hide';
 					// Markers drawn before an update are not always known here, so Clear stays available.
