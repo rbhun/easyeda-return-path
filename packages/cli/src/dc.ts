@@ -1,10 +1,12 @@
 // `returnpath --dc <rail>`: wizard step 1 without the dialogs (guess, overridable by flags), the DC
 // solve, and the renders. Pure apart from the returned file list; cli.ts does the writing.
-import { buildDcSetup, DRAWN_STREAMS, guessRails, parseCurrents, solveDc, traceStreamlines, type Board, type DcResult, type RailsGuess, type Streamline } from '@returnpath/core';
+import { buildDcSetup, DRAWN_STREAMS, guessRails, parseCurrents, railLabel, solveDc, traceStreamlines, type Board, type DcResult, type RailsGuess, type Streamline } from '@returnpath/core';
 import { renderDc } from './render/dc-svg.js';
 
 export interface DcCliOptions {
   rail: string;
+  /** Further nets of the same rail (`--dc VBUS_R,VBUS_RAW`). */
+  railNets?: string[];
   ground?: string;
   source?: string;
   loads?: string[];
@@ -38,7 +40,7 @@ export function runDc(board: Board, o: DcCliOptions): DcRun {
     const cands = guess?.candidates.map((c) => c.designator).join(', ');
     throw new Error(`${guess?.askReason ?? `no source guessed for ${o.rail}.`} Pass --source${cands ? ` (candidates: ${cands})` : ''}.`);
   }
-  const setup = buildDcSetup(board, { rail: o.rail, ground, source, loads: o.loads, currents: parseCurrents(o.currents) });
+  const setup = buildDcSetup(board, { rail: o.rail, railNets: o.railNets, ground, source, loads: o.loads, currents: parseCurrents(o.currents) });
   const result = solveDc(board, setup, o.cell ? { cell: o.cell } : {});
   return {
     result,
@@ -51,7 +53,7 @@ export function dcViews(board: Board, run: DcRun, fileLabel: string): { suffix: 
   const { result } = run;
   const layerName = (id: number) => board.stackup.copper.find((l) => l.id === id)?.name ?? `L${id}`;
   const slug = (s: string) => s.toLowerCase().replace(/\W+/g, '');
-  const views = [{ suffix: 'overview', svg: renderDc(board, result, { title: `DC ${result.setup.rail} / ${result.setup.ground}: overview (${fileLabel})`, streamlines: run.streamlines }) }];
+  const views = [{ suffix: 'overview', svg: renderDc(board, result, { title: `DC ${railLabel(result.setup)} / ${result.setup.ground}: overview (${fileLabel})`, streamlines: run.streamlines }) }];
   for (const net of [result.supply, result.ret]) {
     if (!net) continue;
     const total = net.layers.reduce((a, l) => a + l.flow, 0) || 1;
@@ -85,6 +87,7 @@ export function dcReport(board: Board, run: DcRun) {
     };
   return {
     rail: r.setup.rail,
+    ...(r.setup.railNets && r.setup.railNets.length > 1 ? { railNets: r.setup.railNets, bridges: (r.setup.bridges ?? []).map((b) => b.designator) } : {}),
     ground: r.setup.ground,
     source: r.setup.source.designator,
     loads: r.setup.loads.map((l) => ({ designator: l.designator, currentA: r3(l.current) })),

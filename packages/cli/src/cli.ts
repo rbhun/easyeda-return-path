@@ -39,7 +39,7 @@ if (values.help || !file) {
   console.log(`Usage: returnpath <board.epro|board.epro2|board.epcb> --net CLK [--out dir] [--name prefix] [--png]
        [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets] [--driver U1[,U2]] [--speed 400k] [--force] [--verbose]
        returnpath <board> --list-rails
-       returnpath <board> --dc 3V3 [--ground GND] [--source U1] [--loads U2,U3] [--current U2=0.15,U3=20mA]
+       returnpath <board> --dc 3V3[,MORE_NETS] [--ground GND] [--source U1] [--loads U2,U3] [--current U2=0.15,U3=20mA]
        [--cell mm] [--out dir] [--name prefix] [--png]`);
   process.exit(file ? 0 : 1);
 }
@@ -62,7 +62,8 @@ if (values['list-rails']) {
 if (values.dc) {
   let run;
   try {
-    run = runDc(board, { rail: values.dc, ground: values.ground, source: values.source, loads: values.loads?.split(',').map((s) => s.trim()).filter(Boolean), currents: values.current, cell: values.cell ? Number(values.cell) : undefined });
+    const [rail, ...railNets] = values.dc.split(',').map((s) => s.trim()).filter(Boolean);
+    run = runDc(board, { rail, railNets, ground: values.ground, source: values.source, loads: values.loads?.split(',').map((s) => s.trim()).filter(Boolean), currents: values.current, cell: values.cell ? Number(values.cell) : undefined });
   } catch (e) {
     console.error(`error: ${e instanceof Error ? e.message : e}`);
     process.exit(2);

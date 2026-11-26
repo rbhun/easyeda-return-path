@@ -246,8 +246,18 @@ export interface DcTerminal {
   current: number;
 }
 
+/** A part with pads on two or more nets of one rail (a fuse, ferrite, series diode): it joins them. */
+export interface DcBridge {
+  designator: string;
+  /** Its pads on the rail's nets. */
+  pads: Pad[];
+}
+
 export interface DcSetup {
   rail: string;
+  /** Every net of the rail, `rail` first: further nets join it through the bridges (default: `rail` alone). */
+  railNets?: string[];
+  bridges?: DcBridge[];
   ground: string;
   source: DcTerminal;
   loads: DcTerminal[];
@@ -258,6 +268,8 @@ export interface DcSetup {
 
 export interface DcSetupInput {
   rail: string;
+  /** Further nets of the same rail, joined to it through the parts between them (VBUS_R → fuse → VBUS_RAW). */
+  railNets?: string[];
   ground: string;
   /** Designator or component id of the active source. */
   source: string;
@@ -304,23 +316,105 @@ function sourceGroundPads(board: Board, c: Component, rail: string, ground: stri
   return best;
 }
 
+/** The rail's nets, `rail` first, without repeats. */
+export function railNetsOf(input: Pick<DcSetupInput, 'rail' | 'railNets'>): string[] {
+  return [...new Set([input.rail, ...(input.railNets ?? [])].filter(Boolean))];
+}
+
+/** "VBUS_R + VBUS_RAW" for a rail of several nets. */
+export function railLabel(input: Pick<DcSetupInput, 'rail' | 'railNets'>): string {
+  return railNetsOf(input).join(' + ');
+}
+
+/** Parts with pads on two or more of the nets: they carry the rail's current from one net to the next. */
+export function railBridges(board: Board, nets: string[]): DcBridge[] {
+  if (nets.length < 2) return [];
+  const out: DcBridge[] = [];
+  for (const c of board.components) {
+    const pads = padsOf(board, c).filter((p) => nets.includes(p.net));
+    if (new Set(pads.map((p) => p.net)).size >= 2) out.push({ designator: c.designator, pads });
+  }
+  return out;
+}
+
+/** Two-pad parts that pass a rail's current on to another net: fuses, ferrites, inductors, diodes, resistors (a 0 Ω link or shunt). */
+const SERIES_DES_RE = /^(?:F|FB|L|D|R)\d/i;
+
+/**
+ * Nets that continue a rail through a series part (VBUS_R → fuse → VBUS_RAW → diode → VBUS), the
+ * candidates to solve with it as one rail: power-like nets (by name or pour) reached through
+ * two-pad series parts, also further along, each with the part it is reached through.
+ */
+export function railNeighbours(board: Board, rail: string): { net: string; via: string }[] {
+  const pourNets = new Set(board.pours.map((p) => p.net));
+  const powerLike = (n: string) => !!n && !isGroundNet(n) && (looksLikePowerNet(n) || pourNets.has(n));
+  const out: { net: string; via: string }[] = [];
+  const seen = new Set([rail]);
+  for (let k = 0; k < seen.size; k++) {
+    const from = [...seen][k];
+    for (const c of componentsOnNet(board, from)) {
+      if (!SERIES_DES_RE.test(c.designator)) continue;
+      const pads = padsOf(board, c);
+      const nets = [...new Set(pads.map((p) => p.net))];
+      if (pads.length !== 2 || nets.length !== 2) continue;
+      const other = nets.find((n) => n !== from)!;
+      if (seen.has(other) || !powerLike(other)) continue;
+      seen.add(other);
+      out.push({ net: other, via: c.designator });
+    }
+  }
+  return out;
+}
+
+/** loadsFor() over every net of the rail, without the parts that bridge its nets. */
+export function railLoadsFor(board: Board, nets: string[], sourceId: string | undefined, candidateIds: string[]): { loads: LoadGuess[]; excluded: RailGuess['excluded'] } {
+  const bridges = new Set(railBridges(board, nets).map((b) => b.designator));
+  const loads: LoadGuess[] = [];
+  const excluded: RailGuess['excluded'] = [...bridges].map((d) => ({ designator: d, why: `joins ${nets.join(' and ')}` }));
+  const seen = new Set<string>([...bridges]);
+  for (const n of nets) {
+    const r = loadsFor(board, n, sourceId, candidateIds);
+    for (const l of r.loads) if (!seen.has(l.designator)) (seen.add(l.designator), loads.push(l));
+    for (const e of r.excluded) if (!seen.has(e.designator)) (seen.add(e.designator), excluded.push(e));
+  }
+  return { loads, excluded };
+}
+
 export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
   const warnings: string[] = [];
+  const nets = railNetsOf(input);
+  const label = railLabel(input);
+  const onRail = (p: Pad) => nets.includes(p.net);
   const find = (key: string) => board.components.find((c) => c.designator === key || c.id === key);
   const src = find(input.source);
   if (!src) throw new Error(`source "${input.source}" not found`);
+  const bridges = railBridges(board, nets);
   const loadComps = input.loads
     ? input.loads.map((k) => {
         const c = find(k);
         if (!c) throw new Error(`load "${k}" not found`);
         return c;
       })
-    : loadsFor(board, input.rail, src.id, (guessRails(board).rails.find((r) => r.net === input.rail)?.candidates ?? []).map((x) => x.componentId)).loads.map((l) => find(l.componentId)!);
+    : railLoadsFor(board, nets, src.id, guessRails(board).rails.filter((r) => nets.includes(r.net)).flatMap((r) => r.candidates.map((x) => x.componentId))).loads.map((l) => find(l.componentId)!);
 
-  if (!looksLikePowerNet(input.rail) && !board.pours.some((p) => p.net === input.rail))
-    warnings.push(`${input.rail} does not look like a power rail. The DC view treats ${src.designator} as a supply whose current the loads draw at their ${input.rail} pins and return through their ${input.ground} pins; for a signal's return path use Show for Selected Net.`);
-  const srcRail = padsOf(board, src).filter((p) => p.net === input.rail);
-  if (!srcRail.length) throw new Error(`source ${src.designator} has no pad on ${input.rail}`);
+  for (const n of nets)
+    if (!looksLikePowerNet(n) && !board.pours.some((p) => p.net === n))
+      warnings.push(`${n} does not look like a power rail. The DC view treats ${src.designator} as a supply whose current the loads draw at their ${label} pins and return through their ${input.ground} pins; for a signal's return path use Show for Selected Net.`);
+  if (nets.length > 1) {
+    if (bridges.length) warnings.push(`${bridges.map((b) => b.designator).join(', ')} join${bridges.length > 1 ? '' : 's'} ${label}, taken as a short: ${bridges.length > 1 ? 'their' : 'its'} own drop is not included.`);
+    const linked = new Set([nets[0]]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const b of bridges) {
+        const ns = b.pads.map((p) => p.net);
+        if (ns.some((n) => linked.has(n)) && ns.some((n) => !linked.has(n))) (ns.forEach((n) => linked.add(n)), (grew = true));
+      }
+    }
+    const apart = nets.filter((n) => !linked.has(n));
+    if (apart.length) warnings.push(`No part joins ${apart.join(', ')} to ${nets[0]}; their copper is solved as part of the rail but carries current only where it touches.`);
+  }
+  const srcRail = padsOf(board, src).filter(onRail);
+  if (!srcRail.length) throw new Error(`source ${src.designator} has no pad on ${label}`);
   const { pads: srcGnd, from } = sourceGroundPads(board, src, input.rail, input.ground);
   if (!srcGnd.length) warnings.push(`Source ${src.designator} has no ${input.ground} pad nearby; the return half is not solved.`);
   else if (from) warnings.push(`Source ${src.designator} has no ${input.ground} pad; the return ends at the ${input.ground} pads of ${from.designator}, the nearest part on ${from.net}.`);
@@ -330,11 +424,11 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
   const rest = loadComps.length - given.length;
   const restTotal = normalised ? 1 : 0;
   const loads: DcTerminal[] = loadComps.map((c) => {
-    const railPads = padsOf(board, c).filter((p) => p.net === input.rail);
+    const railPads = padsOf(board, c).filter(onRail);
     const { pads: groundPads, tied } = returnPads(padsOf(board, c), input.ground);
     if (tied.length)
       warnings.push(`${c.designator}: ${tied.map((p) => p.pinName).join(', ')} ${tied.length > 1 ? 'are' : 'is'} tied to ${input.ground} but carr${tied.length > 1 ? 'y' : 'ies'} no supply current; the return starts at ${groundPads.map((p) => p.pinName).join(', ')}.`);
-    if (!railPads.length) warnings.push(`Load ${c.designator} has no pad on ${input.rail}.`);
+    if (!railPads.length) warnings.push(`Load ${c.designator} has no pad on ${label}.`);
     if (!groundPads.length) warnings.push(`Load ${c.designator} has no ${input.ground} pad; its return current is not modelled.`);
     const current = currents[c.designator] ?? (rest ? restTotal / rest : 0);
     return { componentId: c.id, designator: c.designator, railPads, groundPads, current };
@@ -343,6 +437,8 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
     warnings.push(`No current given for ${loadComps.filter((c) => currents[c.designator] === undefined).map((c) => c.designator).join(', ')}; they draw 0 A.`);
   return {
     rail: input.rail,
+    railNets: nets,
+    bridges,
     ground: input.ground,
     source: { componentId: src.id, designator: src.designator, railPads: srcRail, groundPads: srcGnd, current: 0 },
     loads,
@@ -357,7 +453,7 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
  */
 export function focusInput(input: DcSetupInput, designator: string): DcSetupInput {
   const current = input.currents?.[designator];
-  return { rail: input.rail, ground: input.ground, source: input.source, loads: [designator], ...(current !== undefined ? { currents: { [designator]: current } } : {}) };
+  return { rail: input.rail, ...(input.railNets?.length ? { railNets: input.railNets } : {}), ground: input.ground, source: input.source, loads: [designator], ...(current !== undefined ? { currents: { [designator]: current } } : {}) };
 }
 
 /** "U2=0.15, U3=20mA" → { U2: 0.15, U3: 0.02 } (A). Empty → undefined (equal split). */

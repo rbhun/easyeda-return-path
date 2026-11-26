@@ -99,6 +99,11 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   const byLayer = new Map(r.layers.map((f) => [f.layer, f]));
   const viaAt = new Map<number, (typeof r.vias)[number]>();
   for (const v of r.vias) if (v.cell >= 0) viaAt.set(v.cell, v);
+  /** Pad cells of the parts joining a rail's nets, by layer and cell: the part and which side. */
+  const bridgeAt = new Map<string, { bridge: number; side: number }>();
+  (r.bridges ?? []).forEach((br, bi) => br.sides.forEach((sd, si) => {
+    for (const [layer, cells] of sd.cells) for (const c of cells) bridgeAt.set(`${layer}:${c}`, { bridge: bi, side: si });
+  }));
   const step = g.cell * 0.4;
   const out: Streamline[] = [];
   /** Streamlines closer than this (cells) are drawn as one. */
@@ -145,6 +150,7 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   function trace(load: string, layer: number, start: Pt): Streamline {
     const segments: StreamSegment[] = [{ layer, pts: [start] }];
     const usedVias = new Set<string>();
+    const usedBridges = new Set<number>();
     let p = start;
     let f = byLayer.get(layer)!;
     let complete = false;
@@ -165,6 +171,37 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
           pts.push(...join(pts, p, hit).slice(1));
           complete = true;
           break;
+        }
+      }
+      const onBridge = bridgeAt.get(`${layer}:${c}`);
+      if (onBridge && !usedBridges.has(onBridge.bridge)) {
+        // The current reaches this pad through the part from its other side: carry on from there.
+        usedBridges.add(onBridge.bridge);
+        const br = r.bridges[onBridge.bridge];
+        const level = (sd: (typeof br.sides)[number]) => {
+          let best: { layer: number; c: number; v: number } | undefined;
+          for (const [l, cs] of sd.cells) for (const cc of cs) {
+            const v = dir * (byLayer.get(l)?.v[cc] ?? NaN);
+            if (isFinite(v) && (!best || v < best.v)) best = { layer: l, c: cc, v };
+          }
+          return best;
+        };
+        const here = level(br.sides[onBridge.side]);
+        const next = br.sides.map((sd, si) => ({ si, lv: si === onBridge.side ? undefined : level(sd) })).filter((x) => x.lv && (!here || x.lv.v < here.v)).sort((a, b) => a.lv!.v - b.lv!.v)[0];
+        if (next) {
+          const from = br.sides[onBridge.side].at;
+          const to = br.sides[next.si].at;
+          // Drawn straight across the part, so the line shows the current passing through it.
+          segments[segments.length - 1].pts.push(from, to);
+          p = to;
+          if (next.lv!.layer !== layer) {
+            layer = next.lv!.layer;
+            f = byLayer.get(layer)!;
+            segments.push({ layer, pts: [p] });
+          }
+          stall = 0;
+          lastCell = -1;
+          continue;
         }
       }
       const via = viaAt.get(c);

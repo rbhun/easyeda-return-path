@@ -4,7 +4,7 @@
 // the system dialogs when that window cannot be used.
 import { checkpoint, log } from './runner';
 import { askInWindow, BACK, closeWizardWindow, type WizardKind } from './wizard-window';
-import { componentsOnNet, emptyBoardInfo, guessRails, infoRails, loadsFor, parseCurrents, parseHz, railInfo, withRail, type Board, type BoardInfo, type DcSetupInput, type RailGuess } from '@returnpath/core';
+import { componentsOnNet, emptyBoardInfo, guessRails, infoRails, parseCurrents, parseHz, railBridges, railInfo, railLabel, railLoadsFor, railNeighbours, withRail, type Board, type BoardInfo, type DcSetupInput, type RailGuess } from '@returnpath/core';
 import { t } from './i18n';
 
 export interface Option {
@@ -302,8 +302,26 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	}
 	const g: RailGuess = byNet.get(rail) ?? { net: rail, reason: 'name', candidates: [], rule: 'ask', loads: [], excluded: [], askReason: t('${1} was not guessed as a rail: pick its source.', rail) };
 
+	// Nets the rail continues on through a fuse, ferrite, diode…, solved with it as one rail; asked only when there are any.
+	const neighbours = railNeighbours(board, rail);
+	let railNets: string[] = [];
+	if (neighbours.length) {
+		const before = previous?.rail === rail ? (previous.railNets ?? []).filter(n => neighbours.some(x => x.net === n)) : undefined;
+		const joined = await ask.multi(title, t('${1} continues through series parts to the nets below. Ticked nets are solved with it as one rail, the parts between them taken as shorts; untick all to solve ${1} alone.', rail), neighbours.map(x => ({ value: x.net, label: t('${1} (through ${2})', x.net, x.via) })), before ?? neighbours.map(x => x.net));
+		if (!joined)
+			return undefined;
+		railNets = joined;
+		log(`wizard: ${rail} solved together with ${railNets.join(', ') || 'no other net'}`);
+	}
+	const group = [rail, ...railNets];
+	const label = railLabel({ rail, railNets });
+	const bridges = new Set(railBridges(board, group).map(b => b.designator));
+
 	// 4. Source: one active source; other candidates are left out of the solve (D7).
-	const onRail = componentsOnNet(board, rail);
+	const onRail = [...new Map(group.flatMap(n => componentsOnNet(board, n)).map(c => [c.id, c])).values()].filter(c => !bridges.has(c.designator));
+	const extraCands = railNets.flatMap(n => byNet.get(n)?.candidates ?? []).filter(c => !bridges.has(c.designator));
+	if (extraCands.length)
+		g.candidates = [...g.candidates, ...extraCands.filter(c => !g.candidates.some(o => o.componentId === c.componentId))];
 	const candIds = new Set(g.candidates.map(c => c.componentId));
 	const sourceOptions = [
 		...g.candidates.map(c => ({ value: c.componentId, label: `${c.designator}: ${c.reason}${c.componentId === g.source?.componentId ? ` (${t('guess')})` : ''}` })),
@@ -312,8 +330,8 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	if (!sourceOptions.length)
 		return undefined;
 	const sourcePrompt = g.source
-		? t('Step 4/5: active source of ${1}. Guessed ${2} (${3}).', rail, g.source.designator, g.source.reason)
-		: t('Step 4/5: active source of ${1}. ${2}', rail, g.askReason ?? '');
+		? t('Step 4/5: active source of ${1}. Guessed ${2} (${3}).', label, g.source.designator, g.source.reason)
+		: t('Step 4/5: active source of ${1}. ${2}', label, g.askReason ?? '');
 	const known = railInfo(info, rail);
 	const byDesignator = (d: string) => onRail.find(c => c.designator === d)?.id;
 	const knownSource = known?.source ? byDesignator(known.source) : undefined;
@@ -326,12 +344,12 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 
 	// 5. Loads (connectors can be loads or sources) and their currents.
 	const knownLoads = (known?.loads ?? []).map(l => byDesignator(l.part)).filter((id): id is string => !!id && id !== sourceId);
-	const guessLoads = knownLoads.length ? knownLoads : loadsFor(board, rail, sourceId, [...candIds]).loads.map(l => l.componentId);
+	const guessLoads = knownLoads.length ? knownLoads : railLoadsFor(board, group, sourceId, [...candIds]).loads.map(l => l.componentId);
 	const loadOptions = onRail.filter(c => c.id !== sourceId).map(c => ({
 		value: c.id,
 		label: c.designator + (c.name ? ` (${c.name})` : ''),
 	}));
-	const loads = await ask.multi(title, t('Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.', rail), loadOptions, guessLoads);
+	const loads = await ask.multi(title, t('Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.', label), loadOptions, guessLoads);
 	if (!loads?.length)
 		return undefined;
 	const designator = (id: string) => board.components.find(c => c.id === id)?.designator ?? id;
@@ -349,7 +367,7 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	const changed = sourceId !== prefilledSource
 		|| loads.length !== guessLoads.length || loads.some(id => !guessLoads.includes(id))
 		|| (!!currents && loadRows.some(o => !same(currents[o.value], prefilled[o.value])));
-	const input: DcSetupInput = { rail, ground: pairs[rail], source: designator(sourceId), loads: loads.map(designator), currents };
+	const input: DcSetupInput = { rail, ...(railNets.length ? { railNets } : {}), ground: pairs[rail], source: designator(sourceId), loads: loads.map(designator), currents };
 	return {
 		input,
 		pairs,

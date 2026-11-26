@@ -280,6 +280,43 @@ test('Show for Selected Net on a switching node (a net on an inductor) offers th
 	assert.match(mock.dialogs[1].prompt, /active source of SWN/, 'the wizard goes straight to the source of SWN, though its name is not a rail name');
 });
 
+test('a rail that continues through a fuse: the wizard offers the net beyond it, ticked, and solves both as one rail', async () => {
+	const u2 = board.components.find(c => c.designator === 'U2')!;
+	const sq = (id: string, net: string, x: number, y: number, componentId: string) => ({ id, net, layer: 1, number: id.split('.')[1], at: { x, y }, shape: [[{ x: x - 0.4, y: y - 0.4 }, { x: x + 0.4, y: y - 0.4 }, { x: x + 0.4, y: y + 0.4 }, { x: x - 0.4, y: y + 0.4 }]], holeDiameter: 0, componentId });
+	const rail = board.pads.find(p => p.componentId === u2.id && p.net === '3V3')!;
+	const gnd = board.pads.find(p => p.net === 'GND' && p.componentId === u2.id)!;
+	const pads = [sq('f9.1', '3V3', rail.at.x, rail.at.y + 3, 'f9'), sq('f9.2', '3V3_F', rail.at.x + 2, rail.at.y + 3, 'f9'), sq('u9.1', '3V3_F', rail.at.x + 6, rail.at.y + 3, 'u9'), sq('u9.2', 'GND', gnd.at.x, gnd.at.y, 'u9')];
+	const fused = {
+		...board,
+		pads: [...board.pads, ...pads],
+		tracks: [...board.tracks, { id: 'f.t1', net: '3V3', layer: 1, a: rail.at, b: pads[0].at, width: 0.5 }, { id: 'f.t2', net: '3V3_F', layer: 1, a: pads[1].at, b: pads[2].at, width: 0.5 }],
+		components: [...board.components, { id: 'f9', designator: 'F9', at: pads[0].at, rotation: 0, layer: 1, padIds: ['f9.1', 'f9.2'] }, { id: 'u9', designator: 'U9', at: pads[2].at, rotation: 0, layer: 1, padIds: ['u9.1', 'u9.2'] }],
+	};
+	const storage = new Map<string, unknown>();
+	const mock = createMockEda(fused, '3V3', [], undefined, { storage });
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showDcReturn();
+	assert.deepEqual(mock.dialogs.map(d => d.kind), ['multi', 'select', 'multi', 'currents'], 'one more page: the nets beyond series parts');
+	assert.match(mock.dialogs[0].prompt, /3V3 continues through series parts/);
+	assert.deepEqual(mock.dialogs[0].options, ['3V3_F']);
+	assert.deepEqual(mock.dialogs[0].dflt, ['3V3_F'], 'ticked');
+	const des = (id: string) => fused.components.find(c => c.id === id)!.designator;
+	assert.ok((mock.dialogs[2].dflt as string[]).map(des).includes('U9'), 'the load beyond the fuse is ticked');
+	assert.ok(!mock.dialogs[2].options.map(des).includes('F9'), 'the fuse is no load');
+	const msg = mock.messages.at(-1)!;
+	assert.match(msg, /^3V3 \+ 3V3_F \/ GND: source U1, loads [^.]*U9/);
+	assert.match(msg, /3V3 \+ 3V3_F: drop \d+\.\d+ mV/);
+	assert.match(msg, /F9 joins 3V3 \+ 3V3_F, taken as a short/);
+	await ext.clearReturnPath();
+
+	const again = createMockEda(fused, '3V3', [], d => (d.kind === 'multi' && /continues through/.test(d.prompt) ? [] : d.dflt), { storage });
+	(globalThis as Record<string, unknown>).eda = again.eda;
+	await ext.showDcReturn();
+	assert.deepEqual(again.dialogs[0].dflt, ['3V3_F'], 'the last run on 3V3 had it ticked');
+	assert.match(again.messages.at(-1)!, /^3V3 \/ GND: source U1/, 'unticked: 3V3 alone');
+	await ext.clearReturnPath();
+});
+
 test('panel: opens without blocking, runs DC from a button, shows the result there, restyles and hides the overlay', async () => {
 	const { readFileSync } = await import('node:fs');
 	const html = readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8');
