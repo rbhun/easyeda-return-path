@@ -6,6 +6,7 @@
 import { bbox } from '../geom.js';
 import { runAsync, runSync, type RunOptions, type Steps } from '../budget.js';
 import { buildReferenceCopperSteps, type LayerCopper } from '../refcopper.js';
+import { EdgeGrid } from '../spatial.js';
 import { MULTI_LAYER, type Board, type Pad, type Pt } from '../types.js';
 import { narrowWarnings } from './ampacity.js';
 import { cellCentre, cellOf, inGrid, padCells, rasterNet, type Grid } from './raster.js';
@@ -49,6 +50,15 @@ export interface DcLayerField {
   layer: number;
   /** Copper fill weight per cell (0 = no copper of this net). */
   weight: Float32Array;
+  /**
+   * 1 where both this cell and its +x neighbour are copper, but a trace or a slot passes between
+   * their centres, so they are not joined. Absent on a field built without that check.
+   */
+  gapX?: Uint8Array;
+  /** Same for the +y neighbour. */
+  gapY?: Uint8Array;
+  /** This layer's copper, per net, so a drawn segment can be kept off a trace that cuts a cell. */
+  copper?: EdgeGrid[];
   /** Node voltage per cell, V (NaN off copper or unconnected). */
   v: Float64Array;
   /** Sheet current density per cell, A/mm of copper width, and its magnitude. */
@@ -240,15 +250,48 @@ function* solveNetField(
     eb.push(b);
     eg.push(gv);
   };
+  // A cell stands for the copper at its centre. A trace narrower than the cell can pass between two
+  // centres and leave both inside the pour; joining those cells would short across the trace.
+  const gapX = weights.map(() => new Uint8Array(NC));
+  const gapY = weights.map(() => new Uint8Array(NC));
+  const gridsOf = (layerId: number): EdgeGrid[] => {
+    const byNet = refCopper.get(layerId)?.byNet;
+    if (!byNet) return [];
+    const out: EdgeGrid[] = [];
+    for (const n of nets) {
+      const paths = byNet.get(n);
+      if (paths?.length) out.push(new EdgeGrid(paths));
+    }
+    return out;
+  };
+  const copperGrids: EdgeGrid[][] = [];
+  /** Both centres lie in one net's copper, and the copper between them is cut. */
+  const gapBetween = (grids: EdgeGrid[], a: Pt, b: Pt) => {
+    let cut = false;
+    for (const grid of grids) {
+      if (!grid.contains(a) || !grid.contains(b)) continue;
+      if (!grid.crosses(a, b)) return false;
+      cut = true;
+    }
+    return cut;
+  };
   for (let li = 0; li < L; li++) {
     const w = weights[li];
     const sheet = opts.conductivity * thickness.get(copper[li].id)!;
+    const grids = (copperGrids[li] = gridsOf(copper[li].id));
     for (let j = 0; j < g.ny; j++)
       for (let i = 0; i < g.nx; i++) {
         const c = j * g.nx + i;
         if (!(w[c] > 0)) continue;
-        if (i + 1 < g.nx && w[c + 1] > 0) edge(nodeOf[li][c], nodeOf[li][c + 1], (sheet * 2 * w[c] * w[c + 1]) / (w[c] + w[c + 1]));
-        if (j + 1 < g.ny && w[c + g.nx] > 0) edge(nodeOf[li][c], nodeOf[li][c + g.nx], (sheet * 2 * w[c] * w[c + g.nx]) / (w[c] + w[c + g.nx]));
+        const here = cellCentre(g, i, j);
+        if (i + 1 < g.nx && w[c + 1] > 0) {
+          if (w[c] >= 1 && w[c + 1] >= 1 && gapBetween(grids, here, cellCentre(g, i + 1, j))) gapX[li][c] = 1;
+          else edge(nodeOf[li][c], nodeOf[li][c + 1], (sheet * 2 * w[c] * w[c + 1]) / (w[c] + w[c + 1]));
+        }
+        if (j + 1 < g.ny && w[c + g.nx] > 0) {
+          if (w[c] >= 1 && w[c + g.nx] >= 1 && gapBetween(grids, here, cellCentre(g, i, j + 1))) gapY[li][c] = 1;
+          else edge(nodeOf[li][c], nodeOf[li][c + g.nx], (sheet * 2 * w[c] * w[c + g.nx]) / (w[c] + w[c + g.nx]));
+        }
       }
   }
   const inPlaneEdges = ea.length;
@@ -451,6 +494,9 @@ function* solveNetField(
     const layers: DcLayerField[] = copper.map((l, li) => ({
       layer: l.id,
       weight: weights[li],
+      gapX: gapX[li],
+      gapY: gapY[li],
+      copper: copperGrids[li],
       v: new Float64Array(NC).fill(NaN),
       jx: new Float32Array(NC),
       jy: new Float32Array(NC),

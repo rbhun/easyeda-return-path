@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.67] - 2026-11-26
+
+From Balazs: on the 3V3A capacitors the top return drew one purple line through every capacitor, across a top trace between C80–C83 and C82–C94.
+
+- **A trace still cuts the pour when it is narrower than a cell.** The grid joined two cells whenever both centres lay in the copper. A trace can pass between those centres, and the join shorted across it, so the drawn line ran straight over the trace. Full cells are joined only when the copper between their centres is unbroken. A line is not drawn across that cut, nor across a cell the trace has cleared.
+
 ## [0.1.66] - 2026-11-26
 
 From Balazs: U8 pin 7 is called SD. It is an enable pin tied to ground and draws almost no current. The return sink can also be named EP, −Vo or VSS, and on a header it may be only a pin number.

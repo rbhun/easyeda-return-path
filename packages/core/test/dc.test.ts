@@ -21,6 +21,7 @@ import {
   solveDc,
   traceStreamlines,
   DRAWN_STREAMS,
+  difference,
   distPointSeg,
   type Board,
   type Component,
@@ -84,6 +85,67 @@ test('DC solve: a copper strip has R = L / (σ t W)', () => {
   const mid = res.supply.layers[0];
   const c = Math.floor((1 - res.grid.y0) / cell) * res.grid.nx + Math.floor((10 - res.grid.x0) / cell);
   assert.ok(Math.abs(mid.j[c] - 0.5) < 0.01, `J ${mid.j[c]} A/mm in a 2 mm strip at 1 A`);
+});
+
+test('a trace narrower than a cell still cuts the pour: the line goes round it', () => {
+  const cell = 1;
+  // Centres land on the integers. The slot sits between x = -1 and x = 0, narrower than the cell,
+  // and stops short of the pour so the copper joins again above and below it.
+  const slot = rect(-0.5, 6, 0.4, 8);
+  const src = pad('a', 'P', 1, -2, 6, 0.4, 0.4);
+  const load = pad('b', 'P', 1, 3, 6, 0.4, 0.4);
+  const b = board(1, { pours: [pour('P', 1, difference([rect(7.5, 6, 25, 16)], [slot]))], pads: [src, load] });
+  const res = solveDc(b, terminalSetup(src, load, 'P'), { cell });
+  const [sl] = traceStreamlines(res.grid, res.supply, { perLoad: 1, merge: false, smooth: true });
+  assert.ok(sl.complete, 'the way round the trace reaches the load');
+  const pts = sl.segments.flatMap((s) => s.pts);
+  for (let k = 1; k < pts.length; k++) {
+    const a = pts[k - 1];
+    const q = pts[k];
+    if ((a.x + 0.5) * (q.x + 0.5) >= 0) continue;
+    const y = a.y + ((-0.5 - a.x) * (q.y - a.y)) / (q.x - a.x);
+    assert.ok(y <= 2.3 || y >= 9.7, `the line crosses the trace at y = ${y.toFixed(2)}`);
+  }
+});
+
+test('drawn lines do not join across a trace that separates them', () => {
+  const cell = 0.5;
+  // One cell wide, so the pour is gone there, and the two paths run within a join of each other.
+  const slot = rect(5.25, 4, 0.5, 8);
+  const src = pad('s', 'P', 1, 5.25, 9.5, 0.4, 0.4);
+  const left = pad('l', 'P', 1, 4.75, 2, 0.3, 0.3);
+  const right = pad('r', 'P', 1, 6.25, 2, 0.3, 0.3);
+  const b = board(1, { pours: [pour('P', 1, difference([rect(6, 5, 12, 10)], [slot]))], pads: [src, left, right] });
+  const setup: DcSetup = {
+    rail: 'P',
+    ground: 'GND',
+    source: { componentId: 's', designator: 'S', railPads: [src], groundPads: [], current: 0 },
+    loads: [
+      { componentId: 'l', designator: 'L', railPads: [left], groundPads: [], current: 1 },
+      { componentId: 'r', designator: 'R', railPads: [right], groundPads: [], current: 1 },
+    ],
+    normalised: true,
+    warnings: [],
+  };
+  const res = solveDc(b, setup, { cell });
+  const g = res.grid;
+  const ix = Math.floor((5.25 - g.x0) / g.cell);
+  const iy = Math.floor((2 - g.y0) / g.cell);
+  const w = res.supply.layers[0].weight;
+  assert.equal(w[iy * g.nx + ix], 0, 'the trace clears the cell between the paths');
+  assert.ok(w[iy * g.nx + ix - 1] > 0 && w[iy * g.nx + ix + 1] > 0);
+  const lines = traceStreamlines(g, res.supply, DRAWN_STREAMS);
+  for (const sl of lines) {
+    assert.ok(sl.complete, sl.load);
+    const pts = sl.segments.flatMap((s) => s.pts);
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1];
+      const q = pts[k];
+      if ((a.x - 5.25) * (q.x - 5.25) >= 0) continue;
+      const y = a.y + ((5.25 - a.x) * (q.y - a.y)) / (q.x - a.x);
+      assert.ok(y >= 7.7, `${sl.load} joins across the trace at y = ${y.toFixed(2)}`);
+    }
+  }
 });
 
 test('DC solve: a track narrower than a cell keeps its resistance per length', () => {
