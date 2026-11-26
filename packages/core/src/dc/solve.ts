@@ -77,8 +77,12 @@ export interface DcNetResult {
   vias: ViaFlow[];
   /** Cells held at 0 V (the source pads), per layer id. */
   sourceCells: Map<number, Set<number>>;
-  /** Terminal cells of each load, per layer id. */
-  loadCells: { designator: string; current: number; cells: Map<number, number[]> }[];
+  /**
+   * Terminal cells of each load, per layer id. `own` is that load's current solved on its own, so a
+   * streamline traced on it is the path of this load's current; the combined field above is every
+   * load at once, and a line on it bends towards the others.
+   */
+  loadCells: { designator: string; current: number; cells: Map<number, number[]>; own?: { layers: DcLayerField[]; vias: ViaFlow[]; fullScale: number } }[];
   /** Highest density away from pads and vias: the bottleneck, and the 100 % of the colour bins. */
   bottleneck?: { layer: number; at: Pt; j: number };
   fullScale: number;
@@ -347,6 +351,8 @@ function* solveNetField(
   const sign = role === 'supply' ? -1 : 1;
   const unconnected: string[] = [];
   const loadCells: DcNetResult['loadCells'] = [];
+  /** Each load's own injection, kept so its current can be solved on its own. */
+  const injected: { designator: string; nodes: number[]; share: number }[] = [];
   for (const ld of loads) {
     const cells = terminalCells(ld.pads);
     loadCells.push({ designator: ld.designator, current: ld.current, cells });
@@ -359,7 +365,9 @@ function* solveNetField(
       if (ld.pads.length && ld.current > 0) unconnected.push(ld.designator);
       continue;
     }
-    for (const n of nodes) b[n] += (sign * ld.current) / nodes.length;
+    const share = (sign * ld.current) / nodes.length;
+    injected.push({ designator: ld.designator, nodes, share });
+    for (const n of nodes) b[n] += share;
   }
 
   // Jacobi-preconditioned CG on the reachable, non-fixed nodes (fixed nodes are 0 V).
@@ -372,11 +380,6 @@ function* solveNetField(
     for (let k = deg[n]; k < deg[n + 1]; k++) d += ng[k];
     diag[n] = d;
   }
-  const x = new Float64Array(N);
-  const r = new Float64Array(N);
-  const z = new Float64Array(N);
-  const p = new Float64Array(N);
-  const q = new Float64Array(N);
   const apply = (src: Float64Array, dst: Float64Array) => {
     for (let n = 0; n < N; n++) {
       if (!active[n]) continue;
@@ -388,158 +391,186 @@ function* solveNetField(
       dst[n] = s;
     }
   };
-  let bnorm = 0;
-  for (let n = 0; n < N; n++) if (active[n]) {
-    r[n] = b[n];
-    bnorm += b[n] * b[n];
-  }
-  bnorm = Math.sqrt(bnorm);
-  let rz = 0;
-  for (let n = 0; n < N; n++) if (active[n]) {
-    z[n] = r[n] / diag[n];
-    p[n] = z[n];
-    rz += r[n] * z[n];
-  }
-  let it = 0;
-  let res = bnorm ? 1 : 0;
-  const logTol = Math.log(opts.tolerance);
-  while (bnorm && it < opts.maxIterations) {
-    yield { phase: `solve ${net}`, fraction: Math.min(1, Math.max(0, Math.log(Math.max(res, 1e-300)) / logTol)) };
-    apply(p, q);
-    let pq = 0;
-    for (let n = 0; n < N; n++) if (active[n]) pq += p[n] * q[n];
-    const alpha = rz / pq;
-    let rr = 0;
+  function* runCg(rhs: Float64Array, from: number, to: number): Steps<{ x: Float64Array; it: number; res: number }> {
+    const x = new Float64Array(N);
+    const r = new Float64Array(N);
+    const z = new Float64Array(N);
+    const pv = new Float64Array(N);
+    const q = new Float64Array(N);
+    let bnorm = 0;
     for (let n = 0; n < N; n++) if (active[n]) {
-      x[n] += alpha * p[n];
-      r[n] -= alpha * q[n];
-      rr += r[n] * r[n];
+      r[n] = rhs[n];
+      bnorm += rhs[n] * rhs[n];
     }
-    it++;
-    res = Math.sqrt(rr) / bnorm;
-    if (res < opts.tolerance) break;
-    let rzNew = 0;
+    bnorm = Math.sqrt(bnorm);
+    let rz = 0;
     for (let n = 0; n < N; n++) if (active[n]) {
       z[n] = r[n] / diag[n];
-      rzNew += r[n] * z[n];
+      pv[n] = z[n];
+      rz += r[n] * z[n];
     }
-    const beta = rzNew / rz;
-    rz = rzNew;
-    for (let n = 0; n < N; n++) if (active[n]) p[n] = z[n] + beta * p[n];
+    let it = 0;
+    let res = bnorm ? 1 : 0;
+    const logTol = Math.log(opts.tolerance);
+    while (bnorm && it < opts.maxIterations) {
+      const done = Math.min(1, Math.max(0, Math.log(Math.max(res, 1e-300)) / logTol));
+      yield { phase: `solve ${net}`, fraction: from + (to - from) * done };
+      apply(pv, q);
+      let pq = 0;
+      for (let n = 0; n < N; n++) if (active[n]) pq += pv[n] * q[n];
+      const alpha = rz / pq;
+      let rr = 0;
+      for (let n = 0; n < N; n++) if (active[n]) {
+        x[n] += alpha * pv[n];
+        r[n] -= alpha * q[n];
+        rr += r[n] * r[n];
+      }
+      it++;
+      res = Math.sqrt(rr) / bnorm;
+      if (res < opts.tolerance) break;
+      let rzNew = 0;
+      for (let n = 0; n < N; n++) if (active[n]) {
+        z[n] = r[n] / diag[n];
+        rzNew += r[n] * z[n];
+      }
+      const beta = rzNew / rz;
+      rz = rzNew;
+      for (let n = 0; n < N; n++) if (active[n]) pv[n] = z[n] + beta * pv[n];
+    }
+    return { x, it, res };
   }
 
-  // Fields.
-  const layers: DcLayerField[] = copper.map((l, li) => ({
-    layer: l.id,
-    weight: weights[li],
-    v: new Float64Array(NC).fill(NaN),
-    jx: new Float32Array(NC),
-    jy: new Float32Array(NC),
-    j: new Float32Array(NC),
-    flow: 0,
-  }));
-  let drop = 0;
-  for (let n = 0; n < N; n++) {
-    if (!reach[n]) continue;
-    layers[nodeLayer[n]].v[nodeCell[n]] = x[n];
-    drop = Math.max(drop, Math.abs(x[n]));
-  }
-  const sx = new Float64Array(L * NC);
-  const sy = new Float64Array(L * NC);
-  const cx = new Uint8Array(L * NC);
-  const cy = new Uint8Array(L * NC);
-  for (let e = 0; e < inPlaneEdges; e++) {
-    const a = ea[e];
-    const bn = eb[e];
-    if (!reach[a]) continue;
-    const I = eg[e] * (x[a] - x[bn]);
-    const li = nodeLayer[a];
-    const horizontal = nodeCell[bn] - nodeCell[a] === 1;
-    for (const c of [nodeCell[a], nodeCell[bn]]) {
-      const k = li * NC + c;
-      if (horizontal) {
-        sx[k] += I;
-        cx[k]++;
-      } else {
-        sy[k] += I;
-        cy[k]++;
+  /** Voltages, current density and via current for one solved right-hand side. */
+  function fieldsOf(x: Float64Array): { layers: DcLayerField[]; vias: ViaFlow[]; drop: number; bottleneck: DcNetResult['bottleneck']; fullScale: number } {
+    const layers: DcLayerField[] = copper.map((l, li) => ({
+      layer: l.id,
+      weight: weights[li],
+      v: new Float64Array(NC).fill(NaN),
+      jx: new Float32Array(NC),
+      jy: new Float32Array(NC),
+      j: new Float32Array(NC),
+      flow: 0,
+    }));
+    let drop = 0;
+    for (let n = 0; n < N; n++) {
+      if (!reach[n]) continue;
+      layers[nodeLayer[n]].v[nodeCell[n]] = x[n];
+      drop = Math.max(drop, Math.abs(x[n]));
+    }
+    const sx = new Float64Array(L * NC);
+    const sy = new Float64Array(L * NC);
+    const cx = new Uint8Array(L * NC);
+    const cy = new Uint8Array(L * NC);
+    for (let e = 0; e < inPlaneEdges; e++) {
+      const a = ea[e];
+      const bn = eb[e];
+      if (!reach[a]) continue;
+      const I = eg[e] * (x[a] - x[bn]);
+      const li = nodeLayer[a];
+      const horizontal = nodeCell[bn] - nodeCell[a] === 1;
+      for (const c of [nodeCell[a], nodeCell[bn]]) {
+        const k = li * NC + c;
+        if (horizontal) {
+          sx[k] += I;
+          cx[k]++;
+        } else {
+          sy[k] += I;
+          cy[k]++;
+        }
       }
     }
-  }
-  for (let li = 0; li < L; li++) {
-    const f = layers[li];
-    for (let c = 0; c < NC; c++) {
-      const w = f.weight[c];
-      if (!(w > 0)) continue;
-      const k = li * NC + c;
-      const jx = cx[k] ? sx[k] / cx[k] / (g.cell * w) : 0;
-      const jy = cy[k] ? sy[k] / cy[k] / (g.cell * w) : 0;
-      f.jx[c] = jx;
-      f.jy[c] = jy;
-      f.j[c] = Math.hypot(jx, jy);
-      f.flow += f.j[c] * w * g.cell * g.cell;
+    for (let li = 0; li < L; li++) {
+      const f = layers[li];
+      for (let c = 0; c < NC; c++) {
+        const w = f.weight[c];
+        if (!(w > 0)) continue;
+        const k = li * NC + c;
+        const jx = cx[k] ? sx[k] / cx[k] / (g.cell * w) : 0;
+        const jy = cy[k] ? sy[k] / cy[k] / (g.cell * w) : 0;
+        f.jx[c] = jx;
+        f.jy[c] = jy;
+        f.j[c] = Math.hypot(jx, jy);
+        f.flow += f.j[c] * w * g.cell * g.cell;
+      }
     }
-  }
-
-  // Via flows.
-  const vias: ViaFlow[] = barrels.map((br) => {
-    const [i, j] = cellOf(g, br.at);
-    return { id: br.id, at: br.at, cell: inGrid(g, i, j) ? j * g.nx + i : -1, current: 0, delivered: new Map<number, number>() };
-  });
-  for (const be of barrelEdges) {
-    const I = eg[be.e] * (x[ea[be.e]] - x[eb[be.e]]);
-    const v = vias[be.barrel];
-    v.current = Math.max(v.current, Math.abs(I));
-    const up = copper[be.upper].id;
-    const lo = copper[be.lower].id;
-    v.delivered.set(lo, (v.delivered.get(lo) ?? 0) + I);
-    v.delivered.set(up, (v.delivered.get(up) ?? 0) - I);
-  }
-
-  // Bottleneck: densest copper away from terminal pads and vias (their entry crowding is expected).
-  const exclude = layers.map(() => new Uint8Array(NC));
-  const guard = 2;
-  const markAround = (li: number, c: number) => {
-    const ci = c % g.nx;
-    const cj = (c - ci) / g.nx;
-    for (let dj = -guard; dj <= guard; dj++)
-      for (let di = -guard; di <= guard; di++) if (inGrid(g, ci + di, cj + dj)) exclude[li][(cj + dj) * g.nx + ci + di] = 1;
-  };
-  for (const [layer, cells] of sourceCells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
-  for (const lc of loadCells) for (const [layer, cells] of lc.cells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
-  for (const v of vias) if (v.cell >= 0) for (let li = 0; li < L; li++) markAround(li, v.cell);
-  for (const br of bridges) for (const side of br.sides) for (const [layer, cells] of side.cells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
-  let bottleneck: DcNetResult['bottleneck'];
-  let maxAny = 0;
-  for (let li = 0; li < L; li++) {
-    const f = layers[li];
-    for (let c = 0; c < NC; c++) {
-      const jv = f.j[c];
-      if (jv > maxAny) maxAny = jv;
-      if (exclude[li][c] || !(jv > (f.peak?.j ?? 0))) continue;
+    const vias: ViaFlow[] = barrels.map((br) => {
+      const [i, j] = cellOf(g, br.at);
+      return { id: br.id, at: br.at, cell: inGrid(g, i, j) ? j * g.nx + i : -1, current: 0, delivered: new Map<number, number>() };
+    });
+    for (const be of barrelEdges) {
+      const I = eg[be.e] * (x[ea[be.e]] - x[eb[be.e]]);
+      const v = vias[be.barrel];
+      v.current = Math.max(v.current, Math.abs(I));
+      const up = copper[be.upper].id;
+      const lo = copper[be.lower].id;
+      v.delivered.set(lo, (v.delivered.get(lo) ?? 0) + I);
+      v.delivered.set(up, (v.delivered.get(up) ?? 0) - I);
+    }
+    // Bottleneck: densest copper away from terminal pads and vias (their entry crowding is expected).
+    const exclude = layers.map(() => new Uint8Array(NC));
+    const guard = 2;
+    const markAround = (li: number, c: number) => {
       const ci = c % g.nx;
-      // Partly covered cells at copper edges give noisy J; keep them only as the core of a thin track.
-      const w = f.weight[c];
-      if (w < 0.5 && [c - 1, c + 1, c - g.nx, c + g.nx].some((k) => k >= 0 && k < NC && f.weight[k] > w)) continue;
-      f.peak = { at: cellCentre(g, ci, (c - ci) / g.nx), j: jv };
+      const cj = (c - ci) / g.nx;
+      for (let dj = -guard; dj <= guard; dj++)
+        for (let di = -guard; di <= guard; di++) if (inGrid(g, ci + di, cj + dj)) exclude[li][(cj + dj) * g.nx + ci + di] = 1;
+    };
+    for (const [layer, cells] of sourceCells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
+    for (const lc of loadCells) for (const [layer, cells] of lc.cells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
+    for (const v of vias) if (v.cell >= 0) for (let li = 0; li < L; li++) markAround(li, v.cell);
+    for (const br of bridges) for (const side of br.sides) for (const [layer, cells] of side.cells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
+    let bottleneck: DcNetResult['bottleneck'];
+    let maxAny = 0;
+    for (let li = 0; li < L; li++) {
+      const f = layers[li];
+      for (let c = 0; c < NC; c++) {
+        const jv = f.j[c];
+        if (jv > maxAny) maxAny = jv;
+        if (exclude[li][c] || !(jv > (f.peak?.j ?? 0))) continue;
+        const ci = c % g.nx;
+        // Partly covered cells at copper edges give noisy J; keep them only as the core of a thin track.
+        const w = f.weight[c];
+        if (w < 0.5 && [c - 1, c + 1, c - g.nx, c + g.nx].some((k) => k >= 0 && k < NC && f.weight[k] > w)) continue;
+        f.peak = { at: cellCentre(g, ci, (c - ci) / g.nx), j: jv };
+      }
+      if (f.peak && f.peak.j > (bottleneck?.j ?? 0)) bottleneck = { layer: f.layer, ...f.peak };
     }
-    if (f.peak && f.peak.j > (bottleneck?.j ?? 0)) bottleneck = { layer: f.layer, ...f.peak };
+    return { layers, vias, drop, bottleneck, fullScale: bottleneck?.j || maxAny || 1 };
+  }
+
+  // The combined field gives the drop and the bottleneck. Each load is also solved alone: a streamline
+  // of the combined field follows the sum of every load's current, so one load's line bends towards the
+  // others even across an unbroken pour.
+  const live = injected.filter((i) => i.share !== 0);
+  const separate = live.length > 1;
+  const total = yield* runCg(b, 0, separate ? 1 / (1 + live.length) : 1);
+  const built = fieldsOf(total.x);
+  if (separate) {
+    for (let k = 0; k < live.length; k++) {
+      const inj = live[k];
+      const rhs = new Float64Array(N);
+      for (const n of inj.nodes) rhs[n] = inj.share;
+      const one = yield* runCg(rhs, (1 + k) / (1 + live.length), (2 + k) / (1 + live.length));
+      const own = fieldsOf(one.x);
+      const lc = loadCells.find((l) => l.designator === inj.designator);
+      if (lc) lc.own = { layers: own.layers, vias: own.vias, fullScale: own.fullScale };
+    }
   }
 
   return {
     net,
     role,
-    layers,
-    vias,
+    layers: built.layers,
+    vias: built.vias,
     sourceCells,
     loadCells,
-    bottleneck,
-    fullScale: bottleneck?.j || maxAny || 1,
-    drop,
+    bottleneck: built.bottleneck,
+    fullScale: built.fullScale,
+    drop: built.drop,
     unconnected,
     bridges,
     nodes: N,
-    iterations: it,
-    residual: res,
+    iterations: total.it,
+    residual: total.res,
   };
 }

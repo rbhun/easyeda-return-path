@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.61] - 2026-11-26
+
+From Balazs: on the R-Com dongle the +12V ground return from U4 swept down across the board in a big arc, though the bottom layer is one solid pour and the current should go straight back to the source.
+
+- **Each line is that part's own current.** The line used to follow the sum of every ticked load at once. On a solid pour that sum bends: current spreading from the other parts (the 12V capacitors, each given a current when ticked) pulls the line off the straight path and it only meets the source after a loop down the pour. Nothing is in the way. The drop and the bottleneck are still for every ticked part together; only the lines changed. A part with no other loads draws the same line as before.
+- Core test: two loads on one solid rectangle, the far load's line stays within 3 mm of the straight line to the source.
+
 ## [0.1.60] - 2026-11-26
 
 Overlay: colour shows where the current flows, as in the DC view.
@@ -10,7 +17,6 @@ Overlay: colour shows where the current flows, as in the DC view.
 - **Forward current by layer too**: the signal trace (HF) and the supply streamlines (DC) are yellow on the top layer and green on the others. The panel's "DC supply" and "Signal trace" roles become "Forward current, top layer" and "Forward current, other layers", used by both checks. Colours saved for the old roles are not carried over.
 - Inner-layer returns are all blue (no longer green and blue in turn), as green now marks forward current on the other layers.
 - Tests: the saved-log tests give storage writes 1 s (50 ms only where storage never answers), so a busy CI runner no longer drops a write and fails them.
-
 ## [0.1.59] - 2026-11-26
 
 From Balazs: make DC wizard step 2 a tick list, so several parts of the same rail can be picked.
