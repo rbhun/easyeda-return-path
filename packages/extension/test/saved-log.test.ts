@@ -45,7 +45,7 @@ test('with file access the log is written to a file under the EDA documents fold
 	await ext.showReturnPath();
 	const text = mock.files.get(LOG_FILE);
 	assert.ok(text, [...mock.files.keys()].join());
-	assert.match(text, /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} INFO {2}Show for Selected Net: CLK \(v\d+\.\d+\.\d+\)$/m);
+	assert.match(text, /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} INFO {2}HF check \(v\d+\.\d+\.\d+\), selected net CLK$/m);
 	assert.match(text, /read board: \d+ track segments from lines and arcs \(\d+ ms\)/);
 	assert.match(text, /Return path: finished in \d+ ms/);
 	assert.match(text, /draw markers: \d+ ms; \d+ markers/);
@@ -82,11 +82,11 @@ test('after a restart Show Saved Log lists the stored lines and saves them as a 
 	assert.equal(restarted.downloads.length, 1);
 	assert.equal(restarted.downloads[0].name, 'returnpath-log.txt');
 	assert.ok(restarted.downloads[0].text.trimEnd().split('\n').length >= before);
-	assert.match(restarted.downloads[0].text, /Show for Selected Net: CLK/);
+	assert.match(restarted.downloads[0].text, /HF check: CLK at 16 MHz/);
 });
 
 test('without the external-interaction permission nothing fails and the log still goes to storage', async () => {
-	const mock = install({ fileSystem: 'denied' }, () => false);
+	const mock = install({ fileSystem: 'denied' }, d => (/^(Net to check|Speed of)/.test(d.prompt) ? d.dflt : false));
 	await ext.showReturnPath();
 	assert.equal(mock.files.size, 0);
 	assert.ok(saved(mock).some(l => l.includes('Return path: finished')));

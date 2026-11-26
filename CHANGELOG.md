@@ -2,6 +2,20 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.35] - 2026-11-26
+
+Numbered above 0.1.34, main's version.
+
+From Balazs, after an HF check of SC0 on a real board: he wanted to pick the net from a list with data lines first and set their speed; the red gap lines looked broken, the white band edges just traced the tracks, and the DC supply role was listed after an HF run.
+
+- **Net picker with data types and speed.** HF check now lists the routed signal nets in the wizard window: recognised data lines first (I²C, SPI, UART, USB, I²S, SWD, SDIO, CAN, Ethernet, clocks, PWM, from the net name and the pin names), each with its kind and length, then the other signal nets. A selected track, via or pad preselects its net. The next page asks for the speed (for I²C: 100 kHz, 400 kHz, 1 MHz, 3.4 MHz, or another value), with the usual one preselected.
+- **Signal line in the result.** The result names the kind and speed, the edge time, the knee frequency and the critical length, and says whether the trace is long enough to act as a transmission line. **Selected trace** asks no net or speed question and uses the usual speed of that kind of line, and says so.
+- **Red only where the return is in trouble.** The red gap role used to outline every piece of uncovered band, so it wrapped the tracks in broken red lines. It now draws only along the stretches of trace whose band has too little reference copper, and the gap lines themselves. The band is also clipped to the board outline, so the edge of the board no longer counts as missing copper.
+- **Band edges start hidden**, and the panel lists only the roles the last check draws (no DC supply after an HF check).
+- **The legend** says that the return is drawn on the reference copper right under the trace, so it follows the trace, and that dashed hops go into vias, decaps, bridging caps and IC pins.
+- **Negative rails** such as -5VF and -6V count as power nets.
+- **CLI:** `--list-nets` lists the recognised data lines first with their kind and usual speed, and `--speed 400k` sets the speed for the signal line.
+
 ## [0.1.34] - 2026-11-26
 
 Numbered above 0.1.33, main's version.

@@ -107,6 +107,8 @@ export interface ChainResult {
   band: Paths;
   bandUncovered: Paths;
   coverage: { trackId: string; a: Pt; b: Pt; ratio: number }[];
+  /** Segments reported for too little reference copper (band-coverage findings). */
+  thin: { a: Pt; b: Pt; ratio: number }[];
   gaps: Gap[];
 }
 
@@ -508,7 +510,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
       message: `${layerName(chain.layer)} trace has no reference copper: no pour on an adjacent layer and no coplanar pour beside it`,
       at: line.at(line.length / 2),
     });
-    return { chain, ref: null, refNets: [], band: [], bandUncovered: [], coverage: [], gaps: [] };
+    return { chain, ref: null, refNets: [], band: [], bandUncovered: [], coverage: [], thin: [], gaps: [] };
   }
   if (ref.coplanar) stats.coplanarChains++;
   const lc = ctx.refCopper.get(ref.layer)!;
@@ -524,7 +526,8 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
     ...ownPads.map((p) => inflate(p.shape, opts.clearance + 0.05)),
   );
 
-  const band = difference(strokePath(chain.pts, 2 * halfBand, true), keepout);
+  const strip = difference(strokePath(chain.pts, 2 * halfBand, true), keepout);
+  const band = board.outline.length ? intersect(strip, board.outline) : strip;
   const bandCopper = intersect(band, copper);
   const bandUncovered = difference(difference(band, bandCopper), antipads);
 
@@ -669,8 +672,10 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
 
   // Consecutive thin segments make one finding, placed on the worst of them.
   let low: typeof coverage = [];
+  const thin: ChainResult['thin'] = [];
   const flush = () => {
     if (!low.length) return;
+    thin.push(...low.map(({ a, b, ratio }) => ({ a, b, ratio })));
     const worst = low.reduce((w, c) => (c.ratio < w.ratio ? c : w));
     const length = low.reduce((s, c) => s + dist(c.a, c.b), 0);
     const [a, b] = [low[0].a, low[low.length - 1].b];
@@ -699,7 +704,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
   flush();
 
   const refNets = [...new Set(runs.map((r) => r.net).filter((x): x is string => !!x))];
-  return { chain, ref, refNets, band, bandUncovered, coverage, gaps };
+  return { chain, ref, refNets, band, bandUncovered, coverage, thin, gaps };
 }
 
 /**

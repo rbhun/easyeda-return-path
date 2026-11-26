@@ -31,11 +31,22 @@ export const DEFAULT_STYLE: Record<Role, RoleStyle> = {
 	returnInner: { colour: 'green', width: 5, visible: true },
 	hop: { colour: 'yellow', width: 2, visible: true },
 	gap: { colour: 'red', width: 3, visible: true },
-	band: { colour: 'white', width: 1, visible: true },
+	band: { colour: 'white', width: 1, visible: false },
 };
 
 /** Inner layers take these in turn while returnInner keeps its default colour. */
 export const INNER_CYCLE: ColourName[] = ['green', 'blue'];
+
+/** The analyses that draw each role; the panel lists only the roles of the last run's kind. */
+export const ROLE_USE: Record<Role, ('hf' | 'dc')[]> = {
+	supply: ['dc'],
+	returnTop: ['hf', 'dc'],
+	returnOther: ['hf', 'dc'],
+	returnInner: ['hf'],
+	hop: ['hf'],
+	gap: ['hf', 'dc'],
+	band: ['hf'],
+};
 
 export const ROLE_LABELS: Record<Role, string> = {
 	supply: 'DC supply',

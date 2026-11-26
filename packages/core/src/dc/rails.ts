@@ -7,7 +7,7 @@ const bare = (net: string) => net.replace(/^[/\\]+/, '').trim();
 
 const GROUND_RE = /^(?:(?:\w*[_-])?[A-Z]{0,2}GND\w*|VSS\w*|0V|EARTH|PE)$/i;
 const POWER_RE =
-  /^(?:\+?\d+(?:\.\d+)?V\d*\w*|P\d+V\d*\w*|V\d+V\d*\w*|\w*_\+?\d+V\d*|[A-Z]?V(?:CC|DD)\w*|V(?:IN|BUS|BAT|BATT|SYS|USB|EXT|DC|IO|CORE|MOT|LED|PP|OUT)\w*|BAT\+?|BATT\+?|DC_?IN\w*)$/i;
+  /^(?:[+-]?\d+(?:\.\d+)?V\d*\w*|P\d+V\d*\w*|V\d+V\d*\w*|\w*_\+?\d+V\d*|[A-Z]?V(?:CC|DD)\w*|V(?:IN|BUS|BAT|BATT|SYS|USB|EXT|DC|IO|CORE|MOT|LED|PP|OUT)\w*|BAT\+?|BATT\+?|DC_?IN\w*)$/i;
 const INPUT_RE = /^(?:V(?:IN|BUS|BAT|BATT|USB|SYS|EXT|DC)\w*|BATT?\+?|DC_?IN\w*)$/i;
 
 /** Pin names of a regulator's output and input. */

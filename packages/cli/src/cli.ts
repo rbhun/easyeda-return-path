@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Resvg } from '@resvg/resvg-js';
-import { AnalysisAborted, analyzeNet, guessDrivers, guessRails, hfApplicability, type Analysis, type Board } from '@returnpath/core';
+import { AnalysisAborted, analyzeNet, classifySignal, GENERIC, guessDrivers, guessRails, hfApplicability, hfCandidates, parseHz, summariseSignal, type Analysis, type Board } from '@returnpath/core';
 import { dcReport, dcViews, describeGuess, runDc } from './dc.js';
 import { loadBoard } from './easyeda/load.js';
 import { renderOverlay } from './render/svg.js';
@@ -27,6 +27,7 @@ const { values, positionals } = parseArgs({
     current: { type: 'string' },
     cell: { type: 'string' },
     driver: { type: 'string' },
+    speed: { type: 'string' },
     force: { type: 'boolean', default: false },
     verbose: { type: 'boolean', short: 'v', default: false },
     help: { type: 'boolean', short: 'h', default: false },
@@ -36,7 +37,7 @@ const { values, positionals } = parseArgs({
 const file = positionals[0];
 if (values.help || !file) {
   console.log(`Usage: returnpath <board.epro|board.epro2|board.epcb> --net CLK [--out dir] [--name prefix] [--png]
-       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets] [--driver U1[,U2]] [--force] [--verbose]
+       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets] [--driver U1[,U2]] [--speed 400k] [--force] [--verbose]
        returnpath <board> --list-rails
        returnpath <board> --dc 3V3 [--ground GND] [--source U1] [--loads U2,U3] [--current U2=0.15,U3=20mA]
        [--cell mm] [--out dir] [--name prefix] [--png]`);
@@ -77,7 +78,10 @@ if (values.dc) {
   process.exit(0);
 }
 if (values['list-nets'] || !values.net) {
-  console.log(board.nets.join('\n'));
+  // Signal nets first (recognised data lines before the rest), then the nets the check turns away.
+  const cands = hfCandidates(board);
+  const listed = new Set(cands.map((c) => c.net));
+  console.log([...cands.map((c) => `${c.net}\t${c.kind ? `${c.kind.label}, usually ${c.kind.speeds[c.kind.dflt].label}` : 'signal'}\t${c.lengthMm.toFixed(0)} mm`), ...board.nets.filter((n) => !listed.has(n))].join('\n'));
   process.exit(values.net ? 0 : 1);
 }
 
@@ -125,6 +129,10 @@ writeFileSync(join(values.out!, `${prefix}-report.json`), JSON.stringify(report(
 console.log(`wrote ${join(values.out!, `${prefix}-report.json`)}`);
 
 console.log(`\n${net}: ${analysis.findings.length} finding(s)`);
+const kind = classifySignal(net, board.pads.filter((p) => p.net === net).map((p) => p.pinName)) ?? GENERIC;
+const hz = values.speed ? parseHz(values.speed) : kind.speeds[kind.dflt].hz;
+if (values.speed && !hz) console.warn(`warning: --speed ${values.speed} is not a frequency (try 400k, 12MHz or 115200)`);
+if (hz) console.log(`  ${summariseSignal(net, kind, hz, board.tracks.filter((t) => t.net === net).reduce((s, t) => s + Math.hypot(t.b.x - t.a.x, t.b.y - t.a.y), 0)).message}${values.speed ? '' : ' (usual speed; pass --speed to set it)'}`);
 for (const f of analysis.findings) console.log(`  [${f.severity}] ${f.message}`);
 
 function report(b: Board, a: Analysis) {

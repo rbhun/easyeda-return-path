@@ -14,7 +14,7 @@
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { adoptOverlay, forgetOverlay, overlayGroups, overlayState, restyleOverlay, type MarkerGroup } from './overlay';
 import { log, toast } from './runner';
-import { currentStyle, DEFAULT_STYLE, INNER_CYCLE, PALETTE, ROLE_LABELS, ROLES, saveStyle, setSharedStyle, type Role, type RoleStyle } from './style';
+import { currentStyle, DEFAULT_STYLE, INNER_CYCLE, PALETTE, ROLE_LABELS, ROLE_USE, ROLES, saveStyle, setSharedStyle, type Role, type RoleStyle } from './style';
 
 export const PANEL_ID = 'returnPathPanel';
 export const PANEL_HTML = '/iframe/index.html';
@@ -41,6 +41,8 @@ export interface PanelHost {
 	run: (cmd: RunCmd) => Promise<void>;
 	/** "DC 9V / GND, source J1" or "HF check: CLK"; undefined when nothing ran yet. */
 	lastRunLabel: () => string | undefined;
+	/** Kind of the last run, so the panel lists only the line kinds it draws. */
+	lastRunKind?: () => 'hf' | 'dc' | undefined;
 }
 
 interface Shared {
@@ -326,13 +328,14 @@ export function publishState(): void {
 		pushSnapshot();
 	}
 	const style = currentStyle();
+	const kind = host?.lastRunKind?.();
 	publish(TOPIC_STATE, {
 		version: extensionConfig.version,
 		busy: shared.busy,
 		overlay: overlayNow(),
 		lastRun: host?.lastRunLabel(),
 		result: shared.result,
-		roles: ROLES.map(r => ({ role: r, label: t(ROLE_LABELS[r]), colour: style[r].colour, width: style[r].width, visible: style[r].visible, isDefault: style[r].colour === DEFAULT_STYLE[r].colour && style[r].width === DEFAULT_STYLE[r].width && style[r].visible })),
+		roles: ROLES.filter(r => !kind || ROLE_USE[r].includes(kind)).map(r => ({ role: r, label: t(ROLE_LABELS[r]), colour: style[r].colour, width: style[r].width, visible: style[r].visible, isDefault: style[r].colour === DEFAULT_STYLE[r].colour && style[r].width === DEFAULT_STYLE[r].width && style[r].visible === DEFAULT_STYLE[r].visible })),
 		palette: Object.keys(PALETTE),
 		innerCycle: INNER_CYCLE,
 		// The page compares these with the newest mailbox snapshot it holds and hands it on when this is older.
