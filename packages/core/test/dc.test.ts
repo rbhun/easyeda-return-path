@@ -5,6 +5,7 @@ import {
   densityBin,
   densityContours,
   guessRails,
+  loadsFor,
   isGroundNet,
   looksLikePowerNet,
   pairGround,
@@ -159,6 +160,23 @@ test('source guess: regulator output wins, connectors on its rail are loads, dec
   assert.equal(vbus.source?.designator, 'J1');
   assert.equal(vbus.rule, 'connector');
   assert.deepEqual(vbus.loads.map((l) => l.designator), ['U1'], 'the regulator input is a load');
+});
+
+test('pull-ups and LEDs to a GPIO are not loads: their current does not return through ground', () => {
+  const b = partsBoard([
+    ['J2', 'Header', [['1', '3V3'], ['2', 'GND']]],
+    ['U1', 'TCA9548', [['1', '3V3', 'VCC'], ['2', 'GND', 'GND'], ['3', 'SDA', 'SDA']]],
+    ['R1', '4k7', [['1', '3V3'], ['2', 'SDA']]],
+    ['D1', 'LED', [['1', '3V3'], ['2', 'LED_K']]],
+  ]);
+  const r = guessRails(b).rails.find((x) => x.net === '3V3')!;
+  const { loads, excluded } = loadsFor(b, '3V3', b.components[0].id, [b.components[0].id]);
+  assert.deepEqual(loads.map((l) => l.designator), ['U1']);
+  assert.deepEqual(excluded, [{ designator: 'R1', why: 'no ground pad' }, { designator: 'D1', why: 'no ground pad' }]);
+  assert.ok(r.excluded.some((e) => e.designator === 'R1'));
+  const s = buildDcSetup(b, { rail: '3V3', ground: 'GND', source: 'J2' });
+  assert.deepEqual(s.loads.map((l) => l.designator), ['U1']);
+  assert.equal(s.loads[0].current, 1, 'the whole default amp goes to the part that returns it');
 });
 
 test('source guess: several candidates or conflicting rules → ask; the solve keeps one active source', () => {

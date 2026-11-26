@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.17] - 2026-11-26
+
+From the first run on the rack display backup (`rack display_2026-11-23-17-52.epro2`).
+
+- **Parts with no ground pad are no longer default loads.** On the rack display's 3V3 rail, 44 of the 55 default loads were I2C pull-ups, an LED and parts with no GND pin. With no load currents entered, the 1 A total was split equally across all of them, so the TCA9548s and OLEDs that really return current to ground got about a fifth of it. These parts are now listed under "left out: no ground pad", and the wizard still lets you tick them.
+- **CLI: projects with several PCBs.** The CLI analysed the first PCB in the project; on the rack display that is an unrouted copy with 0 tracks, which gave "no copper path" for every OLED and "net has no tracks" for `$1N58`. It now picks the PCB with the most tracks and lists the others in the warning. `--pcb` still overrides. The extension is unaffected (it analyses the open PCB).
+
 ## [0.1.16] - 2026-11-26
 
 A window that stays open, as asked: results, actions and overlay styling without going through the menu each time.
