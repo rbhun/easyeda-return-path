@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.68] - 2026-11-26
+
+From Balazs: sink pins are also named IOVSS, DVSS and AVSS.
+
+- **Any pin with VSS in its name is a return sink.** IOVSS, DVSS and AVSS sink the return, the same as VSS. A pin tied to ground without VSS in the name, such as NRST, still does not.
+
 ## [0.1.67] - 2026-11-26
 
 From Balazs: on the 3V3A capacitors the top return drew one purple line through every capacitor, across a top trace between C80–C83 and C82–C94.
