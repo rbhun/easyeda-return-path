@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.72] - 2026-11-27
+
+From Balazs: after the return reaches the ground pin it loops under the SD0 pin, and at C12 it turns sharp corners. High-speed current does not do that. The same pins count as ground as in the DC check.
+
+- **No loop under the pin, no hook past a via.** The line meets a ground pad or via where the trace passes nearest it. It no longer runs on to the far end of the stretch and back, which was the loop under the SD0 pin and the sharp hook at C12. A return that starts and ends on the same via still runs under the whole stretch.
+- **Smoothed, and joined, the way the DC lines are.** Each line is smoothed over 0.35 mm. The ends stay on the pad or via, and a point that would leave the copper does not move. Where two returns on the same layer run together they are drawn once, and the one that leaves curves onto the other (a shallow join, not a corner). Lines that only meet at a pad or via stay separate.
+- **The same pins are ground.** The return enters GND, EP, −Vo, or a pin with VSS in its name (VSS, IOVSS, DVSS, AVSS). An enable or address pin tied to that net (SD, EN, A0, NRST) does not take it, and the result says so. With no such name, every pad on the net counts, including a header pin whose name is only its number.
+
 ## [0.1.71] - 2026-11-27
 
 From Balazs: the extension treats net names case-sensitively, while EasyEDA treats 3v3 and 3V3 as the same net. So the extension split nets EasyEDA shows as one.

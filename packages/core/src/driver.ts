@@ -1,6 +1,6 @@
 // Which part drives a signal net (D3), guessed from schematic pin names with the pin-hint rules,
 // and the driver-side close of the return loop (brief: "rising edge → VDD, falling edge → VSS").
-import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
+import { isGroundNet, looksLikePowerNet, returnPads } from './dc/rails.js';
 import { resolveNet } from './nets.js';
 import { dist } from './geom.js';
 import type { Board, Component, Pad, Pt } from './types.js';
@@ -102,7 +102,9 @@ export function driverLoop(board: Board, designator: string, net: string, refNet
   const signalPad = own.find((p) => p.net === net);
   if (!signalPad) return null;
   const nearest = (ps: Pad[], to: Pt) => [...ps].sort((a, b) => dist(a.at, to) - dist(b.at, to))[0];
-  const refPin = nearest(own.filter((p) => p.net === refNet), signalPad.at);
+  const onRef = own.filter((p) => p.net === refNet);
+  // GND, EP, −Vo, or VSS. An enable pin tied to the same net does not take this edge.
+  const refPin = nearest(isGroundNet(refNet) ? returnPads(onRef, refNet).pads : onRef, signalPad.at);
   const partner = (n: string) => (isGroundNet(refNet) ? looksLikePowerNet(n) : isGroundNet(n));
   const supplyPins = own.filter((p) => p.net && p.net !== net && p.net !== refNet && partner(p.net));
   const loop: DriverLoop = { designator, signalPad, refNet, refPin, supplyPin: nearest(supplyPins, signalPad.at) };

@@ -150,6 +150,23 @@ test('a connector pin the trace passes through closes the loop through its own g
   assert.ok(!an.findings.some((f) => f.kind === 'driver-loop' && /not at an end/.test(f.message)), 'J1 can be the driver');
 });
 
+test('an enable pin tied to ground does not take the return; the named ground pin does', () => {
+  // SD sits closer to the signal pad than GND. The return still enters GND, and says so.
+  const board = meanderBoard();
+  board.components = [{ id: 'u1', designator: 'U1', at: { x: 10, y: 11 }, rotation: 0, layer: 2, padIds: ['p1', 'sd', 'gnd'] }];
+  board.pads = [
+    { id: 'p1', net: 'SIG', layer: 2, number: '1', pinName: 'SD0', at: { x: 10, y: 10 }, shape: [rect(10, 10, 0.6, 0.6)], holeDiameter: 0, componentId: 'u1' },
+    { id: 'sd', net: 'GND', layer: 2, number: '7', pinName: 'SD', at: { x: 10, y: 11.2 }, shape: [rect(10, 11.2, 0.6, 0.6)], holeDiameter: 0, componentId: 'u1' },
+    { id: 'gnd', net: 'GND', layer: 2, number: '11', pinName: 'GND', at: { x: 10, y: 13.2 }, shape: [rect(10, 13.2, 0.6, 0.6)], holeDiameter: 0, componentId: 'u1' },
+  ];
+  const an = analyzeNet(board, 'SIG');
+  const pin = an.returnPath.jumps.find((j) => j.kind === 'pin');
+  assert.equal(pin?.label, 'U1.11', an.returnPath.jumps.map((j) => `${j.kind} ${j.label}`).join(', '));
+  assert.ok(an.returnPath.traces.some((t) => t.pts.some((p) => Math.hypot(p.x - 10, p.y - 13.2) < 0.05)), 'the return runs into the GND pin');
+  assert.ok(!an.returnPath.traces.some((t) => t.pts.some((p) => Math.hypot(p.x - 10, p.y - 11.2) < 0.05)), 'the return does not enter the SD pin');
+  assert.ok(an.findings.some((f) => /SD is tied to GND but does not take the return/.test(f.message)), an.findings.map((f) => f.message).join('\n'));
+});
+
 test('a ground pad with a trace across the way in is reached through the copper around that trace', () => {
   // J1's ground pad sits off the trace, and WALL crosses the straight line to it. The pour is open past
   // either end of WALL, so the return goes around WALL and still ends on the pad.

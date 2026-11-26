@@ -4,7 +4,7 @@
 // of that copper, and it enters a part only through that part's pad on the reference net. Drawn lines are
 // smoothed, and lines that run together on one layer join, the same way the DC lines do.
 import type { ChainResult, Finding, ReturnRoute, Severity, ViaResult } from './analyze.js';
-import { isGroundNet } from './dc/rails.js';
+import { isGroundNet, returnPads } from './dc/rails.js';
 import { driverLoop, isPassive, type DriverLoop } from './driver.js';
 import { add, dist, distPointSeg, distToPaths, len, mul, Polyline, sub } from './geom.js';
 import type { Steps } from './budget.js';
@@ -163,7 +163,11 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       const sides = coplanar ? [1, -1].map((k) => add(probeAt, mul(unitNormal(end, inward), k * (halfWidth + 1.5 * c.ref!.h + 0.05)))) : [probeAt];
       const endNet = sides.map((p) => probe.netAt(p, c.ref!.layer, coplanar ? net : undefined)).find(Boolean) ?? c.refNets[0] ?? null;
       const candidates = board.pads.filter((p) => p.componentId === comp.id && p.id !== pad.id && p.net && (p.net === endNet || (!endNet && c.refNets.includes(p.net))));
-      const pin = candidates.sort((a, b) => dist(a.at, pad.at) - dist(b.at, pad.at))[0];
+      // The same pins as the DC return: GND, EP, −Vo, or a pin with VSS in its name. An enable or
+      // address pin tied to that net (SD, EN, A0) does not take the return. With no such name,
+      // every pad on the net counts, including a header pin whose name is only its number.
+      const named = endNet && isGroundNet(endNet) ? returnPads(candidates, endNet) : { pads: candidates, tied: [] as Pad[] };
+      const pin = [...named.pads].sort((a, b) => dist(a.at, pad.at) - dist(b.at, pad.at))[0];
       const where = `${comp.designator} pad ${pad.number}`;
       if (endNet && !endNets.has(comp.designator)) endNets.set(comp.designator, endNet);
       pinOf.set(pad.id, pin ?? null);
@@ -171,7 +175,9 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
         close(c, at, pin);
         const d = dist(pin.at, pad.at);
         jumps.push({ kind: 'pin', from: pad.at, to: pin.at, label: `${comp.designator}.${pin.number}`, distance: d, severity: 'ok' });
-        findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the return leaves ${pin.net} copper through ${comp.designator} pad ${pin.number} (${pin.net}), ${d.toFixed(2)} mm from the signal pad`, at: pad.at });
+        const tied = named.tied.map((p) => p.pinName || `pad ${p.number}`);
+        const aside = tied.length ? `; ${tied.join(', ')} ${tied.length > 1 ? 'are' : 'is'} tied to ${pin.net} but ${tied.length > 1 ? 'do' : 'does'} not take the return` : '';
+        findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the return leaves ${pin.net} copper through ${comp.designator} pad ${pin.number} (${pin.net}), ${d.toFixed(2)} mm from the signal pad${aside}`, at: pad.at });
       } else if (isPassive(comp) || /^[XY]\d/i.test(comp.designator)) {
         findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the signal continues through ${comp.designator} onto another net, and its return goes on with it (not traced past ${comp.designator})`, at: pad.at });
       } else {
