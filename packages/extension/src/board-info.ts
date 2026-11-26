@@ -1,7 +1,8 @@
 // The board info of the open project (packages/core/src/boardinfo.ts), kept in the extension's
 // settings under the project's uuid: loaded from a CSV, saved to one, read by the HF and DC checks
 // to prefill their questions, and updated with what the user changes there.
-import { emptyBoardInfo, formatBoardInfoCsv, mergeBoardInfo, parseBoardInfoCsv, type BoardInfo } from '@returnpath/core';
+import { emptyBoardInfo, formatBoardInfoCsv, mergeBoardInfo, NET_KINDS, parseBoardInfoCsv, type BoardInfo } from '@returnpath/core';
+import { BOARD_INFO_SAMPLE_CSV } from './board-info-sample';
 import { guarded, log, readStored, toast, withTimeout, writeStored } from './runner';
 import { dialogAsk } from './wizard';
 import { t } from './i18n';
@@ -66,14 +67,63 @@ export async function boardInfo(): Promise<{ project: Project; info: BoardInfo; 
 const isEmpty = (i: BoardInfo) => !i.nets.length && !i.loads.length && !i.layers.length;
 const fileName = (p: Project) => `${p.name.replace(/[^\w.-]+/g, '_')}-board-info.csv`;
 
-/** Return Path > Load Board Info...: reads a CSV into the open project's board info. */
+/** What Load Board Info shows before the file is picked: the CSV format and what Replace and Add do. */
+export function boardInfoCsvHelp(project: Project, stored: BoardInfo): string {
+	const cols = (...c: string[]) => `    ${c.join(', ')}`;
+	return [
+		t('Choose a CSV file with the board info of ${1}. Its first line names the columns, in any order, separated by commas or semicolons. The first column, row, says what each line describes:', project.name),
+		'',
+		t('row = net: one signal, power or ground net.'),
+		cols('net', 'kind', 'protocol', 'speed', 'driver_part', 'driver_pin', 'driver_pin_name', 'receivers', 'diff_partner', 'reference', 'target', 'notes'),
+		t('    kind: ${1}.', NET_KINDS.join(', ')),
+		t('    speed in Hz: 400k, 8 MHz, 115200. Several driver parts separated by ;, or none for a net without a driver.'),
+		t('    reference: the intended return reference, such as GND on In1. target: an impedance or length target.'),
+		t('row = load: one load on a power rail.'),
+		cols('net', 'voltage', 'source_part', 'source_pin', 'load_part', 'load_pin', 'typical_current', 'peak_current', 'notes'),
+		t('    net: the rail. voltage in V: 3.3 or 3V3. Currents: 150mA, or amps such as 0.15.'),
+		t('row = layer: one copper layer.'),
+		cols('layer', 'pours', 'splits', 'notes'),
+		t('    pours: the nets poured on it. splits: intentional splits and star grounds.'),
+		'',
+		t('Leave a cell blank when it does not apply or is not known; a column the file leaves out is blank in every row.'),
+		isEmpty(stored)
+			? t('${1} has no board info yet, so the file becomes its board info.', project.name)
+			: t('${1} already has board info (${2} nets, ${3} loads, ${4} layers). After the file is read you choose: Replace drops it and keeps only the file; Add keeps it and adds the rows of the file: a row for a net, a load (same rail and load part) or a layer that is already stored updates it, and its blank cells keep the stored values.', project.name, String(stored.nets.length), String(stored.loads.length), String(stored.layers.length)),
+		t('The sample is a complete example to start from.'),
+	].join('\n');
+}
+
+const TEMPLATE_NAME = 'board-info-template.csv';
+
+/** Return Path > Load Board Info...: shows the CSV format, then reads a CSV into the open project's board info. */
 export async function loadBoardInfo(): Promise<void> {
 	const title = t('Load board info');
 	await guarded(title, async () => {
-		const fs = (eda as unknown as { sys_FileSystem?: { openReadFileDialog?: (ext?: string | string[], multi?: false) => Promise<File | undefined> } }).sys_FileSystem;
+		const fs = (eda as unknown as { sys_FileSystem?: { openReadFileDialog?: (ext?: string | string[], multi?: false) => Promise<File | undefined>; saveFile?: (data: Blob, name?: string) => Promise<void> } }).sys_FileSystem;
 		if (!fs?.openReadFileDialog) {
 			eda.sys_Dialog.showInformationMessage(t('This EasyEDA version cannot open a file for the extension.'), title);
 			return;
+		}
+		const project = await currentProject();
+		const stored = readBoardInfo(project);
+		const help = dialogAsk();
+		try {
+			for (;;) {
+				const what = await help.select(title, boardInfoCsvHelp(project, stored), [
+					{ value: 'pick', label: t('Choose the CSV file…') },
+					...(fs.saveFile ? [{ value: 'template', label: t('Save the sample CSV as a template (${1})', TEMPLATE_NAME) }] : []),
+				], 'pick');
+				if (!what)
+					return;
+				if (what === 'pick')
+					break;
+				await fs.saveFile!(new Blob([BOARD_INFO_SAMPLE_CSV], { type: 'text/csv' }), TEMPLATE_NAME);
+				log(`board info: sample saved as ${TEMPLATE_NAME}`);
+				toast(t('Sample saved as ${1}: edit it and load it here.', TEMPLATE_NAME));
+			}
+		}
+		finally {
+			help.close();
 		}
 		const file = await fs.openReadFileDialog(['csv']);
 		if (!file)
@@ -84,8 +134,6 @@ export async function loadBoardInfo(): Promise<void> {
 			eda.sys_Dialog.showInformationMessage([t('${1} has no net, load or layer rows.', file.name), ...warnings].join('\n'), title);
 			return;
 		}
-		const project = await currentProject();
-		const stored = readBoardInfo(project);
 		let next = info;
 		if (!isEmpty(stored)) {
 			const ask = dialogAsk();
