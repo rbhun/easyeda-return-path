@@ -32,8 +32,11 @@ import { checkpoint, log, readStored, savedLog, TimedOut, withTimeout, writeStor
 export const MIL = 0.0254;
 const LAYER_MULTI = 12;
 const LAYER_OUTLINE = 11;
-/** Region rule types that keep pour and plane copper out: no pours, no inner plane. */
-const NO_POUR_RULES = new Set([7, 8]);
+const LAYER_TOP = 1;
+const LAYER_BOTTOM = 2;
+/** EPCB_PrimitiveRegionRuleType: NO_POURS keeps all pour copper out, NO_INNER_ELECTRICAL_LAYERS only plane-layer copper. */
+const NO_POURS = 7;
+const NO_PLANES = 8;
 
 /** API data coordinates are mil, Y up, which is what the file parser assumes too. */
 const conv = (x: number, y: number): Pt => ({ x: x * MIL, y: y * MIL });
@@ -267,12 +270,17 @@ async function readKeepouts(copperIds: Set<number>): Promise<Keepout[]> {
 	try {
 		for (const r of await call('pcb_PrimitiveRegion.getAll (keepouts)', () => api.getAll())) {
 			const rules = (r.getState_RuleType() ?? []) as number[];
-			if (!rules.some(t => NO_POUR_RULES.has(t)))
-				continue;
 			const layer = r.getState_Layer() as number;
-			if (layer !== LAYER_MULTI && !copperIds.has(layer))
-				continue;
-			out.push({ id: r.getState_PrimitiveId(), layer: layer === LAYER_MULTI ? MULTI_LAYER : layer, outline: decodeComplex(r.getState_ComplexPolygon().getSource(), conv, MIL) });
+			const id = r.getState_PrimitiveId();
+			let layers: number[] = [];
+			if (rules.includes(NO_POURS))
+				layers = layer === LAYER_MULTI ? [MULTI_LAYER] : [layer];
+			else if (rules.includes(NO_PLANES))
+				layers = (layer === LAYER_MULTI ? [...copperIds] : [layer]).filter(l => l !== LAYER_TOP && l !== LAYER_BOTTOM);
+			layers = layers.filter(l => l === MULTI_LAYER || copperIds.has(l));
+			const outline = layers.length ? decodeComplex(r.getState_ComplexPolygon().getSource(), conv, MIL) : [];
+			log(`read board: region ${id}: rules [${rules.join(', ')}], layer ${layer}${layers.length ? `, ${Math.round(Math.abs(area(outline)))} mm², keeps pours out of ${layers[0] === MULTI_LAYER ? 'all layers' : `layer ${layers.join(', ')}`}` : ', ignored'}`);
+			for (const l of layers) out.push({ id: layers.length > 1 ? `${id}@${l}` : id, layer: l, outline });
 		}
 	}
 	catch (e) {
@@ -332,70 +340,107 @@ function fillSource(f: PourFill): unknown {
 	return typeof path?.getSource === 'function' ? path.getSource() : path?.source;
 }
 
+/** Pour-fill IDs whose fetch froze the editor; they are never fetched again. */
+const SKIP_POURED = 'pouredIdsThatHang';
+
+/**
+ * The pour fill a previous run was fetching when the editor hung: from the marker, or, for builds
+ * that logged fetches but stored no ID, from a saved-log fetch line with no result after it.
+ * `'*'` means a hang inside getAll, which names no single fill.
+ */
+function hungFetch(marker: unknown): string | undefined {
+	if (typeof marker === 'string' && marker) {
+		const m = /^get:(.+)$/.exec(marker);
+		return m ? m[1] : '*';
+	}
+	const lines = savedLog();
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const get = /read board: pcb_PrimitivePoured\.get \d+\/\d+ \((.+)\)…$/.exec(lines[i]);
+		if (get)
+			return lines.slice(i + 1).some(l => l.includes(`poured ${get[1]}:`) || l.includes(`${get[1]} returned`)) ? undefined : get[1];
+		if (/read board: pcb_PrimitivePoured\.getAll…$/.test(lines[i]))
+			return lines.slice(i + 1).some(l => /computed copper areas|did not answer|pours are computed from their outlines/.test(l)) ? undefined : '*';
+	}
+	return undefined;
+}
+
 /**
  * Fetches the computed pour fills one at a time. EasyEDA computes them in the editor itself, and
- * fetching all at once (getAll) has frozen the editor on a real board, which no time limit can
- * interrupt. If the last run hung here, or fetching gets slow, the remaining pours are computed
- * from their outlines instead (less accurate: clearances are approximated).
+ * some fetches freeze the editor, which no time limit can interrupt. The fill being fetched is
+ * stored first; if the editor hangs, the next run adds it to a skip list and computes that pour from
+ * its outline (clearances approximated). Slow fetches switch the rest to outlines too.
  */
-async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipped: boolean }> {
-	// Builds before 0.1.2 had no marker; their last words in the saved log tell the same story.
-	const lines = savedLog();
-	let lastGetAll = lines.length - 1;
-	while (lastGetAll >= 0 && !/read board: pcb_PrimitivePoured\.getAll…$/.test(lines[lastGetAll])) lastGetAll--;
-	const hungBefore = lastGetAll >= 0 && !lines.slice(lastGetAll + 1).some(l => /computed copper areas|did not answer|pours are computed from their outlines/.test(l));
-	const since = readStored(POURED_MARKER) || (hungBefore ? lines[lastGetAll].slice(0, 23) : '');
-	if (since) {
-		const msg = `The previous run stopped while fetching computed pour fills (started ${String(since)}); pours are computed from their outlines this time.`;
+async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skippedIds: Set<string>; allSkipped: boolean }> {
+	const skip = new Set(((readStored(SKIP_POURED) as string[] | undefined) ?? []).filter(x => typeof x === 'string'));
+	const hung = hungFetch(readStored(POURED_MARKER));
+	await writeStored(POURED_MARKER, '');
+	if (hung === '*') {
+		const msg = 'The previous run froze while fetching computed pour fills; pours are computed from their outlines this time.';
 		log(`read board: ${msg}`, 'warn');
 		warnings.push(msg);
-		await writeStored(POURED_MARKER, '');
-		return { poured: [], skipped: true };
+		return { poured: [], skippedIds: new Set(), allSkipped: true };
+	}
+	if (hung && !skip.has(hung)) {
+		skip.add(hung);
+		await writeStored(SKIP_POURED, [...skip].slice(-50));
+		log(`read board: the previous run froze while fetching computed pour fill ${hung}; it is skipped from now on`, 'warn');
 	}
 	const api = eda.pcb_PrimitivePoured;
 	const ids = typeof api.getAllPrimitiveId === 'function' ? await call('pcb_PrimitivePoured.getAllPrimitiveId', () => api.getAllPrimitiveId()) : undefined;
-	await writeStored(POURED_MARKER, new Date().toISOString());
+	const skippedIds = new Set<string>();
 	try {
-		if (!ids)
-			return { poured: await call('pcb_PrimitivePoured.getAll', () => api.getAll()), skipped: false };
+		if (!ids) {
+			await writeStored(POURED_MARKER, 'getAll');
+			return { poured: await call('pcb_PrimitivePoured.getAll', () => api.getAll()), skippedIds, allSkipped: false };
+		}
 		const out: Poured[] = [];
 		const t0 = clock();
 		for (const [i, id] of ids.entries()) {
+			if (skip.has(id)) {
+				skippedIds.add(id);
+				log(`read board: pour fill ${i + 1}/${ids.length} (${id}) skipped: it froze the editor before`, 'warn');
+				continue;
+			}
 			if (clock() - t0 > apiTimeouts.pouredTotalMs) {
 				const msg = `Fetching computed pour fills took over ${Math.round(apiTimeouts.pouredTotalMs / 1000)} s; ${ids.length - i} of ${ids.length} are computed from their outlines.`;
 				log(`read board: ${msg}`, 'warn');
 				warnings.push(msg);
-				return { poured: out, skipped: true };
+				ids.slice(i).forEach(x => skippedIds.add(x));
+				return { poured: out, skippedIds, allSkipped: false };
 			}
+			await writeStored(POURED_MARKER, `get:${id}`);
 			const t1 = clock();
 			const raw: unknown = await call(`pcb_PrimitivePoured.get ${i + 1}/${ids.length} (${id})`, () => api.get(id));
-			if (i === 0)
-				log(`read board: pcb_PrimitivePoured.get returns ${shapeOf(raw)}`);
-			const p = asPoured(raw);
 			const ms = clock() - t1;
+			if (i === 0 || !out.length)
+				log(`read board: pcb_PrimitivePoured.get returns ${shapeOf(raw)}`);
+			log(`read board: ${id} returned after ${Math.round(ms)} ms; reading its fill regions…`);
+			await checkpoint();
+			const p = asPoured(raw);
 			if (p) {
 				out.push(p);
 				const fills = p.getState_PourFills();
 				let values = 0;
 				for (const f of fills) values += (fillSource(f) as unknown[] | undefined)?.length ?? 0;
-				log(`read board: poured ${id}: pour ${p.getState_PourPrimitiveId() ?? '-'}, layer ${p.getState_Layer() ?? '?'}, ${fills.length} fill regions, ${values} path values, ${Math.round(ms)} ms`);
+				log(`read board: poured ${id}: pour ${p.getState_PourPrimitiveId() ?? '-'}, layer ${p.getState_Layer() ?? '?'}, ${fills.length} fill regions, ${values} path values, ${Math.round(clock() - t1)} ms`);
 			}
-			if (ms > apiTimeouts.pouredSlowMs) {
-				const msg = `Fetching computed pour fill ${id} took ${Math.round(ms / 1000)} s; the remaining ${ids.length - i - 1} are computed from their outlines.`;
+			if (clock() - t1 > apiTimeouts.pouredSlowMs) {
+				const msg = `Fetching computed pour fill ${id} took ${Math.round((clock() - t1) / 1000)} s; the remaining ${ids.length - i - 1} are computed from their outlines.`;
 				log(`read board: ${msg}`, 'warn');
 				warnings.push(msg);
-				return { poured: out, skipped: true };
+				ids.slice(i + 1).forEach(x => skippedIds.add(x));
+				return { poured: out, skippedIds, allSkipped: false };
 			}
 			await yieldToEditor();
 		}
-		return { poured: out, skipped: false };
+		return { poured: out, skippedIds, allSkipped: false };
 	}
 	catch (e) {
 		// Pour fills only refine accuracy; any failure here falls back to outlines instead of ending the run.
 		const err = e instanceof Error ? e : new Error(String(e));
 		log(`read board: ${err.message}; pours are computed from their outlines${e instanceof TimedOut || !err.stack ? '' : `\n${err.stack}`}`, 'warn');
 		warnings.push(`Computed pour fills could not be read (${err.message}); pours are computed from their outlines.`);
-		return { poured: [], skipped: true };
+		return { poured: [], skippedIds, allSkipped: true };
 	}
 	finally {
 		await writeStored(POURED_MARKER, '');
@@ -518,7 +563,7 @@ export async function readBoard(): Promise<Board> {
 	const ringsByPour = new Map<string, Paths>();
 	const islandsByPlane = new Map<string, { plane: typeof planeFills[number]; islands: Paths }>();
 	const planeBoxes = planeFills.map(p => bbox(p.shape));
-	const { poured: pouredAll, skipped: pouredSkipped } = await readPoured(warnings);
+	const { poured: pouredAll, skippedIds, allSkipped } = await readPoured(warnings);
 	let pieces = 0;
 	let islandCount = 0;
 	let sliceStart = clock();
@@ -589,7 +634,9 @@ export async function readBoard(): Promise<Board> {
 	for (const p of await call('pcb_PrimitivePour.getAll', () => eda.pcb_PrimitivePour.getAll())) {
 		const id = p.getState_PrimitiveId();
 		const poured = fillsByPour.get(id);
-		if (!poured && !pouredSkipped)
+		if (!poured && skippedIds.size)
+			warnings.push(`Pour "${p.getState_PourName()}" (${p.getState_Net()}) is computed from its outline: EasyEDA froze when asked for its fill.`);
+		else if (!poured && !allSkipped)
 			warnings.push(`Pour "${p.getState_PourName()}" (${p.getState_Net()}) has no computed fill; rebuild copper for accurate results.`);
 		pours.push({
 			id,

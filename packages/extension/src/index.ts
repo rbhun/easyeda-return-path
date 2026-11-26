@@ -8,8 +8,8 @@ import extensionConfig from '../extension.json' with { type: 'json' };
 import { drawDc } from './dc-overlay';
 import { readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis } from './overlay';
-import { boardSizes, cancelRunning, guarded, log, logFilePath, logStartup, runSteps, savedLog, saveLogAs, timed, toast } from './runner';
-import { dialogAsk, runDcWizard, type Ask } from './wizard';
+import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, runSteps, savedLog, saveLogAs, timed, toast } from './runner';
+import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
 
 const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 
@@ -106,10 +106,13 @@ export async function runDcReturn(ask: Ask, preferredRail?: string): Promise<voi
 	const title = t('DC return current');
 	await guarded(title, async () => {
 		log(`DC Return Current (v${extensionConfig.version})`);
+		const rail = preferredRail ?? await timed('read selection', selectedNet, n => n ?? 'nothing selected');
 		const board = await timed('read board', readBoard, boardSizes);
-		const wiz = await runDcWizard(board, ask, preferredRail ?? await selectedNet());
+		const wiz = await runDcWizard(board, loggedAsk(ask), rail);
 		if (!wiz)
 			return;
+		log(`DC setup: ${JSON.stringify(wiz.input)}`);
+		await checkpoint();
 		const setup = buildDcSetup(board, wiz.input);
 		log(`DC ${setup.rail}/${setup.ground}: source ${setup.source.designator}, loads ${setup.loads.map(l => `${l.designator}=${l.current} A`).join(', ')}`);
 		const percent = (tick: Tick) => {

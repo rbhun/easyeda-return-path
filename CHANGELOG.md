@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.5] - 2026-11-26
+
+On the R-Com dongle, fetching one computed pour fill (`0ca4da6a31655d4b`) froze EasyEDA on every run without a selection. 0.1.4 then computed all pours from their outlines for one run only, so the run after that froze again. A run that recovered this way also ended without a log line after the board read.
+
+- A pour fill whose fetch froze the editor is now remembered (stored as `pouredIdsThatHang`) and never fetched again; only that pour is computed from its outline, and the others still come from EasyEDA. The fill being fetched is stored before each fetch. For logs from older builds, the last fetch line with no result after it names the fill. A log line now separates EasyEDA returning the fill from reading its regions, to show which one hangs.
+- Keepout regions with only the "no inner plane" rule no longer cut Top and Bottom pours; they only clear inner plane layers. On a 2-layer board they used to cut holes into outline-computed pours, which can split a ground pour into islands. Each region's rules, layer and area are logged.
+- DC Return Current: the selection is read before the board (selecting a trace is optional; it only preselects its net). The end of the board read, the rail guess, every wizard question and answer, and the chosen setup are now saved to the log as they happen, so a freeze between the board read and the solve shows where it happened.
+
 ## [0.1.4] - 2026-11-26
 
 First complete runs on a real board (R-Com dongle, 2 layers): DC Return Current (+12V from J3 to U4 and U5) and Show for Selected Net (BNC1+) both finished. But the DC overlay crossed the board outline and keepouts, and the high-frequency check assumed 0.2 mm between the layers.

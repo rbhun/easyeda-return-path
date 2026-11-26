@@ -1,6 +1,7 @@
 // Wizard step 1 (design decisions D3, D7): confirm the power rails, pair each with its ground,
 // pick the rail to solve, confirm its single active source (the other candidates are left out) and
 // its loads, and optionally give load currents. Built on the system dialogs, so it needs no iframe.
+import { checkpoint, log } from './runner';
 import { componentsOnNet, guessRails, loadsFor, parseCurrents, type Board, type DcSetupInput, type RailGuess } from '@returnpath/core';
 
 export interface Option {
@@ -13,6 +14,23 @@ export interface Ask {
 	select: (title: string, prompt: string, options: Option[], dflt?: string) => Promise<string | undefined>;
 	multi: (title: string, prompt: string, options: Option[], dflt: string[]) => Promise<string[] | undefined>;
 	input: (title: string, prompt: string, value: string) => Promise<string | undefined>;
+}
+
+/** Logs and saves every question and answer, so a hang between dialogs shows in the saved log. */
+export function loggedAsk(ask: Ask): Ask {
+	const around = async <T>(prompt: string, q: () => Promise<T>): Promise<T> => {
+		log(`wizard: ${prompt}`);
+		await checkpoint();
+		const a = await q();
+		log(`wizard: answer ${a === undefined ? '(cancelled)' : JSON.stringify(a).slice(0, 200)}`);
+		await checkpoint();
+		return a;
+	};
+	return {
+		select: (title, prompt, options, dflt) => around(`${prompt} (${options.length} options)`, () => ask.select(title, prompt, options, dflt)),
+		multi: (title, prompt, options, dflt) => around(`${prompt} (${options.length} options)`, () => ask.multi(title, prompt, options, dflt)),
+		input: (title, prompt, value) => around(prompt, () => ask.input(title, prompt, value)),
+	};
 }
 
 const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
@@ -42,7 +60,10 @@ export interface WizardResult {
 /** Runs the wizard; undefined when the user cancels or there is nothing to solve. */
 export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string): Promise<WizardResult | undefined> {
 	const title = t('DC return current');
+	log('wizard: guessing rails…');
+	await checkpoint();
 	const guess = guessRails(board);
+	log(`wizard: ${guess.rails.length} rails (${guess.rails.map(r => `${r.net}: source ${r.source?.designator ?? '?'}`).join(', ')}), grounds ${guess.grounds.join(', ') || '-'}`);
 	const byNet = new Map(guess.rails.map(r => [r.net, r]));
 	const allNets = [...new Set([...board.nets, ...board.pads.map(p => p.net)].filter(Boolean))].sort();
 

@@ -227,6 +227,7 @@ export async function timed<T>(label: string, fn: () => Promise<T>, sizes?: (r: 
 	await checkpoint();
 	const r = await fn();
 	log(`${label}: ${Math.round(now() - t0)} ms${sizes ? `; ${sizes(r)}` : ''}`);
+	await checkpoint();
 	return r;
 }
 

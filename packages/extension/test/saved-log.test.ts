@@ -98,6 +98,29 @@ test('a power net is turned away before the board is read', async () => {
 	assert.match(mock.dialogs[0].prompt, /3V3 looks like a power rail/);
 });
 
+test('a DC run with nothing selected logs and saves each step between the board read and the solve', async () => {
+	const mock = install({}, d => d.dflt, load(buildDcEpro()), '');
+	await ext.showDcReturn();
+	const lines = saved(mock);
+	const at = (re: RegExp) => {
+		const i = lines.findIndex(l => re.test(l));
+		assert.ok(i >= 0, `${re} in saved log`);
+		return i;
+	};
+	const order = [
+		/read selection: \d+ ms; nothing selected$/,
+		/read board: \d+ ms; /,
+		/wizard: guessing rails…$/,
+		/wizard: \d+ rails \(/,
+		/wizard: Step 1\/5: .* \(\d+ options\)$/,
+		/wizard: answer \[/,
+		/DC setup: \{/,
+		/DC [^:]+: source /,
+		/DC .*finished/,
+	].map(at);
+	assert.deepEqual(order, [...order].sort((x, y) => x - y));
+});
+
 test('the saved log keeps the last 1000 lines', async () => {
 	const mock = install({});
 	for (let i = 0; i < 1100; i++) runner.log(`line ${i}`);
@@ -163,25 +186,47 @@ test('without the stackup API only the copper layers the board uses are read, no
 	assert.ok(saved(byCount).some(l => /read board: 4 copper layers in use \(board says 4; 34 listed\)/.test(l)));
 });
 
-test('computed pour fills are fetched one at a time; a run that hung there makes the next one use pour outlines', async () => {
+test('computed pour fills are fetched one at a time; a fill whose fetch hung is skipped from then on, the others are still fetched', async () => {
 	const storage = new Map<string, unknown>();
 	const hung = install({ storage }, () => false);
+	const ids = await hung.eda.pcb_PrimitivePoured.getAllPrimitiveId();
 	hung.eda.pcb_PrimitivePoured.get = never;
 	boardModule.apiTimeouts.callMs = 1500;
 	void ext.showReturnPath();
 	await new Promise(r => setTimeout(r, 150));
 	boardModule.apiTimeouts.callMs = 200;
-	assert.ok(storage.get('fetchingPouredSince'), 'marker set while fetching');
+	assert.equal(storage.get('fetchingPouredSince'), `get:${ids[0]}`);
 	assert.match(saved(hung).at(-1)!, /read board: pcb_PrimitivePoured.get 1\/3 \(.*\)…$/);
 
-	const next = install({ storage });
-	let fetched = 0;
-	next.eda.pcb_PrimitivePoured.get = async () => (fetched++, undefined);
+	for (let run = 0; run < 2; run++) {
+		const next = install({ storage });
+		const get = next.eda.pcb_PrimitivePoured.get;
+		const fetched: string[] = [];
+		next.eda.pcb_PrimitivePoured.get = async (id: string) => (fetched.push(id), get(id));
+		await ext.showReturnPath();
+		assert.deepEqual(fetched, ids.slice(1));
+		assert.deepEqual(storage.get('pouredIdsThatHang'), [ids[0]]);
+		assert.match(next.messages.at(-1)!, /is computed from its outline: EasyEDA froze when asked for its fill/);
+		assert.ok(next.markers.length > 0);
+		assert.equal(storage.get('fetchingPouredSince'), '');
+	}
+});
+
+test('a saved log from an older build that ends in a pour-fill fetch skips that fill', async () => {
+	const ids = await install({}).eda.pcb_PrimitivePoured.getAllPrimitiveId();
+	const storage = new Map<string, unknown>([['log', [
+		`2026-11-26 01:02:19.100 INFO  read board: pcb_PrimitivePoured.get 1/3 (${ids[0]})…`,
+		`2026-11-26 01:02:19.103 INFO  read board: poured ${ids[0]}: pour -, layer ?, 1 fill regions, 8 path values, 3 ms`,
+		`2026-11-26 01:02:19.104 INFO  read board: pcb_PrimitivePoured.get 2/3 (${ids[1]})…`,
+		'2026-11-26 01:03:40.000 INFO  Show for Selected Net: GND (v0.1.4)',
+	].join('\n')]]);
+	const mock = install({ storage });
+	const get = mock.eda.pcb_PrimitivePoured.get;
+	const fetched: string[] = [];
+	mock.eda.pcb_PrimitivePoured.get = async (id: string) => (fetched.push(id), get(id));
 	await ext.showReturnPath();
-	assert.equal(fetched, 0);
-	assert.match(next.messages.at(-1)!, /previous run stopped while fetching computed pour fills/);
-	assert.ok(next.markers.length > 0, 'analysis still ran on outline-computed pours');
-	assert.equal(storage.get('fetchingPouredSince'), '');
+	assert.deepEqual(storage.get('pouredIdsThatHang'), [ids[1]]);
+	assert.deepEqual(fetched, [ids[0], ids[2]]);
 });
 
 test('slow pour-fill fetches switch the rest to outlines', async () => {
@@ -209,10 +254,10 @@ test('a saved log from an older build that ends in pcb_PrimitivePoured.getAll al
 	mock.eda.pcb_PrimitivePoured.get = async () => (fetched++, undefined);
 	await ext.showReturnPath();
 	assert.equal(fetched, 0);
-	assert.match(mock.messages.at(-1)!, /previous run stopped while fetching computed pour fills \(started 2026-11-26 00:19:41.588\)/);
+	assert.match(mock.messages.at(-1)!, /previous run froze while fetching computed pour fills; pours are computed from their outlines/);
 	const again = install({ storage });
 	await ext.showReturnPath();
-	assert.doesNotMatch(again.messages.at(-1)!, /previous run stopped/);
+	assert.doesNotMatch(again.messages.at(-1)!, /previous run froze/);
 });
 
 test('pcb_PrimitivePoured.get returning an array or plain state still gives the computed fills', async () => {
@@ -269,6 +314,22 @@ test('the board outline and pour keepouts are read', async () => {
 	assert.ok(Math.abs(Math.abs(area(read.outline)) - Math.abs(area(board.outline))) < 0.01);
 	assert.equal(read.keepouts.length, board.keepouts.length);
 	assert.ok(saved(mock).some(l => new RegExp(`board outline 1 ring\\(s\\), ${board.keepouts.length} pour keepouts`).test(l)), saved(mock).join('\n'));
+});
+
+test('no-inner-plane keepouts only clear plane layers; other region rules are ignored', async () => {
+	const mock = install({});
+	const regions = await mock.eda.pcb_PrimitiveRegion.getAll();
+	const withRules = (rules: number[]) => regions.map(r => Object.assign(Object.create(r), { getState_RuleType: () => rules }));
+	mock.eda.pcb_PrimitiveRegion.getAll = (async () => withRules([8])) as never;
+	const read = await boardModule.readBoard();
+	const inner = read.stackup.copper.map(c => c.id).filter(id => id !== 1 && id !== 2);
+	assert.ok(read.keepouts.every(k => inner.includes(k.layer)), JSON.stringify(read.keepouts.map(k => k.layer)));
+	const expected = regions.reduce((n, r) => n + (r.getState_Layer() === 12 ? inner.length : inner.includes(r.getState_Layer() as number) ? 1 : 0), 0);
+	assert.ok(expected > 0);
+	assert.equal(read.keepouts.length, expected);
+	mock.eda.pcb_PrimitiveRegion.getAll = (async () => withRules([2, 5])) as never;
+	assert.equal((await boardModule.readBoard()).keepouts.length, 0);
+	assert.ok(saved(mock).some(l => /region .*: rules \[2, 5\], layer \d+, ignored$/.test(l)));
 });
 
 test('without the stackup API a 2-layer board is assumed to be 1.6 mm thick, not 0.2 mm', async () => {
