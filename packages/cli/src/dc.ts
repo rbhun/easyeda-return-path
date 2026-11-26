@@ -1,6 +1,6 @@
 // `returnpath --dc <rail>`: wizard step 1 without the dialogs (guess, overridable by flags), the DC
 // solve, and the renders. Pure apart from the returned file list; cli.ts does the writing.
-import { buildDcSetup, DRAWN_STREAMS, guessRails, parseCurrents, railLabel, solveDc, traceStreamlines, type Board, type DcResult, type RailsGuess, type Streamline } from '@returnpath/core';
+import { buildDcSetup, DRAWN_STREAMS, guessRailGroup, guessRails, parseCurrents, railLabel, solveDc, traceStreamlines, type Board, type DcResult, type RailsGuess, type Streamline } from '@returnpath/core';
 import { renderDc } from './render/dc-svg.js';
 
 export interface DcCliOptions {
@@ -32,7 +32,7 @@ export interface DcRun {
 }
 
 export function runDc(board: Board, o: DcCliOptions): DcRun {
-  const guess = guessRails(board).rails.find((r) => r.net === o.rail);
+  const guess = o.railNets?.length ? guessRailGroup(board, [o.rail, ...o.railNets]) : guessRails(board).rails.find((r) => r.net === o.rail);
   const ground = o.ground ?? guess?.ground;
   if (!ground) throw new Error(`no ground found for ${o.rail}; pass --ground`);
   const source = o.source ?? guess?.source?.designator;

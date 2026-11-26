@@ -4,7 +4,7 @@
 // the system dialogs when that window cannot be used.
 import { checkpoint, log } from './runner';
 import { askInWindow, BACK, closeWizardWindow, type WizardKind } from './wizard-window';
-import { componentsOnNet, emptyBoardInfo, guessRails, infoRails, parseCurrents, parseHz, railBridges, railInfo, railLabel, railLoadsFor, railNeighbours, withRail, type Board, type BoardInfo, type DcSetupInput, type RailGuess } from '@returnpath/core';
+import { componentsOnNet, emptyBoardInfo, guessRailGroup, guessRails, infoRails, parseCurrents, parseHz, railBridges, railInfo, railLabel, railLoadsFor, railNeighbours, withRail, type Board, type BoardInfo, type DcSetupInput, type RailGuess } from '@returnpath/core';
 import { t } from './i18n';
 
 export interface Option {
@@ -300,7 +300,7 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 			return undefined;
 		pairs[rail] = ground;
 	}
-	const g: RailGuess = byNet.get(rail) ?? { net: rail, reason: 'name', candidates: [], rule: 'ask', loads: [], excluded: [], askReason: t('${1} was not guessed as a rail: pick its source.', rail) };
+	let g: RailGuess = byNet.get(rail) ?? { net: rail, reason: 'name', candidates: [], rule: 'ask', loads: [], excluded: [], askReason: t('${1} was not guessed as a rail: pick its source.', rail) };
 
 	// Nets the rail continues on through a fuse, ferrite, diode…, solved with it as one rail; asked only when there are any.
 	const neighbours = railNeighbours(board, rail);
@@ -317,11 +317,12 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	const label = railLabel({ rail, railNets });
 	const bridges = new Set(railBridges(board, group).map(b => b.designator));
 
+	if (railNets.length)
+		g = guessRailGroup(board, group);
+
 	// 4. Source: one active source; other candidates are left out of the solve (D7).
-	const onRail = [...new Map(group.flatMap(n => componentsOnNet(board, n)).map(c => [c.id, c])).values()].filter(c => !bridges.has(c.designator));
-	const extraCands = railNets.flatMap(n => byNet.get(n)?.candidates ?? []).filter(c => !bridges.has(c.designator));
-	if (extraCands.length)
-		g.candidates = [...g.candidates, ...extraCands.filter(c => !g.candidates.some(o => o.componentId === c.componentId))];
+	const across = new Set(g.excluded.filter(e => !railNets.length ? false : /^(?:joins|sits across) /.test(e.why)).map(e => e.designator));
+	const onRail = [...new Map(group.flatMap(n => componentsOnNet(board, n)).map(c => [c.id, c])).values()].filter(c => !bridges.has(c.designator) && !across.has(c.designator));
 	const candIds = new Set(g.candidates.map(c => c.componentId));
 	const sourceOptions = [
 		...g.candidates.map(c => ({ value: c.componentId, label: `${c.designator}: ${c.reason}${c.componentId === g.source?.componentId ? ` (${t('guess')})` : ''}` })),
