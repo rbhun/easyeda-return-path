@@ -142,3 +142,26 @@ test('a connector pin the trace passes through closes the loop through its own g
   assert.equal(into.length, 2, 'the return from each side of the pin ends in its ground pin');
   assert.ok(!an.findings.some((f) => f.kind === 'driver-loop' && /not at an end/.test(f.message)), 'J1 can be the driver');
 });
+
+test('a ground pad with a trace across the way in is reached through the copper around that trace', () => {
+  // J1's ground pad sits off the trace, and WALL crosses the straight line to it. The pour is open past
+  // either end of WALL, so the return goes around WALL and still ends on the pad.
+  const board = meanderBoard();
+  const wall = rect(10, 11.1, 8, 0.5);
+  const bottom = board.pours.find((p) => p.id === 'pb')!;
+  bottom.poured = difference(bottom.poured!, [wall]);
+  board.tracks.push({ id: 'w', net: 'WALL', layer: 2, a: { x: 6, y: 11.1 }, b: { x: 14, y: 11.1 }, width: 0.4 });
+  board.nets = ['SIG', 'WALL', 'GND'];
+  board.components = [{ id: 'j1', designator: 'J1', at: { x: 10, y: 11 }, rotation: 0, layer: 2, padIds: ['p1', 'p2'] }];
+  board.pads = [
+    { id: 'p1', net: 'SIG', layer: 2, number: '1', at: { x: 10, y: 10 }, shape: [rect(10, 10, 0.6, 0.6)], holeDiameter: 0, componentId: 'j1' },
+    { id: 'p2', net: 'GND', layer: 2, number: '2', at: { x: 10, y: 12.4 }, shape: [rect(10, 12.4, 0.6, 0.6)], holeDiameter: 0, componentId: 'j1' },
+  ];
+  const an = analyzeNet(board, 'SIG');
+  const pin = an.returnPath.jumps.find((j) => j.kind === 'pin');
+  assert.ok(pin && pin.from.x === pin.to.x && pin.from.y === pin.to.y, 'no line through the air to the ground pad');
+  const onPad = an.returnPath.traces.some((t) => t.pts.some((p) => Math.hypot(p.x - 10, p.y - 12.4) < 0.05));
+  assert.ok(onPad, 'the return runs into the ground pad');
+  const wallHit = an.returnPath.traces.some((t) => t.layer === 2 && t.pts.some((p) => Math.abs(p.y - 11.1) <= 0.2 && p.x > 6 && p.x < 14));
+  assert.ok(!wallHit, 'the return does not cross WALL');
+});
