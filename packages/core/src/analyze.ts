@@ -1,6 +1,6 @@
 import { AnalysisAborted, runAsync, runSync, type RunOptions, type Steps } from './budget.js';
 import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
-import { DEFAULT_MAX_DETOUR_NODES, geodesicSteps, TOO_COMPLEX, type Detour } from './detour.js';
+import { DEFAULT_MAX_DETOUR_NODES, geodesic, geodesicSteps, TOO_COMPLEX, type Detour } from './detour.js';
 import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, pointInPaths, Polyline, strokePath, union } from './geom.js';
 import { allCopper, buildReferenceCopperSteps, vertexCount, type LayerCopper } from './refcopper.js';
 import { isPassive } from './driver.js';
@@ -98,6 +98,10 @@ export interface Gap {
   detour?: Detour & { directLength: number; extraLength: number; loopArea: number; loop: Path };
   /** For splits between nets, or slots without an in-plane path. */
   bridge?: Bridge | null;
+  /** Taken instead of a detour on the reference layer when it is shorter, or when there is none. */
+  viaRoute?: ViaRoute;
+  /** The detour as drawn: around every hole of the copper, also the small ones its length ignores. */
+  drawn?: Path;
 }
 
 export interface ChainResult {
@@ -110,6 +114,16 @@ export interface ChainResult {
   /** Segments reported for too little reference copper (band-coverage findings). */
   thin: { a: Pt; b: Pt; ratio: number }[];
   gaps: Gap[];
+  /** Slots whose detour adds next to nothing: not reported, but the return is drawn along the detour. */
+  quietGaps: Gap[];
+}
+
+/** A return that leaves its reference copper through a via and comes back through another. */
+export interface ViaRoute {
+  vias: [Pt, Pt];
+  /** Reference layer to the first via, the other layer between the vias, reference layer from the second. */
+  legs: { layer: number; path: Path }[];
+  length: number;
 }
 
 export interface ViaTransition {
@@ -307,9 +321,9 @@ class Context {
   /**
    * True where p lies on a track, pad or via of a net that has no pour on the layer: copper the return
    * cannot flow through, such as a neighbouring signal trace or another leg of the trace itself.
-   * Copper of `ignore` does not count.
+   * Copper of `ignore` does not count; with `only`, only that net's copper does.
    */
-  blockedAt(p: Pt, layer: number, ignore?: string): boolean {
+  blockedAt(p: Pt, layer: number, ignore?: string, only?: string): boolean {
     let grid = this.conductors.get(layer);
     if (!grid) {
       grid = new Map();
@@ -339,20 +353,21 @@ class Context {
       }
       this.conductors.set(layer, grid);
     }
-    return !!grid.get(`${Math.floor(p.x)},${Math.floor(p.y)}`)?.some((c) => c.net !== ignore && c.hit(p));
+    return !!grid.get(`${Math.floor(p.x)},${Math.floor(p.y)}`)?.some((c) => c.net !== ignore && (only === undefined || c.net === only) && c.hit(p));
   }
 
   /**
    * Distance from the trace edge (at p, along unit normal n) to the first copper of a pour net other
-   * than `net`, up to maxGap; null when nothing is that close or another conductor comes first (with
-   * `ownBlocks`, also the trace's own copper, such as another leg of a meander).
+   * than `net`, up to maxGap; null when nothing is that close. Other nets' traces in between do not
+   * stop it (the pour beyond a neighbouring trace is still the nearest return copper); with `ownBlocks`,
+   * the trace's own copper does, such as another leg of a meander.
    */
   pourBeside(p: Pt, n: Pt, halfWidth: number, layer: number, net: string, maxGap: number, ownBlocks = false, step = 0.025): { d: number; net: string } | null {
     for (let d = step; d <= maxGap + 1e-9; d += step) {
       const q = add(p, mul(n, halfWidth + d));
       const hit = this.netAt(q, layer, net);
       if (hit) return { d, net: hit };
-      if (this.blockedAt(q, layer, ownBlocks ? undefined : net)) return null;
+      if (ownBlocks && this.blockedAt(q, layer, undefined, net)) return null;
     }
     return null;
   }
@@ -487,6 +502,8 @@ function splitByReference(ctx: Context, chain: Chain): Chain[] {
   // than changing layer twice to use it.
   const reach = Math.max(2, 2 * adjacent.h);
   merge((r) => r.coplanar && r.s1 - r.s0 < 2 * reach);
+  // Nor does it drop to the plane and come back up through vias for less than a via reach.
+  merge((r, i) => !r.coplanar && r.s1 - r.s0 < reach && i > 0 && i < runs.length - 1);
   // The return changes layer only through a via of the pour's net near the split; elsewhere the
   // shorter side takes the reference of the longer one (a coplanar gap then shows as a slot).
   const viaAt = (i: number): Via | undefined => {
@@ -539,6 +556,48 @@ function sliceChain(chain: Chain, line: Polyline, s0: number, s1: number): Chain
   return { net: chain.net, layer: chain.layer, pts, trackIds };
 }
 
+/**
+ * Shortest return from a to b on `refLayer` that crosses through `otherLayer`: to a via (or
+ * through-hole pad) of the net near a, in that net's copper on the other layer to one near b, and
+ * on to b. Null when no such path is shorter than maxLength.
+ */
+function viaRoute(ctx: Context, net: string, refLayer: number, otherLayer: number, a: Pt, b: Pt, maxLength: number): ViaRoute | null {
+  const { board, opts } = ctx;
+  const here = ctx.refCopper.get(refLayer)?.byNet.get(net);
+  const there = ctx.refCopper.get(otherLayer)?.byNet.get(net);
+  if (!here || !there) return null;
+  const stops = [...board.vias.filter((v) => v.net === net).map((v) => v.at), ...board.pads.filter((p) => p.net === net && p.layer === MULTI_LAYER).map((p) => p.at)];
+  const go = (region: Paths, p: Pt, q: Pt) => geodesic(region, p, q, { minHoleArea: DRAWN_HOLE_AREA, window: 5, maxNodes: opts.maxDetourNodes });
+  const near = (p: Pt) =>
+    stops
+      .filter((s) => dist(s, p) <= VIA_ROUTE_REACH)
+      .sort((u, v) => dist(u, p) - dist(v, p))
+      .slice(0, 3);
+  const fromA = near(a).flatMap((v) => {
+    const d = go(here, a, v);
+    return d ? [{ v, d }] : [];
+  });
+  const toB = near(b).flatMap((v) => {
+    const d = go(here, v, b);
+    return d ? [{ v, d }] : [];
+  });
+  let best: ViaRoute | null = null;
+  for (const s of fromA)
+    for (const e of toB) {
+      if (dist(s.v, e.v) < 1e-6 || s.d.length + dist(s.v, e.v) + e.d.length >= (best?.length ?? maxLength)) continue;
+      const m = go(there, s.v, e.v);
+      const length = m ? s.d.length + m.length + e.d.length : Infinity;
+      if (m && length < (best?.length ?? maxLength))
+        best = { vias: [s.v, e.v], length, legs: [{ layer: refLayer, path: s.d.path }, { layer: otherLayer, path: m.path }, { layer: refLayer, path: e.d.path }] };
+    }
+  return best;
+}
+
+/** How far from a gap end a via is looked for to take the return through the other layer, mm. */
+const VIA_ROUTE_REACH = 6;
+/** Holes a drawn return goes around, however small (mm²): a line across an antipad would pass through a via. */
+const DRAWN_HOLE_AREA = 1e-4;
+
 function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Finding[]): Steps<ChainResult> {
   const { board, opts, stats } = ctx;
   const line = new Polyline(chain.pts);
@@ -556,7 +615,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
       message: `${layerName(chain.layer)} trace has no reference copper: no pour on an adjacent layer and no coplanar pour beside it`,
       at: line.at(line.length / 2),
     });
-    return { chain, ref: null, refNets: [], band: [], bandUncovered: [], coverage: [], thin: [], gaps: [] };
+    return { chain, ref: null, refNets: [], band: [], bandUncovered: [], coverage: [], thin: [], gaps: [], quietGaps: [] };
   }
   if (ref.coplanar) stats.coplanarChains++;
   const lc = ctx.refCopper.get(ref.layer)!;
@@ -663,6 +722,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
       const info = { nodes: 0 };
       const det = yield* geodesicSteps(lc.byNet.get(before!)!, pa, pb, { minHoleArea: opts.minHoleArea, window: 5, maxNodes: opts.maxDetourNodes, info });
       stats.detourNodes = Math.max(stats.detourNodes, info.nodes);
+      const directLength = r.s1 - r.s0 + 2 * eps;
       if (det === TOO_COMPLEX) {
         stats.detoursTooComplex++;
         findings.push({
@@ -671,16 +731,36 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
           message: `${where}: crosses a ${(r.s1 - r.s0).toFixed(2)} mm gap in ${before}; the copper around it is too complex to trace the detour (over ${opts.maxDetourNodes} corners)`,
           at: mid,
         });
-      } else if (det) {
+        gaps.push(gap);
+        continue;
+      }
+      if (det) {
         const direct = line.slice(r.s0 - eps, r.s1 + eps);
-        const directLength = r.s1 - r.s0 + 2 * eps;
         const loop = [...direct, ...[...det.path].reverse()];
         // A coplanar detour starts beside the trace and can come out shorter than the centreline.
         gap.detour = { ...det, directLength, extraLength: Math.max(0, det.length - directLength), loopArea: enclosedArea(loop), loop };
+        gap.drawn = geodesic(lc.byNet.get(before!)!, pa, pb, { minHoleArea: DRAWN_HOLE_AREA, window: 5, maxNodes: opts.maxDetourNodes })?.path;
         if (gap.detour.extraLength < opts.slotDetour.ignore) {
           minorGaps.push(gap);
           continue;
         }
+      }
+      // Through the other layer: down a via of the reference net on one side of the gap, back up on the other.
+      yield { phase: 'gaps' };
+      const other = ref.coplanar ? adjacent?.layer : chain.layer;
+      const route = other === undefined ? null : viaRoute(ctx, before!, ref.layer, other, pa, pb, gap.detour?.length ?? Infinity);
+      if (route) {
+        gap.detour = undefined;
+        gap.viaRoute = route;
+        const extra = Math.max(0, route.length - directLength);
+        const at = (p: Pt) => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})`;
+        findings.push({
+          severity: extra < opts.slotDetour.warn ? 'warn' : 'error',
+          kind: 'slot-crossing',
+          message: `${where}: crosses a ${(r.s1 - r.s0).toFixed(2)} mm gap in ${before}; the return goes through the ${before} vias at ${at(route.vias[0])} and ${at(route.vias[1])} and the ${before} copper on ${layerName(other!)}, +${extra.toFixed(1)} mm`,
+          at: mid,
+        });
+      } else if (gap.detour) {
         findings.push({
           severity: gap.detour.extraLength < opts.slotDetour.warn ? 'warn' : 'error',
           kind: 'slot-crossing',
@@ -689,19 +769,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
         });
       } else {
         gap.bridge = nearestBridge(board, mid, before!, before!, opts);
-        // Coplanar pieces that do not join on this layer still meet the plane below through their vias.
-        // Pieces that do not join on the reference layer still meet the other layer's copper of the same net
-        // through their vias: the return changes layer there, which costs loop area but is not an open loop.
-        const below = ref.coplanar && adjacent && ctx.netAt(mid, adjacent.layer) === before;
-        const ownPour = ctx.refCopper.get(chain.layer)?.byNet.get(before!);
-        const beside = !ref.coplanar && !!ownPour && distToPaths(mid, ownPour) <= 3 * ref.h;
-        findings.push(
-          below
-            ? { severity: 'warn', kind: 'isolated-copper', message: `${where}: the ${before} pour beside the trace is in separate pieces here; the return has to go down to ${before} on ${layerName(adjacent!.layer)} through the vias that join them`, at: mid }
-            : beside
-              ? { severity: 'warn', kind: 'isolated-copper', message: `${where}: the ${before} copper on ${layerName(ref.layer)} is in separate pieces here; the return has to move to the ${before} pour beside the trace on ${layerName(chain.layer)} through the vias that join them`, at: mid }
-              : { severity: 'error', kind: 'isolated-copper', message: `${where}: crosses between unconnected ${before} islands; no in-plane return path`, at: mid },
-        );
+        findings.push({ severity: 'error', kind: 'isolated-copper', message: `${where}: crosses between unconnected ${before} islands; no in-plane return path, and no ${before} vias nearby join them through another layer`, at: mid });
       }
     } else if (kind === 'split') {
       gap.bridge = nearestBridge(board, mid, before!, after!, opts);
@@ -752,7 +820,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
   flush();
 
   const refNets = [...new Set(runs.map((r) => r.net).filter((x): x is string => !!x))];
-  return { chain, ref, refNets, band, bandUncovered, coverage, thin, gaps };
+  return { chain, ref, refNets, band, bandUncovered, coverage, thin, gaps, quietGaps: minorGaps };
 }
 
 /**
