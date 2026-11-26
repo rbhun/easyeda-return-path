@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { classifySignal, formatHz, GENERIC, looksLikePowerNet, parseHz, riseAt, summariseSignal } from '../src/index.js';
+import { classifySignal, formatHz, GENERIC, hfCandidates, looksLikePowerNet, parseHz, riseAt, summariseSignal, type Board } from '../src/index.js';
 
 test('signal: data lines are recognised from the net name, or failing that from a pin name', () => {
   const kind = (net: string, pins: string[] = []) => classifySignal(net, pins)?.type;
@@ -51,4 +51,13 @@ test('signal: the speed sets the edge time, and the edge time whether the trace 
 
 test('signal: negative rails are supply nets, not signals', () => {
   for (const n of ['-5VF', '-6V', '+5V', '3V3']) assert.ok(looksLikePowerNet(n), n);
+});
+
+test('signal: recognised data lines come first, longest first; the other signal nets follow by name', () => {
+  const track = (net: string, len: number, i: number) => ({ id: `${net}${i}`, net, layer: 1, a: { x: 0, y: i }, b: { x: len, y: i }, width: 0.2 });
+  const board = {
+    outline: [], stackup: { copper: [], dielectrics: [] }, nets: [], vias: [], pads: [], components: [], pours: [], keepouts: [], warnings: [],
+    tracks: [track('SDA', 20, 0), track('SCL', 50, 1), track('NET10', 90, 2), track('NET2', 5, 3), track('MOSI', 30, 4), track('GND', 99, 5)],
+  } as unknown as Board;
+  assert.deepEqual(hfCandidates(board).map((c) => c.net), ['SCL', 'MOSI', 'SDA', 'NET2', 'NET10']);
 });

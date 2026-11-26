@@ -10,6 +10,8 @@ import { MULTI_LAYER, type Board, type Pad, type Path, type Pt } from './types.j
 export interface ReturnTrace {
   /** Reference layer the current runs on. */
   layer: number;
+  /** Layer of the signal trace whose return this is. */
+  signalLayer: number;
   pts: Path;
   /** Part of a detour around a slot. */
   detour?: boolean;
@@ -88,7 +90,7 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
       if (s1 - s0 < 1e-6) return;
       const centre = line.slice(s0, s1);
       if (!ref.coplanar) {
-        traces.push({ layer: ref.layer, pts: centre });
+        traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: centre });
         return;
       }
       // Coplanar return crowds the pour edges on either side of the trace, along the stretches with pour
@@ -100,7 +102,7 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
       for (const side of [1, -1]) {
         let run: Path = [];
         const flush = () => {
-          if (run.length > 1 && dist(run[0], run[run.length - 1]) > 0.3) traces.push({ layer: ref.layer, pts: straighten(run) });
+          if (run.length > 1 && dist(run[0], run[run.length - 1]) > 0.3) traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: straighten(run) });
           run = [];
         };
         for (let i = 0; i <= k; i++) {
@@ -131,7 +133,7 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
     for (const g of breaks) {
       push(s, g.s0);
       s = g.s1;
-      if (g.detour) traces.push({ layer: ref.layer, pts: g.detour.path, detour: true });
+      if (g.detour) traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: g.detour.path, detour: true });
       else if (g.bridge) {
         const b = g.bridge;
         const label = b.component.designator;

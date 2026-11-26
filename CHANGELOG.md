@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.43] - 2026-11-26
+
+Numbered above 0.1.42, main's version.
+
+From Balazs, after 0.1.40 on SC0: only cyan was left, also on the top trace; there was no forward trace and nothing on the vias. The colours of 0.1.39 were right, the places were wrong. Asked what he expects, he chose: the colour of a return follows the layer of its signal trace; it is drawn where the current physically flows; the meander's return runs in the Top GND under it; the signal trace is highlighted, and so are the vias it actually passes through.
+
+- **Return colour follows the signal trace's layer.** A Top trace's return is magenta and a Bottom trace's cyan (inner traces green and blue), wherever it flows. It used to take the colour of the copper it flows in, so on a 2-layer board almost everything returning in the Bottom GND was cyan, the Top trace's too. It is still drawn where it flows: on the trace when it runs in the other layer's copper, beside it in a pour on the trace's own layer.
+- **The meander returns in the plane under it again.** 0.1.40's rule that kept a meander on the pour beside it is gone. A stretch of pour beside the trace shorter than two via reaches no longer pulls the return back up either, so SC0's whole meander returns in the Top GND under it: in through the GND via beside the meander, and out at the signal via to the Top trace's return in the Bottom GND, each drawn as a dashed hop.
+- **The signal trace is drawn**, thin and white over its return, with a circle on each via it passes through from one layer to another (not on vias it only touches). It has its own line in the panel, "Signal trace and its vias", for colour, width and visibility.
+- **Recognised data lines longest first** in the HF check's net list (SCL 376 mm, SDA 375 mm, SD0 152 mm, SC0 151 mm… on that board); the other signal nets follow by name.
+
 ## [0.1.42] - 2026-11-26
 
 From Balazs, with a screenshot of the panel: the buttons are uneven.

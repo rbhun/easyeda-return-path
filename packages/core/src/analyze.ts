@@ -437,13 +437,12 @@ function splitByReference(ctx: Context, chain: Chain): Chain[] {
     }
   };
   merge((r, i) => !r.coplanar && r.s1 - r.s0 < 0.6 && i > 0 && i < runs.length - 1);
-  merge((r) => r.coplanar && r.s1 - r.s0 < 1.0);
+  // Where the pour beside the trace lasts less than two via reaches, the return stays on the plane rather
+  // than changing layer twice to use it.
+  const reach = Math.max(2, 2 * adjacent.h);
+  merge((r) => r.coplanar && r.s1 - r.s0 < 2 * reach);
   // The return changes layer only through a via of the pour's net near the split; elsewhere the
   // shorter side takes the reference of the longer one (a coplanar gap then shows as a slot).
-  const reach = Math.max(2, 2 * adjacent.h);
-  // Between two stretches with a pour beside them, the return stays in that pour rather than dropping to
-  // the plane and coming back up within a few via reaches (a meander's pour clearance, for instance).
-  merge((r, i) => !r.coplanar && r.s1 - r.s0 < 2 * reach && i > 0 && i < runs.length - 1);
   const viaAt = (i: number): Via | undefined => {
     const s = runs[i].s1;
     const co = runs[i].coplanar ? runs[i] : runs[i + 1];

@@ -201,7 +201,7 @@ async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: num
 		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
 		opts.hz ? signal.message : `${signal.message} ${t('(The usual speed of this kind of line; HF check asks for the speed.)')}`,
 		drawn.returnLayers.length
-			? t('Return current on ${1}, drawn on the reference copper right under the trace (beside it for a coplanar pour), so it follows the trace. Dashed ${2}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${3} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).', drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name)
+			? t('Return current of the trace on ${1}, drawn where it flows: on the trace when it runs in the copper of the other layer, beside it in a pour on the trace\'s own layer. Signal trace in ${4}, with a circle on each via it passes through. Dashed ${2}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${3} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).', drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name, roleColour('signal').name)
 			: t('No return path drawn: the trace has no reference copper.'),
 		drivers.length ? t('Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.', drivers.join(', '), roleColour('hop').name) : t('Driver: not chosen, so only the pin at each end closes the loop.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
