@@ -224,7 +224,8 @@ function collectRuns() {
   for (const name of added.filter(n => n.endsWith('.results.json'))) {
     try {
       const r = JSON.parse(fs.readFileSync(path.join(dest, name), 'utf-8'));
-      log(`new run ${r.runId ?? name} (${r.command ?? 'unknown command'}): status=${r.status ?? 'unknown'}, ${r.errors?.length ?? 0} error(s), ${r.warnings?.length ?? 0} warning(s)`);
+      const what = [r.command ?? 'unknown command', r.net, r.version && `v${r.version}`].filter(Boolean).join(', ');
+      log(`new run ${name.replace(/\.results\.json$/, '')} (${what}): ${r.status ?? 'unknown'}${r.error ? `: ${r.error.message}` : ''}`);
     }
     catch {
       log(`new results file ${name} is not valid JSON`);
