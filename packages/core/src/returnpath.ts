@@ -1,12 +1,14 @@
 // The high-frequency return path as drawable geometry (D7): one line per stretch of the trace, drawn
 // where the return current can actually flow. It stays in the reference copper, follows the trace, and
 // goes around a trace or a gap when the copper under the trace runs out. It changes layer only at a via
-// of that copper, and it enters a part only through that part's pad on the reference net.
+// of that copper, and it enters a part only through that part's pad on the reference net. Drawn lines are
+// smoothed, and lines that run together on one layer join, the same way the DC lines do.
 import type { ChainResult, Finding, ReturnRoute, Severity, ViaResult } from './analyze.js';
 import { isGroundNet } from './dc/rails.js';
 import { driverLoop, isPassive, type DriverLoop } from './driver.js';
 import { add, dist, distPointSeg, distToPaths, len, mul, Polyline, sub } from './geom.js';
 import type { Steps } from './budget.js';
+import { shapeReturns } from './lineshape.js';
 import { leastInductancePath } from './returnflow.js';
 import { MULTI_LAYER, type Board, type Pad, type Path, type Pt } from './types.js';
 
@@ -546,5 +548,11 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
     jumps.push({ kind: 'supply', from: supplyPad.at, to: loop.supplyPin.at, label: component.designator, distance: dist(supplyPad.at, loop.supplyPin.at), severity });
     findings.push({ severity, kind: 'driver-loop', message: `${first}; the ${other} edge through decap ${component.designator} into ${d} pad ${loop.supplyPin.number} (${supplyNet}), ${length.toFixed(2)} mm pin to cap to pin`, at });
   }
-  return { traces, jumps, drivers };
+  // Smoothed over 0.35 mm, ends kept on the pad or via, and two lines that run together on one layer
+  // drawn once with a shallow curve where they part. The same rules as the DC lines.
+  const drawn = yield* shapeReturns(traces, (t, q) => {
+    const n = probe.netAt(q, t.layer);
+    return !!n && !probe.blockedAt(q, t.layer);
+  });
+  return { traces: drawn, jumps, drivers };
 }

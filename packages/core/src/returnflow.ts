@@ -200,8 +200,9 @@ export function* leastInductancePath(a: FlowArgs): Steps<Path | null> {
     for (let i = hit; i >= 0; i = prev[i]) out.push(i);
     return out.reverse();
   };
-  // The return runs under the trace from one end of the stretch to the other; a given end off the trace (a GND
-  // pin or via) is reached from there by the cheapest way through the copper, not by cutting the trace's course short.
+  // The return runs under the trace. An end off the trace (a GND pin or via) is met where the trace passes
+  // nearest it: running on to the far end and back is the loop under a pin and the hook past a via. When both
+  // ends are the same point the line covers the whole stretch and returns to it.
   const idx: number[] = [];
   const joins: number[] = [];
   const leg = function* (sources: number[], targets: number[]): Steps<boolean> {
@@ -211,8 +212,17 @@ export function* leastInductancePath(a: FlowArgs): Steps<Path | null> {
     joins.push(idx.length - 1);
     return true;
   };
+  const sameEnd = !!(a.from && a.to && dist(a.from, a.to) < 0.4);
+  const atStation = (target: number): number[] => {
+    const s = along[target];
+    let best = Infinity;
+    for (let i = 0; i < nx * ny; i++) if (ok[i]) best = Math.min(best, Math.abs(along[i] - s));
+    const out: number[] = [];
+    for (let i = 0; i < nx * ny; i++) if (ok[i] && Math.abs(along[i] - s) <= best + END_SPREAD) out.push(i);
+    return out.length ? out : tail;
+  };
   if (from >= 0 && !(yield* leg([from], head))) return null;
-  if (!(yield* leg(idx.length ? [idx[idx.length - 1]] : head, tail))) return null;
+  if (!(yield* leg(idx.length ? [idx[idx.length - 1]] : head, to >= 0 && !sameEnd ? atStation(to) : tail))) return null;
   if (to >= 0 && !(yield* leg([idx[idx.length - 1]], [to]))) return null;
 
   // Pull the staircase into straight pieces that stay on the path's cells' copper and cost no more.
