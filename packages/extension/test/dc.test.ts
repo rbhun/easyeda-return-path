@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { parseEasyEdaPcb } from '@returnpath/cli/parse';
 import { buildDcEpro } from '@returnpath/cli/synth-dc';
 import { strFromU8, unzipSync } from 'fflate';
-import { createMockEda, type DialogCall } from './mock-eda.ts';
+import { BACK_ANSWER, createMockEda, type DialogCall } from './mock-eda.ts';
 
 function dcBoard() {
 	const files = unzipSync(buildDcEpro());
@@ -81,6 +81,23 @@ test('wizard: user picks another source and gives currents', async () => {
 	assert.match(msg, /3V3: drop \d+\.\d+ mV,/);
 });
 
+test('wizard: Back on the loads page asks for the source again, preselecting the earlier answer', async () => {
+	const j2 = board.components.find(c => c.designator === 'J2')!.id;
+	let sources = 0;
+	const mock = await run('3V3', (d) => {
+		if (/active source/.test(d.prompt))
+			return ++sources === 1 ? d.dflt : j2;
+		if (d.kind === 'multi' && sources === 1)
+			return BACK_ANSWER;
+		return d.dflt;
+	});
+	assert.deepEqual(mock.wizardPages.map(p => p.kind), ['select', 'multi', 'select', 'multi', 'currents']);
+	assert.deepEqual(mock.wizardPages.map(p => p.back), [false, true, false, true, true], 'no Back on the first page');
+	const u1 = board.components.find(c => c.designator === 'U1')!.id;
+	assert.equal(mock.wizardPages[2].value, u1, 'the source picked before is preselected');
+	assert.match(mock.messages[0], /^3V3 \/ GND: source J2,/);
+});
+
 test('wizard: cancelling draws nothing', async () => {
 	const mock = await run('3V3', d => (d.kind === 'select' ? undefined : d.dflt));
 	assert.equal(mock.messages.length, 0);
@@ -128,7 +145,7 @@ test('a netlist without pin names is skipped on later runs, after an upgrade too
 	const b = await readBoard();
 	await addPinNames(b);
 	assert.equal(calls, 1, 'a flag left by 0.1.16 does not stop the first try');
-	await addPinNames(b);
+	await addPinNames(await readBoard());
 	assert.equal(calls, 1, 'then the netlist is not asked for again');
 	assert.ok(mock.logs.some(l => /pin names: skipped, the netlist gave none in an earlier run/.test(l.message)));
 });

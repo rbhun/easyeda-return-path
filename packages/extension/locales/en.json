@@ -40,7 +40,6 @@
 	"Overlay shown.": "Overlay shown.",
 	"Overlay hidden. Use Show in the panel to show it again.": "Overlay hidden. Use Show in the panel to show it again.",
 	"No return path drawn: the trace has no reference copper.": "No return path drawn: the trace has no reference copper.",
-	"Return path on ${1}. Dashed ${2}: hop through a via, decap, bridging cap or IC pin. ${3}: trace over a gap, or band without copper. Thin ${4}: ±3h band edges.": "Return path on ${1}. Dashed ${2}: hop through a via, decap, bridging cap or IC pin. ${3}: trace over a gap, or band without copper. Thin ${4}: ±3h band edges.",
 	"Streamlines: ${1} supply ${2}; ${3} return ${4} on ${5} and ${6} on other layers, with a circle where it changes layer.": "Streamlines: ${1} supply ${2}; ${3} return ${4} on ${5} and ${6} on other layers, with a circle where it changes layer.",
 	"Busy: ${1}": "Busy: ${1}",
 	"${1}: done; the result is in the Return Path panel.": "${1}: done; the result is in the Return Path panel.",
@@ -76,5 +75,18 @@
 	"Choose folder...": "Choose folder...",
 	"The log file ${1} is not written: ${2}": "The log file ${1} is not written: ${2}",
 	"The last run's files were written there too.": "The last run's files were written there too.",
-	"Run files are not written: ${1}": "Run files are not written: ${1}"
+	"Run files are not written: ${1}": "Run files are not written: ${1}",
+	"${1} (edges ≈ ${2} ns)": "${1} (edges ≈ ${2} ns)",
+	"${1} at ${2}": "${1} at ${2}",
+	"(The usual speed of this kind of line; HF check asks for the speed.)": "(The usual speed of this kind of line; HF check asks for the speed.)",
+	"Back": "Back",
+	"HF check": "HF check",
+	"Net to check and its speed (bit rate or clock frequency), prefilled with the usual speed of its kind. The speed sets the edge time, which decides whether the trace acts as a transmission line. Recognised data lines come first; the selected net is ticked.": "Net to check and its speed (bit rate or clock frequency), prefilled with the usual speed of its kind. The speed sets the edge time, which decides whether the trace acts as a transmission line. Recognised data lines come first; the selected net is ticked.",
+	"No routed signal nets on this board: only ground, supply, plane and bias nets have tracks.": "No routed signal nets on this board: only ground, supply, plane and bias nets have tracks.",
+	"Other speed…": "Other speed…",
+	"Return current on ${1}, drawn on the reference copper right under the trace (beside it for a coplanar pour), so it follows the trace. Dashed ${2}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${3} over the trace: it crosses a gap, or has too little reference copper.": "Return current on ${1}, drawn on the reference copper right under the trace (beside it for a coplanar pour), so it follows the trace. Dashed ${2}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${3} over the trace: it crosses a gap, or has too little reference copper.",
+	"Speed": "Speed",
+	"Speed of ${1}, for example 400k, 12 MHz or 115200.": "Speed of ${1}, for example 400k, 12 MHz or 115200.",
+	"Speed of ${1}: the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.": "Speed of ${1}: the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.",
+	"other signal": "other signal"
 }

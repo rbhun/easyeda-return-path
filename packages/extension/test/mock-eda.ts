@@ -15,12 +15,15 @@ const currentsText = (designators: string[], values: string[]) => designators.ma
 
 /** Pours on `planeLayers` are served like EasyEDA plane layers: poured copper without a pour ID, plus mode-2 fills carrying the net. */
 export interface DialogCall {
-	kind: 'select' | 'multi' | 'input' | 'confirm' | 'currents';
+	kind: 'select' | 'multi' | 'input' | 'confirm' | 'currents' | 'nets';
 	prompt: string;
 	title: string;
 	options: { value: string; displayContent: string }[];
 	dflt: string | string[] | undefined;
 }
+
+/** Returned from `answer` to press Back in the wizard window. */
+export const BACK_ANSWER = Symbol('back');
 
 export interface MockHost {
 	/** Extension config storage; pass the same map to a second mock to simulate a restart. */
@@ -66,7 +69,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const panelSend = (message: unknown) => {
 		for (const fn of subscribers.get('returnpath.panel.command') ?? []) fn(message);
 	};
-	const wizardPages: { id: string; kind: DialogCall['kind']; title: string; prompt: string; options: { value: string; label: string }[]; value: string | string[]; ok: string; labels: Record<string, string> }[] = [];
+	const wizardPages: { id: string; kind: DialogCall['kind']; title: string; prompt: string; options: { value: string; label: string; speed?: string }[]; value: string | string[]; ok: string; back: boolean; labels: Record<string, string> }[] = [];
 	const wizard = { opens: 0 };
 	/** The wizard window's page: records each question like the system dialog would and answers with `answer`. */
 	const wizardPage = (q: typeof wizardPages[number]) => {
@@ -74,10 +77,10 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			return;
 		wizardPages.push(q);
 		const options = q.options.map(o => ({ value: o.value, displayContent: o.label }));
-		const dflt = q.kind === 'select' ? q.value || undefined : q.kind === 'confirm' ? undefined : q.kind === 'currents' ? currentsText(q.options.map(o => o.value), q.value as string[]) : q.value;
+		const dflt = q.kind === 'select' ? q.value || undefined : q.kind === 'confirm' ? undefined : q.kind === 'currents' ? currentsText(q.options.map(o => o.value), q.value as string[]) : q.kind === 'nets' ? [q.value as string, q.options.find(o => o.value === q.value)?.speed ?? ''] : q.value;
 		dialogs.push({ kind: q.kind, prompt: q.prompt, options: options.map(o => o.value), dflt });
 		const v = answer({ kind: q.kind, prompt: q.prompt, title: q.title, options, dflt });
-		const reply = q.kind === 'confirm' ? { cmd: 'answer', id: q.id, value: !!v } : v === undefined ? { cmd: 'cancel', id: q.id } : { cmd: 'answer', id: q.id, value: v };
+		const reply = v === BACK_ANSWER ? { cmd: 'back', id: q.id } : q.kind === 'confirm' ? { cmd: 'answer', id: q.id, value: !!v } : v === undefined ? { cmd: 'cancel', id: q.id } : { cmd: 'answer', id: q.id, value: v };
 		queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.wizard.reply', reply));
 	};
 	const fsCall = <T>(fn: () => T) => async () => {

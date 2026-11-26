@@ -3,25 +3,43 @@
 // its loads, and optionally give load currents. The questions are asked in the wizard window, or in
 // the system dialogs when that window cannot be used.
 import { checkpoint, log } from './runner';
-import { askInWindow, closeWizardWindow } from './wizard-window';
-import { componentsOnNet, guessRails, loadsFor, parseCurrents, type Board, type DcSetupInput, type RailGuess } from '@returnpath/core';
+import { askInWindow, BACK, closeWizardWindow, type WizardKind } from './wizard-window';
+import { componentsOnNet, guessRails, loadsFor, parseCurrents, parseHz, type Board, type DcSetupInput, type RailGuess } from '@returnpath/core';
+import { t } from './i18n';
 
 export interface Option {
 	value: string;
 	label: string;
 }
 
-/** Dialog primitives; resolve undefined when the user cancels. */
+/** A net to pick, with the speeds offered for it (value: Hz) and the one preselected. */
+export interface NetOption extends Option {
+	speeds: Option[];
+	speed: string;
+}
+
+/** Dialog primitives; resolve undefined when the user cancels, and throw GoBack when the user presses Back. */
 export interface Ask {
 	select: (title: string, prompt: string, options: Option[], dflt?: string) => Promise<string | undefined>;
 	multi: (title: string, prompt: string, options: Option[], dflt: string[]) => Promise<string[] | undefined>;
 	input: (title: string, prompt: string, value: string) => Promise<string | undefined>;
 	/** One current per load (`150mA`, `0.02`), prefilled with `values`; resolves `U2=150mA, U3=0.02`, empty when every field is cleared. */
 	currents: (title: string, prompt: string, loads: Option[], values: string[]) => Promise<string | undefined>;
+	/** A net and its speed in Hz, on one page in the wizard window. */
+	netSpeed: (title: string, prompt: string, nets: NetOption[], dflt: string) => Promise<{ net: string; hz: number } | undefined>;
 	/** True when the user accepts with the `ok` button. */
 	confirm: (title: string, prompt: string, ok: string) => Promise<boolean>;
 	/** Ends the questions: closes the wizard window, if one is open. */
 	close: () => Promise<void>;
+	/** Offers Back on the next question (the wizard window only). */
+	back?: (enabled: boolean) => void;
+}
+
+/** Thrown by a question when the user pressed Back. */
+export class GoBack extends Error {
+	constructor() {
+		super('back');
+	}
 }
 
 /** Logs and saves every question and answer, so a hang between dialogs shows in the saved log. */
@@ -29,7 +47,15 @@ export function loggedAsk(ask: Ask): Ask {
 	const around = async <T>(prompt: string, q: () => Promise<T>): Promise<T> => {
 		log(`wizard: ${prompt}`);
 		await checkpoint();
-		const a = await q();
+		let a: T;
+		try {
+			a = await q();
+		}
+		catch (e) {
+			if (e instanceof GoBack)
+				log('wizard: back');
+			throw e;
+		}
 		log(`wizard: answer ${a === undefined ? '(cancelled)' : JSON.stringify(a).slice(0, 200)}`);
 		await checkpoint();
 		return a;
@@ -39,12 +65,64 @@ export function loggedAsk(ask: Ask): Ask {
 		multi: (title, prompt, options, dflt) => around(`${prompt} (${options.length} options)`, () => ask.multi(title, prompt, options, dflt)),
 		input: (title, prompt, value) => around(prompt, () => ask.input(title, prompt, value)),
 		currents: (title, prompt, loads, values) => around(`${prompt} (${loads.length} loads)`, () => ask.currents(title, prompt, loads, values)),
+		netSpeed: (title, prompt, nets, dflt) => around(`${prompt} (${nets.length} nets)`, () => ask.netSpeed(title, prompt, nets, dflt)),
 		confirm: (title, prompt, ok) => around(prompt, () => ask.confirm(title, prompt, ok)),
 		close: () => ask.close(),
+		back: ask.back,
 	};
 }
 
-const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
+/**
+ * Runs a series of questions with Back: on Back the flow starts again, earlier answers are replayed
+ * without asking, and the question before is asked again with the answer it had. The flow must
+ * ask the same questions for the same answers.
+ */
+export async function withBack<T>(ask: Ask, flow: (ask: Ask) => Promise<T>): Promise<T> {
+	const answers: unknown[] = [];
+	const undone: unknown[] = [];
+	for (;;) {
+		let i = 0;
+		const step = async <R>(show: (prev: unknown) => Promise<R>): Promise<R> => {
+			const k = i++;
+			if (k < answers.length)
+				return answers[k] as R;
+			ask.back?.(k > 0);
+			try {
+				const v = await show(undone[k]);
+				answers.push(v);
+				return v;
+			}
+			catch (e) {
+				if (e instanceof GoBack)
+					undone[k - 1] = answers.pop();
+				throw e;
+			}
+			finally {
+				ask.back?.(false);
+			}
+		};
+		const replay: Ask = {
+			select: (title, prompt, options, dflt) => step(prev => ask.select(title, prompt, options, typeof prev === 'string' && options.some(o => o.value === prev) ? prev : dflt)),
+			multi: (title, prompt, options, dflt) => step(prev => ask.multi(title, prompt, options, Array.isArray(prev) ? prev : dflt)),
+			input: (title, prompt, value) => step(prev => ask.input(title, prompt, typeof prev === 'string' ? prev : value)),
+			currents: (title, prompt, loads, values) => step(() => ask.currents(title, prompt, loads, values)),
+			netSpeed: (title, prompt, nets, dflt) => step((prev) => {
+				const p = prev as { net: string; hz: number } | undefined;
+				const known = p && nets.find(n => n.value === p.net);
+				return ask.netSpeed(title, prompt, known ? nets.map(n => (n === known ? { ...n, speed: String(p.hz) } : n)) : nets, known ? p.net : dflt);
+			}),
+			confirm: (title, prompt, ok) => step(() => ask.confirm(title, prompt, ok)),
+			close: () => ask.close(),
+		};
+		try {
+			return await flow(replay);
+		}
+		catch (e) {
+			if (!(e instanceof GoBack))
+				throw e;
+		}
+	}
+}
 
 /** Value of the select-all entry the system multi-select dialog gets in place of a select-all box. */
 const ALL = '__returnpath_all__';
@@ -55,9 +133,16 @@ const ALL = '__returnpath_all__';
  */
 export function dialogAsk(): Ask {
 	const toApi = (o: Option[]) => o.map(x => ({ value: x.value, displayContent: x.label }));
-	return {
+	let back = false;
+	const inWindow = async (kind: WizardKind, title: string, prompt: string, options: Option[], value: string | string[], ok?: string) => {
+		const v = await askInWindow(kind, title, prompt, options, value, ok, back);
+		if (v === BACK)
+			throw new GoBack();
+		return v;
+	};
+	const ask: Ask = {
 		select: async (title, prompt, options, dflt) => {
-			const v = await askInWindow('select', title, prompt, options, dflt ?? '');
+			const v = await inWindow('select', title, prompt, options, dflt ?? '');
 			if (v !== null)
 				return typeof v === 'string' && v ? v : undefined;
 			return new Promise((resolve) => {
@@ -65,7 +150,7 @@ export function dialogAsk(): Ask {
 			});
 		},
 		multi: async (title, prompt, options, dflt) => {
-			const v = await askInWindow('multi', title, prompt, options, dflt);
+			const v = await inWindow('multi', title, prompt, options, dflt);
 			if (v !== null)
 				return Array.isArray(v) ? v.filter(x => options.some(o => o.value === x)) : undefined;
 			const all = [{ value: ALL, label: t('Select all') }, ...options];
@@ -74,7 +159,7 @@ export function dialogAsk(): Ask {
 			});
 		},
 		input: async (title, prompt, value) => {
-			const v = await askInWindow('input', title, prompt, [], value);
+			const v = await inWindow('input', title, prompt, [], value);
 			if (v !== null)
 				return typeof v === 'string' ? v : undefined;
 			return new Promise((resolve) => {
@@ -82,7 +167,7 @@ export function dialogAsk(): Ask {
 			});
 		},
 		currents: async (title, prompt, loads, values) => {
-			const v = await askInWindow('currents', title, prompt, loads, values);
+			const v = await inWindow('currents', title, prompt, loads, values);
 			if (v !== null)
 				return typeof v === 'string' ? v : undefined;
 			const text = currentsText(loads.map(l => l.value), values);
@@ -90,8 +175,34 @@ export function dialogAsk(): Ask {
 				eda.sys_Dialog.showInputDialog(prompt, undefined, title, 'text', text, undefined, v => resolve(v == null ? undefined : String(v)));
 			});
 		},
+		netSpeed: async (title, prompt, nets, dflt) => {
+			const v = await inWindow('nets', title, prompt, nets, dflt);
+			if (v !== null) {
+				const [net, speed] = Array.isArray(v) ? v : [];
+				const hz = speed === undefined ? undefined : Number(speed) || parseHz(speed);
+				return net && hz ? { net, hz } : undefined;
+			}
+			// System dialogs: the net, then its speed.
+			const net = await ask.select(title, prompt, nets, dflt);
+			const picked = nets.find(n => n.value === net);
+			if (!picked)
+				return undefined;
+			const OTHER = 'other';
+			const sp = await ask.select(title, t('Speed of ${1}: the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.', picked.value), [...picked.speeds, { value: OTHER, label: t('Other speed…') }], picked.speed);
+			if (sp !== OTHER)
+				return sp ? { net: picked.value, hz: Number(sp) } : undefined;
+			for (let text = ''; ;) {
+				const typed = await ask.input(title, t('Speed of ${1}, for example 400k, 12 MHz or 115200.', picked.value), text);
+				if (typed === undefined)
+					return undefined;
+				const hz = parseHz(typed);
+				if (hz)
+					return { net: picked.value, hz };
+				text = typed;
+			}
+		},
 		confirm: async (title, prompt, ok) => {
-			const v = await askInWindow('confirm', title, prompt, [], '', ok);
+			const v = await inWindow('confirm', title, prompt, [], '', ok);
 			if (v !== null)
 				return v === true;
 			return new Promise((resolve) => {
@@ -99,7 +210,11 @@ export function dialogAsk(): Ask {
 			});
 		},
 		close: closeWizardWindow,
+		back: (enabled) => {
+			back = enabled;
+		},
 	};
+	return ask;
 }
 
 /** `U2=150mA, U3=0.02` from designators and their current fields; empty fields are left out. */

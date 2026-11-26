@@ -15,6 +15,7 @@ import extensionConfig from '../extension.json' with { type: 'json' };
 import { adoptOverlay, forgetOverlay, overlayGroups, overlayState, restyleOverlay, type MarkerGroup } from './overlay';
 import { log, toast } from './runner';
 import { currentStyle, DEFAULT_STYLE, INNER_CYCLE, PALETTE, ROLE_LABELS, ROLE_USE, ROLES, saveStyle, setSharedStyle, type Role, type RoleStyle } from './style';
+import { t } from './i18n';
 
 export const PANEL_ID = 'returnPathPanel';
 export const PANEL_HTML = '/iframe/index.html';
@@ -64,8 +65,6 @@ export type Stamped = { [K in Field]?: { v: Shared[K]; at: number } };
 /** Fields a snapshot hands on; who owns the panel or is running belongs to live instances only. */
 const LASTING: Field[] = ['result', 'lastRun', 'overlay', 'overlayOwner', 'style'];
 type SyncMessage = { from: string; fields?: Stamped; request?: boolean };
-
-const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 
 /** This instance. */
 const me = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
