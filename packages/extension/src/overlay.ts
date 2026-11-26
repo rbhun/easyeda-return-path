@@ -33,7 +33,9 @@ async function paint(groups: MarkerGroup[]): Promise<number> {
 	for (const grp of groups) {
 		for (let k = 0; k < grp.markers.length; k += MAX_PER_CALL) {
 			const markers = grp.markers.slice(k, k + MAX_PER_CALL);
-			const { colour, width } = roleColour(grp.role, grp.inner);
+			const { colour, width, visible } = roleColour(grp.role, grp.inner);
+			if (!visible)
+				break;
 			if (await eda.dmt_EditorControl.generateIndicatorMarkers(markers, colour, width, false))
 				n += markers.length;
 		}
@@ -45,6 +47,21 @@ async function paint(groups: MarkerGroup[]): Promise<number> {
 export async function drawGroups(groups: MarkerGroup[]): Promise<number> {
 	shown = { groups, visible: true };
 	return paint(groups);
+}
+
+/** The kept overlay, for handing to another instance of the extension. */
+export function overlayGroups(): { groups: MarkerGroup[]; visible: boolean } | undefined {
+	return shown && { groups: shown.groups, visible: shown.visible };
+}
+
+/** Takes over an overlay another instance drew; the markers on the canvas are already as given. */
+export function adoptOverlay(groups: MarkerGroup[], visible: boolean): void {
+	shown = { groups, visible };
+}
+
+/** Drops the kept overlay without touching the markers: another instance of the extension drew over it. */
+export function forgetOverlay(): void {
+	shown = undefined;
 }
 
 export async function clearOverlay(): Promise<void> {

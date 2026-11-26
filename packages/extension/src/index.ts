@@ -8,7 +8,7 @@ import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis, toggleOverlay } from './overlay';
-import { autoOpenPanel, initPanel, openPanel, publishState, report } from './panel';
+import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, report, shareLastRun, sharedLastRun } from './panel';
 import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, readStored, runSteps, savedLog, saveLogAs, timed, toast, writeStored } from './runner';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
@@ -184,12 +184,14 @@ const LAST_RUN = 'lastRun';
 
 /** Stored, so Rerun Last Analysis works after a restart too. */
 async function remember(run: LastRun): Promise<void> {
+	shareLastRun(run);
 	await writeStored(LAST_RUN, JSON.stringify(run));
 }
 
 function lastRun(): LastRun | undefined {
 	try {
-		const v = readStored(LAST_RUN);
+		// Another instance's stored copy may not have reached this one yet; the shared one is current.
+		const v = sharedLastRun() ?? readStored(LAST_RUN);
 		const run = (typeof v === 'string' ? JSON.parse(v) : v) as LastRun | undefined;
 		return run && (run.kind === 'hf' ? typeof run.net === 'string' : run.kind === 'dc' && !!run.input?.rail) ? run : undefined;
 	}
@@ -200,6 +202,8 @@ function lastRun(): LastRun | undefined {
 
 /** Repeats the last analysis on the board as it is now, with the same net or wizard answers. */
 export async function rerunAnalysis(): Promise<void> {
+	initPanel(panelHost);
+	await panelReady();
 	const run = lastRun();
 	if (!run) {
 		eda.sys_Dialog.showInformationMessage(t('No analysis to rerun yet: run Show for Selected Net or DC Return Current first.'), t('Rerun last analysis'));
@@ -223,6 +227,10 @@ export async function rerunAnalysis(): Promise<void> {
 
 /** Hides the overlay, or shows it again. */
 export async function toggleReturnPath(): Promise<void> {
+	initPanel(panelHost);
+	await panelReady();
+	if (forwardOverlayCommand('toggle'))
+		return;
 	await guarded(t('Return path'), async () => {
 		const visible = await toggleOverlay();
 		toast(visible === undefined ? t('No overlay to show: run an analysis first.') : visible ? t('Overlay shown.') : t('Overlay hidden. Use Hide/Show Overlay again to show it.'));
@@ -238,6 +246,9 @@ export function cancelAnalysis(): void {
 
 export async function clearReturnPath(): Promise<void> {
 	cancelRunning();
+	initPanel(panelHost);
+	await panelReady();
+	forwardOverlayCommand('clear');
 	await guarded(t('Return path'), clearOverlay);
 	publishState();
 }
@@ -245,6 +256,7 @@ export async function clearReturnPath(): Promise<void> {
 /** Analyses open the panel, so their result lands there, unless the user closed it. */
 async function showPanelForRun(): Promise<void> {
 	initPanel(panelHost);
+	await panelReady();
 	await autoOpenPanel();
 }
 

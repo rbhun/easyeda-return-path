@@ -21,16 +21,16 @@ export type ColourName = keyof typeof PALETTE;
 export const ROLES = ['supply', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'band'] as const;
 export type Role = typeof ROLES[number];
 
-export interface RoleStyle { colour: ColourName; width: number }
+export interface RoleStyle { colour: ColourName; width: number; visible: boolean }
 
 export const DEFAULT_STYLE: Record<Role, RoleStyle> = {
-	supply: { colour: 'yellow', width: 2 },
-	returnTop: { colour: 'magenta', width: 5 },
-	returnOther: { colour: 'cyan', width: 5 },
-	returnInner: { colour: 'green', width: 5 },
-	hop: { colour: 'yellow', width: 2 },
-	gap: { colour: 'red', width: 3 },
-	band: { colour: 'white', width: 1 },
+	supply: { colour: 'yellow', width: 2, visible: true },
+	returnTop: { colour: 'magenta', width: 5, visible: true },
+	returnOther: { colour: 'cyan', width: 5, visible: true },
+	returnInner: { colour: 'green', width: 5, visible: true },
+	hop: { colour: 'yellow', width: 2, visible: true },
+	gap: { colour: 'red', width: 3, visible: true },
+	band: { colour: 'white', width: 1, visible: true },
 };
 
 /** Inner layers take these in turn while returnInner keeps its default colour. */
@@ -53,9 +53,16 @@ function valid(s: unknown): s is Partial<RoleStyle> {
 	return !!s && typeof s === 'object';
 }
 
+/** The style another instance of the extension saved; its stored copy may not have reached this one. */
+let sharedStyle: Record<Role, RoleStyle> | undefined;
+
+export function setSharedStyle(style: Record<Role, RoleStyle> | undefined): void {
+	sharedStyle = style;
+}
+
 /** Defaults with the stored changes applied; unknown colours and widths outside 1–10 are ignored. */
 export function currentStyle(): Record<Role, RoleStyle> {
-	let stored: unknown = readStored(KEY);
+	let stored: unknown = sharedStyle ?? readStored(KEY);
 	if (typeof stored === 'string') {
 		try {
 			stored = JSON.parse(stored);
@@ -75,6 +82,8 @@ export function currentStyle(): Record<Role, RoleStyle> {
 			out[role].colour = s.colour as ColourName;
 		if (typeof s.width === 'number' && s.width >= 1 && s.width <= MAX_WIDTH)
 			out[role].width = Math.round(s.width);
+		if (typeof s.visible === 'boolean')
+			out[role].visible = s.visible;
 	}
 	return out;
 }
@@ -88,8 +97,11 @@ export async function saveStyle(style: Partial<Record<Role, Partial<RoleStyle>>>
 				next[role].colour = s.colour;
 			if (typeof s?.width === 'number' && s.width >= 1 && s.width <= MAX_WIDTH)
 				next[role].width = Math.round(s.width);
+			if (typeof s?.visible === 'boolean')
+				next[role].visible = s.visible;
 		}
 	}
+	sharedStyle = next;
 	await writeStored(KEY, JSON.stringify(next));
 	return next;
 }
@@ -99,8 +111,8 @@ function structuredCloneStyle(s: Record<Role, RoleStyle>): Record<Role, RoleStyl
 }
 
 /** Colour of a role; inner layers cycle through INNER_CYCLE (by inner index) unless the user picked one. */
-export function roleColour(role: Role, innerIndex = 0): { colour: Rgba; name: ColourName; width: number } {
+export function roleColour(role: Role, innerIndex = 0): { colour: Rgba; name: ColourName; width: number; visible: boolean } {
 	const s = currentStyle()[role];
 	const name = role === 'returnInner' && s.colour === DEFAULT_STYLE.returnInner.colour ? INNER_CYCLE[innerIndex % INNER_CYCLE.length] : s.colour;
-	return { colour: PALETTE[name], name, width: s.width };
+	return { colour: PALETTE[name], name, width: s.width, visible: s.visible };
 }

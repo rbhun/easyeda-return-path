@@ -50,6 +50,9 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const counts = { boardReads: 0 };
 	const subscribers = new Map<string, ((m: unknown) => void)[]>();
 	const published: { topic: string; message: any }[] = [];
+	/** Messages pushed with no puller waiting, and pullers waiting for a message (sys_MessageBus.push / pullAsync). */
+	const queues = new Map<string, unknown[]>();
+	const pullers = new Map<string, ((m: unknown) => void)[]>();
 	const iframes = new Map<string, { html: string; width: number; height: number; props: Record<string, unknown>; shown: boolean }>();
 	/** Sends a message as the panel would. */
 	const panelSend = (message: unknown) => {
@@ -137,6 +140,21 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 				published.push({ topic, message: JSON.parse(JSON.stringify(message ?? null)) });
 				for (const fn of subscribers.get(topic) ?? []) fn(message);
 			},
+			push: (topic: string, message: unknown) => {
+				const copy = JSON.parse(JSON.stringify(message ?? null));
+				const waiting = pullers.get(topic)?.shift();
+				if (waiting)
+					waiting(copy);
+				else
+					(queues.get(topic) ?? queues.set(topic, []).get(topic)!).push(copy);
+			},
+			pullAsync: (topic: string) => new Promise((resolve) => {
+				const queued = queues.get(topic)?.shift();
+				if (queued !== undefined)
+					resolve(queued);
+				else
+					(pullers.get(topic) ?? pullers.set(topic, []).get(topic)!).push(resolve);
+			}),
 		},
 		sys_IFrame: {
 			openIFrame: async (html: string, width: number, height: number, id: string, props: Record<string, unknown>) => {
@@ -245,5 +263,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend };
+	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues };
 }

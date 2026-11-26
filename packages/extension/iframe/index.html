@@ -74,6 +74,8 @@
 			table { width: 100%; border-collapse: collapse; }
 			td { padding: 3px 0; vertical-align: middle; }
 			td.label { padding-right: 6px; }
+			td.label.off { opacity: 0.45; }
+			input[type="checkbox"] { margin: 0 6px 0 0; accent-color: #5b9cff; }
 			td.ctl { width: 1%; white-space: nowrap; }
 			select, input[type="number"] {
 				padding: 3px 4px;
@@ -122,7 +124,7 @@
 		<h2>Result</h2>
 		<pre id="result" class="muted">No result yet.</pre>
 
-		<h2>Colours and widths</h2>
+		<h2>Lines: show, colour, width</h2>
 		<table id="styles"><tbody></tbody></table>
 		<div class="row" style="margin-top: 6px">
 			<button id="reset">Reset to defaults</button>
@@ -133,6 +135,7 @@
 				var api = window.eda || (window.parent && window.parent.eda);
 				var COMMAND = 'returnpath.panel.command';
 				var STATE = 'returnpath.panel.state';
+				var MAILBOX = 'returnpath.panel.mailbox';
 				var CSS = { red: '#ff0000', yellow: '#ffff00', green: '#00ff00', cyan: '#00ffff', blue: '#0000ff', magenta: '#ff00ff', white: '#ffffff' };
 				var $ = function (id) { return document.getElementById(id); };
 				var last = null;
@@ -142,8 +145,17 @@
 					api.sys_MessageBus.publish(COMMAND, message);
 				}
 
+				var newest = null;
+				var stampOf = function (snap, k) { return snap && snap.fields && snap.fields[k] ? snap.fields[k].at : -1; };
+				function stale(s) {
+					if (!newest || !s.stamps) return false;
+					return ['result', 'overlayOwner', 'lastRun'].some(function (k) { return stampOf(newest, k) > s.stamps[k]; });
+				}
+
 				function render(s) {
 					last = s;
+					// After this state is drawn, so a reply delivered at once is not drawn over.
+					if (stale(s)) setTimeout(function () { send({ cmd: 'adopt', snapshot: newest }); }, 0);
 					$('version').textContent = 'v' + s.version;
 					$('state').innerHTML = s.busy ? 'Running: <b></b>' : 'Overlay: <b></b>';
 					$('state').querySelector('b').textContent = s.busy || { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay];
@@ -179,8 +191,17 @@
 					body.textContent = '';
 					s.roles.forEach(function (r) {
 						var tr = document.createElement('tr');
+						var show = document.createElement('td');
+						show.className = 'ctl';
+						var box = document.createElement('input');
+						box.type = 'checkbox';
+						box.checked = r.visible !== false;
+						box.title = 'Show or hide';
+						box.setAttribute('aria-label', 'Show ' + r.label);
+						box.onchange = function () { change(r.role, { visible: box.checked }); };
+						show.appendChild(box);
 						var label = document.createElement('td');
-						label.className = 'label';
+						label.className = 'label' + (r.visible === false ? ' off' : '');
 						var sw = document.createElement('span');
 						sw.className = 'swatch';
 						sw.style.borderTopColor = CSS[r.colour];
@@ -214,6 +235,7 @@
 							if (v >= 1 && v <= 10) change(r.role, { width: v });
 						};
 						width.appendChild(num);
+						tr.appendChild(show);
 						tr.appendChild(label);
 						tr.appendChild(colour);
 						tr.appendChild(width);
@@ -238,6 +260,17 @@
 				}
 				api.sys_MessageBus.subscribe(STATE, render);
 				send({ cmd: 'hello' });
+				// Results of analyses run while this window was closed, or by an instance that has gone,
+				// wait in the mailbox; each is handed to the extension, which shows the newest.
+				if (typeof api.sys_MessageBus.pullAsync === 'function') {
+					(function pull() {
+						api.sys_MessageBus.pullAsync(MAILBOX).then(function (snapshot) {
+							if (snapshot && (!newest || ['result', 'overlayOwner', 'lastRun'].some(function (k) { return stampOf(snapshot, k) > stampOf(newest, k); }))) newest = snapshot;
+							if (snapshot) send({ cmd: 'adopt', snapshot: snapshot });
+							pull();
+						}, function () { setTimeout(pull, 1000); });
+					})();
+				}
 				setTimeout(function () {
 					if (!last) $('state').textContent = 'No answer from the extension yet. Reopen the panel from the Return Path menu.';
 				}, 3000);

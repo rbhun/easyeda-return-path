@@ -27,6 +27,8 @@ const LOG_FILE = 'C:\\Users\\me\\Documents\\EasyEDA-Pro\\ReturnPath\\returnpath-
 const saved = (mock: { storage: Map<string, unknown> }) => String(mock.storage.get('log') ?? '').split('\n');
 const never = () => new Promise<never>(() => {});
 const boardModule = await import('../src/eda-board.ts');
+// These tests time the board read; no other extension instance answers the panel's state request here.
+(await import('../src/panel.ts')).panelTimeouts.syncMs = 0;
 const { area, bbox } = await import('@returnpath/core');
 const { version: VERSION } = (await import('../extension.json', { with: { type: 'json' } })).default;
 runner.saveTimeouts.ms = 50;

@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.22] - 2026-11-26
+
+Numbered above 0.1.21, the highest version on the open pull requests (the HF line took 0.1.19 to 0.1.21).
+
+From the owner's run of 0.1.18: the panel opened from the menu knew nothing of the analysis just run from the menu, though analyses run from the panel worked; some lines were hard to see; lines need a show/hide control.
+
+- **The panel shows menu runs.** EasyEDA appears to run menu actions in separate instances of the extension, which share neither memory nor a fresh view of the stored settings. The instances now keep the result, the last run, the overlay, busy state and style in step over the extension's message bus, and exactly one acts on each panel command: the panel's owner, which hands Hide/Show, Clear and redraws to the instance that drew the overlay. Each result and overlay change is also pushed to a mailbox topic, which the bus keeps until it is pulled; the panel's page pulls it and hands the newest to its owner, which takes over the result, Rerun and the drawing even when the instance that ran the analysis is gone. Hide/Show and Clear from the menu reach whichever instance holds the overlay.
+- **Show/hide per line kind.** Each role in the panel (DC supply, return on top, other and inner layers, hops, gaps and bottleneck, band edges) has a checkbox; hidden roles are not drawn, and the choice is kept with the colours and widths.
+
 ## [0.1.18] - 2026-11-26
 
 From the owner's run of 0.1.17 on the rack display: a 9V track selected, Show for Selected Net, then the DC view.
