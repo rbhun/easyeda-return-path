@@ -398,10 +398,10 @@ test('the wizard falls back to the system dialogs, with a select-all entry, when
 	}
 });
 
-test('the menu has Open Panel, Run Folder, Show Saved Log and About; the analyses and the overlay run from the panel', async () => {
+test('the menu has Open Panel, Load and Save Board Info, Run Folder, Show Saved Log and About; the analyses and the overlay run from the panel', async () => {
 	const config = (await import('../extension.json', { with: { type: 'json' } })).default;
 	const items = config.headerMenus.pcb[0].menuItems;
-	assert.deepEqual(items.map(i => i.registerFn), ['showPanel', 'setRunFolder', 'showSavedLog', 'about']);
+	assert.deepEqual(items.map(i => i.registerFn), ['showPanel', 'loadBoardInfo', 'saveBoardInfo', 'setRunFolder', 'showSavedLog', 'about']);
 	for (const i of items)
 		assert.equal(typeof (ext as Record<string, unknown>)[i.registerFn], 'function');
 	const html = await import('node:fs').then(fs => fs.readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8'));

@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.47] - 2026-11-26
+
+From Balazs: a per-project board info database, so each net and rail is set up once.
+
+- **Board info, stored per project** with the extension's settings: for each net its kind, protocol and speed, driver part and pin, receivers, diff-pair partner, intended reference, impedance or length target and notes; for each power rail its voltage, source and each load's typical and peak current; for each layer its pours and intentional splits.
+- **Return Path → Load Board Info...** imports it from a CSV file (first column `row`: `net`, `load` or `layer`; comma or semicolon separated; blank cells are not applicable), replacing the project's board info or adding to it. **Return Path → Save Board Info...** saves it in the same format. A sample is in `packages/extension/examples/board-info-sample.csv`, and the format is in the extension README.
+- **HF check prefills from it**: nets with board info are listed first with their protocol, power and ground nets are left out, the speed starts at the stored speed, and a stored driver is used without asking. The result has a `Board info:` line (kind, diff partner, intended reference, target, receivers, notes).
+- **DC check prefills from it**: the rail's source and loads are preselected and the currents start at the typical currents.
+- **Changes in the wizard are written back**: a changed speed, the driver you pick (also None), and a DC source, load set or currents that differ from the prefilled ones. Board info wins over what is recognised from names and pins, and a later edit in the wizard overrides the imported value.
+- The MCO protocol (a microcontroller's clock output) is recognised as a clock.
+
 ## [0.1.46] - 2026-11-26
 
 From Balazs: HF check on SD0 in 0.1.44 stopped after 60 s (time budget) "during gaps", on a net of 23 segments.

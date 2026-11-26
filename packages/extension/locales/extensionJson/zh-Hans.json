@@ -3,5 +3,7 @@
 	"About...": "关于...",
 	"Show Saved Log...": "显示保存的日志...",
 	"Open Panel...": "打开面板...",
-	"Run Folder...": "运行文件夹..."
+	"Run Folder...": "运行文件夹...",
+	"Load Board Info...": "加载电路板信息...",
+	"Save Board Info...": "保存电路板信息..."
 }

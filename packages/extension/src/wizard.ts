@@ -4,7 +4,7 @@
 // the system dialogs when that window cannot be used.
 import { checkpoint, log } from './runner';
 import { askInWindow, BACK, closeWizardWindow, type WizardKind } from './wizard-window';
-import { componentsOnNet, guessRails, loadsFor, parseCurrents, parseHz, type Board, type DcSetupInput, type RailGuess } from '@returnpath/core';
+import { componentsOnNet, emptyBoardInfo, guessRails, infoRails, loadsFor, parseCurrents, parseHz, railInfo, withRail, type Board, type BoardInfo, type DcSetupInput, type RailGuess } from '@returnpath/core';
 import { t } from './i18n';
 
 export interface Option {
@@ -233,11 +233,16 @@ export interface WizardResult {
 	input: DcSetupInput;
 	/** Every confirmed rail with its ground. */
 	pairs: Record<string, string>;
+	/** The board info with this rail's source, loads and currents, when the user changed any of them from what was prefilled. */
+	learned?: BoardInfo;
 }
 
 /** Runs the wizard; undefined when the user cancels or there is nothing to solve. */
-/** `previous`: the last DC run's input; its load currents prefill the currents page when the same rail is solved. */
-export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string, railGiven = false, previous?: DcSetupInput): Promise<WizardResult | undefined> {
+/**
+ * `previous`: the last DC run's input; its load currents prefill the currents page when the same rail
+ * is solved. `info`: the project's board info, which wins over the guesses and the last run.
+ */
+export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string, railGiven = false, previous?: DcSetupInput, info: BoardInfo = emptyBoardInfo()): Promise<WizardResult | undefined> {
 	const title = t('DC return current');
 	log('wizard: guessing rails…');
 	await checkpoint();
@@ -245,16 +250,28 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	log(`wizard: ${guess.rails.length} rails (${guess.rails.map(r => `${r.net}: source ${r.source?.designator ?? '?'}`).join(', ')}), grounds ${guess.grounds.join(', ') || '-'}`);
 	const byNet = new Map(guess.rails.map(r => [r.net, r]));
 	const allNets = [...new Set([...board.nets, ...board.pads.map(p => p.net)].filter(Boolean))].sort();
+	const knownRails = infoRails(info).filter(n => allNets.includes(n) && !byNet.has(n));
+	for (const n of info.nets.filter(n => n.kind === 'ground' && allNets.includes(n.net) && !guess.grounds.includes(n.net)))
+		guess.grounds.push(n.net);
 
 	// 1. Power rails.
 	const railOptions = [
-		...guess.rails.map(r => ({ value: r.net, label: `${r.net}${r.voltage !== undefined ? ` (${r.voltage} V)` : ''}: ${r.source ? t('source ${1}', r.source.designator) : t('source to confirm')}` })),
-		...allNets.filter(n => !byNet.has(n) && !guess.grounds.includes(n)).map(n => ({ value: n, label: n })),
+		...guess.rails.map((r) => {
+			const known = railInfo(info, r.net);
+			const voltage = known?.voltage ?? r.voltage;
+			const source = known?.source ?? r.source?.designator;
+			return { value: r.net, label: `${r.net}${voltage !== undefined ? ` (${voltage} V)` : ''}: ${source ? t('source ${1}', source) : t('source to confirm')}${known ? ` · ${t('board info')}` : ''}` };
+		}),
+		...knownRails.map((n) => {
+			const known = railInfo(info, n);
+			return { value: n, label: `${n}${known?.voltage !== undefined ? ` (${known.voltage} V)` : ''}${known?.source ? `: ${t('source ${1}', known.source)}` : ''} · ${t('board info')}` };
+		}),
+		...allNets.filter(n => !byNet.has(n) && !knownRails.includes(n) && !guess.grounds.includes(n)).map(n => ({ value: n, label: n })),
 	];
 	// A selected rail needs no confirming or picking: steps 1 and 2 are skipped.
-	const given = preferredRail && !guess.grounds.includes(preferredRail) && allNets.includes(preferredRail) && (railGiven || byNet.has(preferredRail)) ? preferredRail : undefined;
-	const asked = preferredRail && !byNet.has(preferredRail) && allNets.includes(preferredRail) ? [preferredRail] : [];
-	const rails = given ? [given] : await ask.multi(title, t('Step 1/5: confirm the power rails (guessed from net names and pours).'), railOptions, [...guess.rails.map(r => r.net), ...asked]);
+	const given = preferredRail && !guess.grounds.includes(preferredRail) && allNets.includes(preferredRail) && (railGiven || byNet.has(preferredRail) || knownRails.includes(preferredRail)) ? preferredRail : undefined;
+	const asked = preferredRail && !byNet.has(preferredRail) && !knownRails.includes(preferredRail) && allNets.includes(preferredRail) ? [preferredRail] : [];
+	const rails = given ? [given] : await ask.multi(title, t('Step 1/5: confirm the power rails (from the board info, net names and pours).'), railOptions, [...guess.rails.map(r => r.net), ...knownRails, ...asked]);
 	if (!rails?.length)
 		return undefined;
 	if (given)
@@ -297,12 +314,19 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	const sourcePrompt = g.source
 		? t('Step 4/5: active source of ${1}. Guessed ${2} (${3}).', rail, g.source.designator, g.source.reason)
 		: t('Step 4/5: active source of ${1}. ${2}', rail, g.askReason ?? '');
-	const sourceId = await ask.select(title, `${sourcePrompt} ${t('Other candidate sources are left out of the solve.')}`, sourceOptions, g.source?.componentId);
+	const known = railInfo(info, rail);
+	const byDesignator = (d: string) => onRail.find(c => c.designator === d)?.id;
+	const knownSource = known?.source ? byDesignator(known.source) : undefined;
+	if (known?.source && !knownSource)
+		log(`wizard: board-info source ${known.source} of ${rail} has no pad on it; using the guess`, 'warn');
+	const prefilledSource = knownSource ?? g.source?.componentId;
+	const sourceId = await ask.select(title, `${knownSource ? t('Step 4/5: active source of ${1}: ${2}, from the board info.', rail, known!.source!) : sourcePrompt} ${t('Other candidate sources are left out of the solve.')}`, sourceOptions, prefilledSource);
 	if (!sourceId)
 		return undefined;
 
 	// 5. Loads (connectors can be loads or sources) and their currents.
-	const guessLoads = loadsFor(board, rail, sourceId, [...candIds]).loads.map(l => l.componentId);
+	const knownLoads = (known?.loads ?? []).map(l => byDesignator(l.part)).filter((id): id is string => !!id && id !== sourceId);
+	const guessLoads = knownLoads.length ? knownLoads : loadsFor(board, rail, sourceId, [...candIds]).loads.map(l => l.componentId);
 	const loadOptions = onRail.filter(c => c.id !== sourceId).map(c => ({
 		value: c.id,
 		label: c.designator + (c.name ? ` (${c.name})` : ''),
@@ -311,15 +335,24 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	if (!loads?.length)
 		return undefined;
 	const designator = (id: string) => board.components.find(c => c.id === id)?.designator ?? id;
-	const known = previous?.rail === rail ? previous.currents ?? {} : {};
+	const lastRun = previous?.rail === rail ? previous.currents ?? {} : {};
+	const fromInfo = Object.fromEntries((known?.loads ?? []).filter(l => l.typicalA !== undefined).map(l => [l.part, l.typicalA!]));
 	const loadRows = loads.map(id => ({ value: designator(id), label: loadOptions.find(o => o.value === id)?.label ?? designator(id) }));
-	const values = loadRows.map(o => currentField(known[o.value] ?? DEFAULT_LOAD_CURRENT));
-	const currentText = await ask.currents(title, t('Total current of the rail, shared between the loads with the sliders; a load\'s current can also be typed (150mA, or 0.15 for amps). Prefilled with ${1} per load, or with the last run\'s values on this rail. Clear the total to split 1 A equally and show normalised density.', currentField(DEFAULT_LOAD_CURRENT)), loadRows, values);
+	const values = loadRows.map(o => currentField(fromInfo[o.value] ?? lastRun[o.value] ?? DEFAULT_LOAD_CURRENT));
+	const currentText = await ask.currents(title, t('Total current of the rail, shared between the loads with the sliders; a load\'s current can also be typed (150mA, or 0.15 for amps). Prefilled from the board info (typical current), else with the last run\'s values on this rail, else ${1} per load. Clear the total to split 1 A equally and show normalised density. What you change here is saved to the board info.', currentField(DEFAULT_LOAD_CURRENT)), loadRows, values);
 	if (currentText === undefined)
 		return undefined;
 
+	const currents = parseCurrents(currentText);
+	const prefilled = parseCurrents(currentsText(loadRows.map(o => o.value), values)) ?? {};
+	const same = (a?: number, b?: number) => a === b || (a !== undefined && b !== undefined && Math.abs(a - b) <= 1e-9 + 1e-6 * Math.abs(b));
+	const changed = sourceId !== prefilledSource
+		|| loads.length !== guessLoads.length || loads.some(id => !guessLoads.includes(id))
+		|| (!!currents && loadRows.some(o => !same(currents[o.value], prefilled[o.value])));
+	const input: DcSetupInput = { rail, ground: pairs[rail], source: designator(sourceId), loads: loads.map(designator), currents };
 	return {
-		input: { rail, ground: pairs[rail], source: designator(sourceId), loads: loads.map(designator), currents: parseCurrents(currentText) },
+		input,
 		pairs,
+		...(changed ? { learned: withRail(info, rail, { source: input.source, loads: input.loads!.map(part => ({ part, typicalA: currents?.[part] })) }) } : {}),
 	};
 }

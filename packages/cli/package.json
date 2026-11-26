@@ -1,6 +1,6 @@
 {
   "name": "@returnpath/cli",
-  "version": "0.1.46",
+  "version": "0.1.47",
   "description": "Offline return-path analysis of EasyEDA Pro files: file parser, SVG/PNG overlay and JSON report",
   "private": true,
   "type": "module",
@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
-    "@returnpath/core": "0.1.46",
+    "@returnpath/core": "0.1.47",
     "fflate": "^0.8.3"
   }
 }
