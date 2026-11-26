@@ -70,8 +70,9 @@ test('Selected trace: a power rail goes straight to the DC wizard, a signal net 
 
 	const signal = install(createMockEda(load(buildEpro('demo', 'object')), 'CLK'));
 	await ext.showForSelectedTrace();
-	assert.ok(signal.dialogs.every(d => d.kind !== 'confirm'));
+	assert.ok(signal.dialogs.every(d => d.kind !== 'confirm' && !/^(Net to check|Speed of)/.test(d.prompt)), 'no net or speed question');
 	assert.match(signal.messages.at(-1)!, /^CLK: \d+ finding/);
+	assert.match(signal.messages.at(-1)!, /CLK: clock at 16 MHz[^\n]*The usual speed/);
 });
 
 test('an error ends in a dialog and an error entry with its stack in the log', async () => {

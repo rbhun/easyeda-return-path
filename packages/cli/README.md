@@ -10,7 +10,8 @@ Needs Node ≥ 20.17. From the repository root run `npm ci` once, then in `packa
 npm test                 # parser (both encodings), POURED fills, expected findings
 npm run demo             # regenerate examples/ and render demo + fixed boards into out/
 npm run analyze -- examples/demo-4layer.epro --net CLK --out out --png
-npm run analyze -- my-board.epro --list-nets
+npm run analyze -- my-board.epro --list-nets   # signal nets first, data lines with their kind
+npm run analyze -- my-board.epro --net SCL --speed 400k
 ```
 
 DC return current (design decision D7):

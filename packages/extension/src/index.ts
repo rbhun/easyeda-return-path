@@ -3,7 +3,7 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, guessDrivers, hfApplicability, solveDcSteps, traceStreamlines, DRAWN_STREAMS, type Board, type DcSetupInput, type Pad, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, classifySignal, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, parseHz, solveDcSteps, summariseSignal, traceStreamlines, DRAWN_STREAMS, type Board, type DcSetupInput, type Pad, type SignalKind, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
@@ -81,26 +81,93 @@ export async function showForSelectedTrace(): Promise<void> {
 	await runReturnPath(dialogAsk(), true);
 }
 
-export async function runReturnPath(ask: Ask, dcWithoutAsking = false): Promise<void> {
+/**
+ * HF check: pick the net (recognised data lines first) and its speed. With fromSelection (the panel's
+ * Selected trace), the selected net is checked at the usual speed of its kind, and a power rail goes
+ * to the DC check without asking.
+ */
+export async function runReturnPath(ask: Ask, fromSelection = false): Promise<void> {
 	const title = t('Return path');
-	await recorded('Show for Selected Net', title, async () => {
+	const command = fromSelection ? 'Selected trace' : 'HF check';
+	await recorded(command, title, async () => {
 		await showPanelForRun();
-		const net = await selectedNet();
-		if (!net) {
-			recordResult('outcome', 'nothing selected');
-			eda.sys_Dialog.showInformationMessage(t('Select a track, via or pad of the net to analyse.'), title);
+		const selected = await selectedNet();
+		log(`${command} (v${extensionConfig.version}), selected net ${selected ?? 'none'}`);
+		if (fromSelection) {
+			if (!selected) {
+				recordResult('outcome', 'nothing selected');
+				eda.sys_Dialog.showInformationMessage(t('Select a track, via or pad of the net to analyse.'), title);
+				return;
+			}
+			await hfFor(selected, ask, { dcWithoutAsking: true });
 			return;
 		}
-		await hfFor(net, ask, undefined, dcWithoutAsking);
+		// A selected ground or supply net is turned away (with the DC view offered) before the board is read.
+		if (selected && !hfApplicability({ pours: [] }, selected).ok) {
+			await hfFor(selected, ask);
+			return;
+		}
+		const board = await timed('read board', readBoard, boardSizes);
+		await addPinNames(board);
+		if (selected && !hfApplicability(board, selected).ok) {
+			await hfFor(selected, ask, { board });
+			return;
+		}
+		const picked = await chooseNet(board, selected, loggedAsk(ask));
+		if (!picked) {
+			recordResult('outcome', 'no net chosen');
+			return;
+		}
+		await hfFor(picked.net, ask, { board, hz: picked.hz });
 	}).finally(ask.close);
 }
 
-async function hfFor(net: string, ask: Ask, storedDrivers?: string[], dcWithoutAsking = false): Promise<void> {
+/** Lists the signal nets, recognised data lines first, and asks for the net and its speed. */
+async function chooseNet(board: Board, selected: string | undefined, ask: Ask): Promise<{ net: string; hz: number } | undefined> {
+	const title = t('HF check');
+	const cands = hfCandidates(board);
+	log(`HF check: ${cands.length} signal nets, ${cands.filter(c => c.kind).length} recognised as data lines`);
+	if (!cands.length) {
+		eda.sys_Dialog.showInformationMessage(t('No routed signal nets on this board: only ground, supply, plane and bias nets have tracks.'), title);
+		return undefined;
+	}
+	const options = cands.map(c => ({ value: c.net, label: `${c.net} · ${c.kind ? c.kind.label : t('other signal')} · ${c.lengthMm.toFixed(0)} mm` }));
+	const dflt = cands.some(c => c.net === selected) ? selected : cands[0].net;
+	const net = await ask.select(title, t('Net to check. Recognised data lines come first, with their kind; the selected net is ticked.'), options, dflt);
+	if (!net)
+		return undefined;
+	const hz = await chooseSpeed(net, cands.find(c => c.net === net)?.kind ?? GENERIC, ask);
+	return hz ? { net, hz } : undefined;
+}
+
+async function chooseSpeed(net: string, kind: SignalKind, ask: Ask): Promise<number | undefined> {
+	const OTHER = 'other';
+	const options = [
+		...kind.speeds.map(s => ({ value: String(s.hz), label: t('${1} (edges ≈ ${2} ns)', s.label, String(s.riseNs)) })),
+		{ value: OTHER, label: t('Other speed...') },
+	];
+	const what = kind.type === GENERIC.type ? t('signal') : kind.label;
+	const v = await ask.select(t('HF check'), t('Speed of ${1} (${2}): the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.', net, what), options, String(kind.speeds[kind.dflt].hz));
+	if (v !== OTHER)
+		return v ? Number(v) : undefined;
+	for (let text = ''; ;) {
+		const typed = await ask.input(t('HF check'), t('Speed of ${1}, for example 400k, 12 MHz or 115200.', net), text);
+		if (typed === undefined)
+			return undefined;
+		const hz = parseHz(typed);
+		if (hz)
+			return hz;
+		text = typed;
+	}
+}
+
+async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: number; board?: Board; dcWithoutAsking?: boolean } = {}): Promise<void> {
 	const title = t('Return path');
-	log(`Show for Selected Net: ${net} (v${extensionConfig.version})`);
+	const storedDrivers = opts.drivers;
+	log(`HF check: ${net}${opts.hz ? ` at ${formatHz(opts.hz)}` : ''}`);
 	// The name check needs no board, so power and ground nets are turned away before the read.
 	const byName = hfApplicability({ pours: [] }, net);
-	const board = byName.ok ? await timed('read board', readBoard, boardSizes) : undefined;
+	const board = byName.ok ? opts.board ?? await timed('read board', readBoard, boardSizes) : undefined;
 	const scope = board ? hfApplicability(board, net) : byName;
 	recordResult('net', net);
 	if (board)
@@ -112,7 +179,7 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[], dcWithoutA
 			eda.sys_Dialog.showInformationMessage(scope.message!, title);
 			return;
 		}
-		if (dcWithoutAsking || await loggedAsk(ask).confirm(title, scope.message!, t('Open DC view')))
+		if (opts.dcWithoutAsking || await loggedAsk(ask).confirm(title, scope.message!, t('Open DC view')))
 			await runDcReturn(ask, scope.kind === 'power' ? net : undefined, scope.kind === 'power');
 		return;
 	}
@@ -120,17 +187,23 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[], dcWithoutA
 		return;
 	const drivers = storedDrivers ?? await chooseDrivers(board, net, loggedAsk(ask));
 	await ask.close();
-	await remember({ kind: 'hf', net, drivers });
+	await remember({ kind: 'hf', net, drivers, hz: opts.hz });
 	const ownTracks = board.tracks.filter(tr => tr.net === net).length;
 	log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias, driver ${drivers.join(', ') || 'none'}`);
 	const analysis = await runSteps(analyzeNetSteps(board, net, { drivers }), { title, timeBudgetMs: HF_BUDGET_MS, percent: hfPercent() });
 	log(`${net}: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${+Number(v).toFixed(3)}`).join(' ')}`);
 	const drawn = await timed('draw markers', () => drawAnalysis(analysis, board), d => `${d.markers} markers`);
+	const ownLength = board.tracks.filter(tr => tr.net === net).reduce((sum, tr) => sum + Math.hypot(tr.b.x - tr.a.x, tr.b.y - tr.a.y), 0);
+	const kind = classifySignal(net, board.pads.filter(p => p.net === net).map(p => p.pinName)) ?? GENERIC;
+	const hz = opts.hz ?? kind.speeds[kind.dflt].hz;
+	const signal = summariseSignal(net, kind, hz, ownLength);
+	recordResult('signal', { type: kind.type, hz, chosen: !!opts.hz, kneeHz: signal.kneeHz, criticalMm: signal.criticalMm, lengthMm: ownLength, transmissionLine: signal.transmissionLine });
 	recordResult('hf', { drivers, stats: analysis.stats, findings: analysis.findings, markers: drawn.markers, returnLayers: drawn.returnLayers, boardWarnings: board.warnings });
 	const lines = [
 		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
+		opts.hz ? signal.message : `${signal.message} ${t('(The usual speed of this kind of line; HF check asks for the speed.)')}`,
 		drawn.returnLayers.length
-			? t('Return path on ${1}. Dashed ${2}: hop through a via, decap, bridging cap or IC pin. ${3}: trace over a gap, or band without copper. Thin ${4}: ±3h band edges.', drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name, roleColour('band').name)
+			? t('Return current on ${1}, drawn on the reference copper right under the trace (beside it for a coplanar pour), so it follows the trace. Dashed ${2}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${3} over the trace: it crosses a gap, or has too little reference copper.', drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name)
 			: t('No return path drawn: the trace has no reference copper.'),
 		drivers.length ? t('Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.', drivers.join(', '), roleColour('hop').name) : t('Driver: not chosen, so only the pin at each end closes the loop.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
@@ -145,7 +218,8 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[], dcWithoutA
  * settle it. An empty list skips the driver loop (also when the question is closed).
  */
 async function chooseDrivers(board: Board, net: string, ask: Ask): Promise<string[]> {
-	await addPinNames(board);
+	if (!board.pads.some(p => p.pinName))
+		await addPinNames(board);
 	const guess = guessDrivers(board, net);
 	log(`${net}: driver candidates ${guess.candidates.map(c => `${c.designator} (${c.role}: ${c.why})`).join('; ') || 'none'}; guess ${guess.drivers.join(', ') || 'none'}${guess.confident ? '' : ' (not sure)'}`);
 	if (guess.confident || !guess.candidates.length)
@@ -261,7 +335,7 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 	await report(title, lines);
 }
 
-type LastRun = { kind: 'hf'; net: string; drivers?: string[] } | { kind: 'dc'; input: DcSetupInput };
+type LastRun = { kind: 'hf'; net: string; drivers?: string[]; hz?: number } | { kind: 'dc'; input: DcSetupInput };
 const LAST_RUN = 'lastRun';
 
 /** Stored, so Rerun Last Analysis works after a restart too. */
@@ -295,7 +369,7 @@ export async function rerunAnalysis(): Promise<void> {
 		const ask = dialogAsk();
 		await recorded('Rerun Last Analysis', t('Return path'), async () => {
 			await showPanelForRun();
-			await hfFor(run.net, ask, run.drivers);
+			await hfFor(run.net, ask, { drivers: run.drivers, hz: run.hz });
 		}).finally(ask.close);
 		return;
 	}
@@ -357,13 +431,16 @@ const panelHost = {
 		const actions = { hf: showReturnPath, dc: showDcReturn, trace: showForSelectedTrace, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis(), log: showSavedLog, runFolder: setRunFolder };
 		await actions[cmd]();
 	},
+	lastRunKind: () => lastRun()?.kind,
 	lastRunLabel: () => {
 		const run = lastRun();
 		if (!run)
 			return undefined;
-		return run.kind === 'hf'
-			? (run.drivers?.length ? t('HF check: ${1}, driver ${2}', run.net, run.drivers.join(', ')) : t('HF check: ${1}', run.net))
-			: t('DC ${1} / ${2}, source ${3}, loads ${4}', run.input.rail, run.input.ground, run.input.source, (run.input.loads ?? []).join(', ') || '-');
+		if (run.kind === 'hf') {
+			const net = run.hz ? t('${1} at ${2}', run.net, formatHz(run.hz)) : run.net;
+			return run.drivers?.length ? t('HF check: ${1}, driver ${2}', net, run.drivers.join(', ')) : t('HF check: ${1}', net);
+		}
+		return t('DC ${1} / ${2}, source ${3}, loads ${4}', run.input.rail, run.input.ground, run.input.source, (run.input.loads ?? []).join(', ') || '-');
 	},
 };
 

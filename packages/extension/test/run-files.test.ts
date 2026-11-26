@@ -54,7 +54,7 @@ test('an HF run writes its own log and a results file to ReturnPath/runs by defa
 	assert.equal(more.length, 0);
 	assert.equal(run.results.schema, 'returnpath-run/v1');
 	assert.equal(run.results.version, VERSION);
-	assert.equal(run.results.command, 'Show for Selected Net');
+	assert.equal(run.results.command, 'HF check');
 	assert.equal(run.results.status, 'ok');
 	assert.equal(run.results.net, 'CLK');
 	assert.match(run.results.board, /copper layers, \d+ nets, \d+ track segments/);
@@ -62,7 +62,7 @@ test('an HF run writes its own log and a results file to ReturnPath/runs by defa
 	assert.ok(run.results.hf.markers > 0);
 	assert.equal(typeof run.results.hf.stats.segments, 'number');
 	assert.ok(run.results.report.some((l: string) => /finding\(s\)/.test(l)));
-	assert.match(run.log, /Show for Selected Net: CLK \(v/);
+	assert.match(run.log, /HF check \(v\d+\.\d+\.\d+\), selected net CLK/);
 	assert.match(run.log, /Return path: finished in \d+ ms/);
 	assert.match(run.log, /run return-path_\S+ ok in \d+ ms/);
 });
@@ -104,7 +104,7 @@ test('the DC hand-off from a power net stays one run', async () => {
 	await ext.showReturnPath();
 	const all = runs(mock.files, DEFAULT_DIR);
 	assert.equal(all.length, 1);
-	assert.equal(all[0].results.command, 'Show for Selected Net');
+	assert.equal(all[0].results.command, 'HF check');
 	assert.match(all[0].results.outcome, /not a signal net \(power\)/);
 	assert.ok(all[0].results.dc);
 });

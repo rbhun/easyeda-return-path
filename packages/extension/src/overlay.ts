@@ -126,8 +126,8 @@ export interface HfDrawn {
 
 /**
  * Replaces the overlay with the given analysis: the return path in a colour per reference layer;
- * dashed hops (via, decap, bridging cap, IC pin); gaps where the trace crosses one or the ±3h band
- * lacks copper; the band edges. Colours and widths come from the style (style.ts).
+ * dashed hops (via, decap, bridging cap, IC pin); red over the trace where it crosses a gap or is
+ * short of reference copper; the band edges (hidden by default). Colours and widths come from the style (style.ts).
  */
 export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>): Promise<HfDrawn> {
 	const { segs, outline, dot, dashed } = await markerKit();
@@ -146,7 +146,10 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 
 	for (const c of an.chains) {
 		band.push(...outline(c.band));
-		gap.push(...outline(c.bandUncovered));
+		// Red runs along the trace where it is short of reference copper, rather than outlining every
+		// uncovered piece of the band, which on a busy board breaks up into fragments.
+		for (const th of c.thin)
+			gap.push(...segs([th.a, th.b], false));
 		for (const g of c.gaps) {
 			if (g.kind !== 'via-antipad')
 				gap.push(...segs([g.a, g.b], false));

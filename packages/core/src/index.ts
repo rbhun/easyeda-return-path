@@ -10,3 +10,4 @@ export * from './driver.js';
 export * from './easyeda-polygon.js';
 export * from './dc/index.js';
 export * from './stackup.js';
+export * from './signal.js';

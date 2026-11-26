@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { strFromU8, unzipSync } from 'fflate';
-import { analyzeNet, buildDcSetup, hfApplicability, solveDc, solveDcAsync, type Board, type Pad } from '@returnpath/core';
+import { analyzeNet, bbox, buildDcSetup, hfApplicability, hfCandidates, solveDc, solveDcAsync, type Board, type Pad } from '@returnpath/core';
 import { runDc } from '../src/dc.js';
 import { foldRows, renderOverlay } from '../src/render/svg.js';
 import { parseEasyEdaPcb } from '../src/easyeda/parse.js';
@@ -167,4 +167,19 @@ test('overview: a long thin board is folded into rows; a normal one is not', () 
   assert.equal(svg.match(/clip-path="url\(#row\d\)"/g)?.length, foldRows(60, 4));
   const [w, h] = svg.match(/width="([\d.]+)" height="([\d.]+)"/)!.slice(1).map(Number);
   assert.ok(w / h < 4, `picture ${w} × ${h} keeps a readable shape`);
+});
+
+test('2-layer: the overlay marks thin stretches along the trace, and the band stays on the board', () => {
+  const an = analyzeNet(bottomOnly, 'DATA');
+  const thin = an.chains.flatMap((c) => c.thin);
+  assert.equal(thin.length, an.findings.filter((f) => f.kind === 'band-coverage').length, 'one thin segment per single-segment finding here');
+  assert.ok(thin.every((t) => an.chains.some((c) => c.chain.pts.some((p) => p.x === t.a.x && p.y === t.a.y))), 'thin stretches lie on the trace');
+  for (const c of an.chains) {
+    const bb = bbox(c.band);
+    assert.ok(bb.minX >= -1e-6 && bb.minY >= -1e-6 && bb.maxX <= 60 + 1e-6 && bb.maxY <= 40 + 1e-6, 'band clipped to the 60 × 40 mm outline');
+  }
+});
+
+test('2-layer: the HF check lists recognised data lines first', () => {
+  assert.deepEqual(hfCandidates(coplanar).map((c) => [c.net, c.kind?.label]), [['CLK', 'clock'], ['DATA', undefined]]);
 });
