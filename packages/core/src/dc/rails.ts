@@ -335,9 +335,28 @@ export function railLabel(input: Pick<DcSetupInput, 'rail' | 'railNets'>): strin
   return railNetsOf(input).join(' + ');
 }
 
-/** Parts with every pad on the rail's nets, on two or more of them (a fuse, shunt, jumper): they carry its current from one net to the next. */
+/** Output pin of a pass element (eFuse, ideal diode, load switch). A switch node is not one. */
+const PASS_OUT_RE = /^(?:\+?V?OUT\d*\+?|\+?VO\+?|VREG)$/i;
+
+/**
+ * Parts that carry the rail from one of its nets to the next. A fuse, shunt or jumper has every pad
+ * on the rail. An eFuse or ideal diode has other pins too: its input pin and its output pin, on two
+ * of the rail's nets, are the link. A part that only senses across the nets (VIN+ and VIN-) is not.
+ */
 export function railBridges(board: Board, nets: string[]): DcBridge[] {
-  return acrossNets(board, nets).filter((x) => x.all).map((x) => ({ designator: x.c.designator, pads: x.pads }));
+  const across = acrossNets(board, nets);
+  const series = across.filter((x) => x.all).map((x) => ({ designator: x.c.designator, pads: x.pads }));
+  const seen = new Set(series.map((b) => b.designator));
+  const pass = across.flatMap(({ c, pads }) => {
+    if (seen.has(c.designator)) return [];
+    const inputs = pads.filter((p) => p.pinName && IN_PIN_RE.test(p.pinName));
+    const outputs = pads.filter((p) => p.pinName && PASS_OUT_RE.test(p.pinName));
+    const inNets = new Set(inputs.map((p) => p.net));
+    const outNets = new Set(outputs.map((p) => p.net));
+    if (![...inNets].some((n) => !outNets.has(n)) || ![...outNets].some((n) => !inNets.has(n))) return [];
+    return [{ designator: c.designator, pads: [...inputs, ...outputs] }];
+  });
+  return [...series, ...pass];
 }
 
 /** Two-pad parts that pass a rail's current on to another net: fuses, ferrites, inductors, diodes, resistors (a 0 Ω link or shunt), jumpers. */
