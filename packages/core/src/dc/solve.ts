@@ -391,7 +391,7 @@ function* solveNetField(
       dst[n] = s;
     }
   };
-  function* runCg(rhs: Float64Array, from: number, to: number): Steps<{ x: Float64Array; it: number; res: number }> {
+  function* runCg(rhs: Float64Array, from: number, to: number, tolerance = opts.tolerance, maxIterations = opts.maxIterations): Steps<{ x: Float64Array; it: number; res: number }> {
     const x = new Float64Array(N);
     const r = new Float64Array(N);
     const z = new Float64Array(N);
@@ -411,10 +411,11 @@ function* solveNetField(
     }
     let it = 0;
     let res = bnorm ? 1 : 0;
-    const logTol = Math.log(opts.tolerance);
-    while (bnorm && it < opts.maxIterations) {
+    const logTol = Math.log(tolerance);
+    while (bnorm && it < maxIterations) {
       const done = Math.min(1, Math.max(0, Math.log(Math.max(res, 1e-300)) / logTol));
-      yield { phase: `solve ${net}`, fraction: from + (to - from) * done };
+      // The drop solve reports often. A load's own field is only for its line, and a tick per iteration dominates it.
+      if (it % (tolerance > opts.tolerance ? 32 : 1) === 0) yield { phase: `solve ${net}`, fraction: from + (to - from) * done };
       apply(pv, q);
       let pq = 0;
       for (let n = 0; n < N; n++) if (active[n]) pq += pv[n] * q[n];
@@ -427,7 +428,7 @@ function* solveNetField(
       }
       it++;
       res = Math.sqrt(rr) / bnorm;
-      if (res < opts.tolerance) break;
+      if (res < tolerance) break;
       let rzNew = 0;
       for (let n = 0; n < N; n++) if (active[n]) {
         z[n] = r[n] / diag[n];
@@ -441,7 +442,7 @@ function* solveNetField(
   }
 
   /** Voltages, current density and via current for one solved right-hand side. */
-  function fieldsOf(x: Float64Array): { layers: DcLayerField[]; vias: ViaFlow[]; drop: number; bottleneck: DcNetResult['bottleneck']; fullScale: number } {
+  function fieldsOf(x: Float64Array, peaks = true): { layers: DcLayerField[]; vias: ViaFlow[]; drop: number; bottleneck: DcNetResult['bottleneck']; fullScale: number } {
     const layers: DcLayerField[] = copper.map((l, li) => ({
       layer: l.id,
       weight: weights[li],
@@ -479,6 +480,7 @@ function* solveNetField(
         }
       }
     }
+    let maxAny = 0;
     for (let li = 0; li < L; li++) {
       const f = layers[li];
       for (let c = 0; c < NC; c++) {
@@ -490,6 +492,7 @@ function* solveNetField(
         f.jx[c] = jx;
         f.jy[c] = jy;
         f.j[c] = Math.hypot(jx, jy);
+        if (f.j[c] > maxAny) maxAny = f.j[c];
         f.flow += f.j[c] * w * g.cell * g.cell;
       }
     }
@@ -506,6 +509,8 @@ function* solveNetField(
       v.delivered.set(lo, (v.delivered.get(lo) ?? 0) + I);
       v.delivered.set(up, (v.delivered.get(up) ?? 0) - I);
     }
+    // A load's own field is only traced, so the pad-entry peak is enough to scale the line walk.
+    if (!peaks) return { layers, vias, drop, bottleneck: undefined, fullScale: maxAny * 0.05 || 1 };
     // Bottleneck: densest copper away from terminal pads and vias (their entry crowding is expected).
     const exclude = layers.map(() => new Uint8Array(NC));
     const guard = 2;
@@ -520,7 +525,6 @@ function* solveNetField(
     for (const v of vias) if (v.cell >= 0) for (let li = 0; li < L; li++) markAround(li, v.cell);
     for (const br of bridges) for (const side of br.sides) for (const [layer, cells] of side.cells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
     let bottleneck: DcNetResult['bottleneck'];
-    let maxAny = 0;
     for (let li = 0; li < L; li++) {
       const f = layers[li];
       for (let c = 0; c < NC; c++) {
@@ -550,8 +554,9 @@ function* solveNetField(
       const inj = live[k];
       const rhs = new Float64Array(N);
       for (const n of inj.nodes) rhs[n] = inj.share;
-      const one = yield* runCg(rhs, (1 + k) / (1 + live.length), (2 + k) / (1 + live.length));
-      const own = fieldsOf(one.x);
+      // The line only needs the direction of the flow, which settles long before the drop's tolerance.
+      const one = yield* runCg(rhs, (1 + k) / (1 + live.length), (2 + k) / (1 + live.length), 1e-2, 400);
+      const own = fieldsOf(one.x, false);
       const lc = loadCells.find((l) => l.designator === inj.designator);
       if (lc) lc.own = { layers: own.layers, vias: own.vias, fullScale: own.fullScale };
     }
