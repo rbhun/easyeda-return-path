@@ -7,6 +7,7 @@
 	"${1} / ${2}: source ${3}, loads ${4}.": "${1} / ${2}: source ${3}, loads ${4}.",
 	"No load currents given: 1 A total split equally; values are per amp.": "No load currents given: 1 A total split equally; values are per amp.",
 	"${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.": "${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.",
+	"Drop to each load, ${1}: ${2}.": "Drop to each load, ${1}: ${2}.",
 	"${1} overlay marker(s).": "${1} overlay marker(s).",
 	"DC return current": "DC return current",
 	"source ${1}": "source ${1}",

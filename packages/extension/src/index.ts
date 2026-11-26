@@ -453,6 +453,7 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 			net: n!.net,
 			role: n!.role,
 			dropV: n!.drop,
+			loadDrops: n!.loadDrops.map(d => ({ designator: d.designator, dropV: d.drop })),
 			bottleneck: n!.bottleneck ? { ...n!.bottleneck, layerName: layerName(n!.bottleneck.layer) } : undefined,
 			unconnected: n!.unconnected,
 			nodes: n!.nodes,
@@ -470,9 +471,16 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 			? t('Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.', focus, rail, setup.ground, setup.source.designator)
 			: t('${1} / ${2}: source ${3}, loads ${4}.', rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', ')),
 		setup.normalised ? (focus ? t('No current given for ${1}: values are per amp of its current.', focus) : t('No load currents given: 1 A total split equally; values are per amp.')) : '',
-		...[res.supply, res.ret].filter(n => !!n).map(n => carriesCurrent(n!)
-			? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
-			: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
+		...[res.supply, res.ret].filter(n => !!n).flatMap(n => {
+			const head = carriesCurrent(n!)
+				? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
+				: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator);
+			const drops = n!.loadDrops.filter(d => d.drop > 0).sort((a, b) => b.drop - a.drop);
+			const each = drops.length > 1
+				? t('Drop to each load, ${1}: ${2}.', vUnit, drops.map(d => `${d.designator} ${(d.drop * 1000).toFixed(2)}`).join(', '))
+				: '';
+			return [head, each];
+		}),
 		t('Streamlines, in the colour of the copper layer the current flows in: ${1} supply ${2} on ${5} and ${3} on other layers; ${4} return ${6} on ${5} and ${7} on other layers, with a circle where it changes layer.', rail, roleColour('forwardTop').name, roleColour('forwardOther').name, setup.ground, layerName(board.stackup.copper[0].id), roleColour('returnTop').name, roleColour('returnOther').name),
 		t('${1} overlay marker(s).', String(drawn.markers)),
 		...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
