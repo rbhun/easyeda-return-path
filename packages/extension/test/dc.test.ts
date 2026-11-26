@@ -108,6 +108,41 @@ test('pin names from the netlist: a load returns only through its GND pin, not t
 	assert.ok(mock.logs.some(l => /DC setup:/.test(l.message)));
 });
 
+test('hide/show keeps the overlay; rerun repeats the last DC analysis on the changed board without the wizard, after a restart too', async () => {
+	const storage = new Map<string, unknown>();
+	const fresh = createMockEda(board, '3V3', [], undefined, { storage });
+	(globalThis as Record<string, unknown>).eda = fresh.eda;
+	await ext.clearReturnPath();
+	await ext.rerunAnalysis();
+	assert.match(fresh.messages[0], /No analysis to rerun yet/);
+	await ext.toggleReturnPath();
+	assert.match(fresh.toasts.at(-1)!, /No overlay to show/);
+
+	const first = createMockEda(board, '3V3', [], d => (d.kind === 'input' ? 'U2=150mA, U3=0.02' : d.dflt), { storage });
+	(globalThis as Record<string, unknown>).eda = first.eda;
+	await ext.showDcReturn();
+	const drawn = first.markers.map(m => JSON.stringify(m));
+	assert.ok(drawn.length > 0);
+	await ext.toggleReturnPath();
+	assert.equal(first.markers.length, 0);
+	assert.match(first.toasts.at(-1)!, /Overlay hidden/);
+	await ext.toggleReturnPath();
+	assert.deepEqual(first.markers.map(m => JSON.stringify(m)), drawn, 'shown again exactly as drawn');
+
+	const moved = { ...board, vias: [...board.vias, { ...board.vias.find(v => v.net === 'GND')!, id: 'new-gnd-via', at: { x: 30, y: 20 } }] };
+	const after = createMockEda(moved, '', [], undefined, { storage });
+	(globalThis as Record<string, unknown>).eda = after.eda;
+	await ext.rerunAnalysis();
+	assert.equal(after.dialogs.length, 0, 'no wizard');
+	assert.equal(after.counts.boardReads, 1, 'the board is read again');
+	assert.match(after.messages.at(-1)!, /^3V3 \/ GND: source U1, loads U2, U3, J2\./);
+	assert.match(after.messages.at(-1)!, /3V3: drop \d+\.\d+ mV,/, 'the given currents are kept');
+	assert.ok(after.markers.length > 0);
+	await ext.clearReturnPath();
+	await ext.toggleReturnPath();
+	assert.equal(after.markers.length, 0, 'Clear Overlay forgets it');
+});
+
 test('a ground with no copper path from any load is reported in words and gets no contours', async () => {
 	const noGnd = { ...board, pours: board.pours.filter(p => p.net !== 'GND'), tracks: board.tracks.filter(t => t.net !== 'GND'), vias: board.vias.filter(v => v.net !== 'GND') };
 	const mock = createMockEda(noGnd, '3V3');

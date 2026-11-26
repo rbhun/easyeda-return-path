@@ -18,5 +18,10 @@
 	"Save as file...": "另存为文件...",
 	"If the editor froze, reopen it and use Return Path > Show Saved Log...": "如果编辑器卡死，请重新打开并使用 回流路径 > 显示保存的日志...",
 	"${1}: no load has a copper path to ${2}; nothing is drawn for it.": "${1}：没有负载经铜箔连到 ${2}；该网络不绘制。",
-	"Streamlines: ${1} supply thin amber; ${2} return thick, magenta on ${3} and cyan on other layers, with a circle where it changes layer.": "流线：${1} 供电为细琥珀色线；${2} 回流为粗线，在 ${3} 上为品红色、在其他层上为青色，换层处画圆。"
+	"Streamlines: ${1} supply thin amber; ${2} return thick, magenta on ${3} and cyan on other layers, with a circle where it changes layer.": "流线：${1} 供电为细琥珀色线；${2} 回流为粗线，在 ${3} 上为品红色、在其他层上为青色，换层处画圆。",
+	"No analysis to rerun yet: run Show for Selected Net or DC Return Current first.": "还没有可重新运行的分析：请先运行“显示所选网络”或“直流回流电流”。",
+	"Rerun last analysis": "重新运行上次分析",
+	"No overlay to show: run an analysis first.": "没有可显示的叠加层：请先运行分析。",
+	"Overlay shown.": "已显示叠加层。",
+	"Overlay hidden. Use Hide/Show Overlay again to show it.": "已隐藏叠加层。再次使用“隐藏/显示叠加层”即可显示。"
 }

@@ -14,9 +14,48 @@ export const COLORS = {
 } satisfies Record<string, Rgba>;
 
 export type Marker = IDMT_IndicatorMarkerShape;
+export interface MarkerGroup { color: Rgba; markers: Marker[]; width: number }
+
+/** Cap per marker call; marker performance in the thousands is a D1 test item. */
+const MAX_PER_CALL = 4000;
+
+/** The overlay last drawn, kept so it can be hidden and shown again without a new analysis. */
+let shown: { groups: MarkerGroup[]; visible: boolean } | undefined;
+
+async function paint(groups: MarkerGroup[]): Promise<number> {
+	await eda.dmt_EditorControl.removeIndicatorMarkers();
+	let n = 0;
+	for (const grp of groups) {
+		for (let k = 0; k < grp.markers.length; k += MAX_PER_CALL) {
+			const markers = grp.markers.slice(k, k + MAX_PER_CALL);
+			if (await eda.dmt_EditorControl.generateIndicatorMarkers(markers, grp.color, grp.width, false))
+				n += markers.length;
+		}
+	}
+	return n;
+}
+
+/** Replaces the overlay with these groups. Returns the number of markers drawn. */
+export async function drawGroups(groups: MarkerGroup[]): Promise<number> {
+	shown = { groups, visible: true };
+	return paint(groups);
+}
 
 export async function clearOverlay(): Promise<void> {
+	shown = undefined;
 	await eda.dmt_EditorControl.removeIndicatorMarkers();
+}
+
+/** Hides the overlay, or shows the hidden one again. Returns whether it is now visible; undefined when there is none. */
+export async function toggleOverlay(): Promise<boolean | undefined> {
+	if (!shown)
+		return undefined;
+	if (shown.visible)
+		await eda.dmt_EditorControl.removeIndicatorMarkers();
+	else
+		await paint(shown.groups);
+	shown.visible = !shown.visible;
+	return shown.visible;
 }
 
 /** Marker builders in canvas coordinates for core geometry in mm. */
@@ -60,11 +99,5 @@ export async function drawAnalysis(an: Analysis): Promise<number> {
 		}
 	}
 
-	await clearOverlay();
-	let n = 0;
-	for (const [key, markers] of Object.entries(groups) as [keyof typeof COLORS, Marker[]][]) {
-		if (markers.length && await eda.dmt_EditorControl.generateIndicatorMarkers(markers, COLORS[key], 2, false))
-			n += markers.length;
-	}
-	return n;
+	return drawGroups((Object.entries(groups) as [keyof typeof COLORS, Marker[]][]).map(([key, markers]) => ({ color: COLORS[key], markers, width: 2 })));
 }

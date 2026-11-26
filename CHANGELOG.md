@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.13] - 2026-11-26
+
+The overlay stays temporary markers (not custom layers, for now), but can be hidden and redrawn without going through the wizard again.
+
+- **Return Path → Hide/Show Overlay:** hides the last overlay and shows it again exactly as drawn, without a new analysis. **Clear Overlay** still removes it for good.
+- **Return Path → Rerun Last Analysis:** reads the board again and repeats the last analysis: Show for Selected Net with the same net, or DC Return Current with the same rail, ground, source, loads and load currents, with no wizard. For checking a fix such as a moved or added via. The last analysis is stored with the extension's settings, so it also works after a restart. A part that no longer exists ends the rerun with a message naming it.
+
 ## [0.1.12] - 2026-11-26
 
 From a DC run on SDA on the rack display, made with 0.1.10. The white dashed and dotted lines and the thin angled outlines in those screenshots are 0.1.10's supply dashes, other-layer return dots and density contours, which 0.1.11 already removed. Each TCA9548 started several returns.

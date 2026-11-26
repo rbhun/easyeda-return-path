@@ -5,5 +5,7 @@
 	"About...": "About...",
 	"DC Return Current...": "DC Return Current...",
 	"Cancel Running Analysis": "Cancel Running Analysis",
-	"Show Saved Log...": "Show Saved Log..."
+	"Show Saved Log...": "Show Saved Log...",
+	"Rerun Last Analysis": "Rerun Last Analysis",
+	"Hide/Show Overlay": "Hide/Show Overlay"
 }

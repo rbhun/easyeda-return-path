@@ -1,6 +1,6 @@
 // DC return-current overlay (D7) as temporary indicator markers: streamlines per net and the bottleneck.
 import type { DcNetResult, DcResult, Streamline } from '@returnpath/core';
-import { clearOverlay, markerKit, type Marker, type Rgba } from './overlay';
+import { drawGroups, markerKit, type MarkerGroup, type Rgba } from './overlay';
 
 export const DC_COLORS = {
 	supply: { r: 251, g: 191, b: 36, alpha: 1 },
@@ -9,9 +9,6 @@ export const DC_COLORS = {
 	returnOther: { r: 34, g: 211, b: 238, alpha: 1 },
 	bottleneck: { r: 229, g: 57, b: 53, alpha: 1 },
 } satisfies Record<string, Rgba | Rgba[]>;
-
-/** Cap per marker call; marker performance in the thousands is a D1 test item. */
-const MAX_PER_CALL = 4000;
 
 /** Whether any load reached the source through this net's copper. */
 export const carriesCurrent = (n: DcNetResult) => n.layers.some(l => l.flow > 0);
@@ -31,21 +28,11 @@ export async function drawDc(res: DcResult, streams: { supply: Streamline[]; ret
 	const lines = (ls: Streamline[], keep: (layer: number) => boolean) => ls.flatMap(l => l.segments.filter(s => keep(s.layer)).flatMap(s => segs(s.pts, false)));
 	const hops = streams.ret.flatMap(l => l.segments.slice(1).map(s => dot(s.pts[0], 0.35)));
 	const nets = [res.supply, res.ret].filter((n): n is DcNetResult => !!n && carriesCurrent(n));
-	const groups: { color: Rgba; markers: Marker[]; width: number }[] = [
+	const groups: MarkerGroup[] = [
 		{ color: DC_COLORS.supply, markers: lines(streams.supply, () => true), width: 1 },
 		{ color: DC_COLORS.return, markers: lines(streams.ret, l => l === top), width: 3 },
 		{ color: DC_COLORS.returnOther, markers: [...lines(streams.ret, l => l !== top), ...hops], width: 3 },
 		{ color: DC_COLORS.bottleneck, markers: nets.flatMap(n => n.bottleneck ? [dot(n.bottleneck.at, 1)] : []), width: 3 },
 	];
-
-	await clearOverlay();
-	let n = 0;
-	for (const grp of groups) {
-		for (let k = 0; k < grp.markers.length; k += MAX_PER_CALL) {
-			const markers = grp.markers.slice(k, k + MAX_PER_CALL);
-			if (await eda.dmt_EditorControl.generateIndicatorMarkers(markers, grp.color, grp.width, false))
-				n += markers.length;
-		}
-	}
-	return { markers: n };
+	return { markers: await drawGroups(groups) };
 }
