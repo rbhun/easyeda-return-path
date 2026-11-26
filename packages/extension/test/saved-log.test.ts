@@ -92,7 +92,7 @@ test('without the external-interaction permission nothing fails and the log stil
 	assert.ok(saved(mock).some(l => l.includes('Return path: finished')));
 	assert.equal(await runner.logFilePath(), null);
 	await ext.showSavedLog();
-	assert.match(mock.dialogs.at(-1)!.prompt, /External Interaction/);
+	assert.match(mock.dialogs.at(-1)!.prompt, /returnpath-log\.txt is not written: sys_FileSystem\.getEdaPath failed: external interaction is not allowed/);
 });
 
 test('a power net is turned away before the board is read', async () => {
@@ -151,7 +151,7 @@ test('log writes that never answer are switched off and the run still finishes',
 	assert.equal(mock.messages.length, 1, 'results dialog');
 	const panel = mock.logs.map(l => l.message);
 	assert.ok(panel.some(m => /saved log disabled: sys_Storage.setExtensionUserConfig did not answer/.test(m)), panel.join('\n'));
-	assert.ok(panel.some(m => /log file disabled: sys_FileSystem.getEdaPath did not answer/.test(m)));
+	assert.ok(panel.some(m => /log file not written: sys_FileSystem.getEdaPath did not answer/.test(m)));
 	assert.ok(panel.some(m => /Return path: finished/.test(m)));
 });
 

@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.37] - 2026-11-26
+
+Numbered above 0.1.36, main's version.
+
+From Balazs, on EasyEDA Pro desktop 2.2.32.4 for macOS with 0.1.33: the log said "run files not written: allow External Interaction" although External Interaction was allowed, and no `returnpath-log.txt` existed. The run folder and the log file both came from `sys_FileSystem.getEdaPath` (marked @beta in the API types). Any failure there, and a missing write API, ended in the same message about the permission, and the error itself was dropped.
+
+- **The real reason is logged and shown.** The log names which call is missing (`sys_FileSystem.saveFileToFileSystem` or `sys_FileSystem.getEdaPath`), says when `getEdaPath` returned an empty path or did not answer, or quotes its error. The permission is named only when the write API itself is missing. A failed write of the log file is logged with its error too. Show Saved Log and Run folder… show the same reason.
+- **Run folder as the fallback.** When `getEdaPath` fails, the run files and `returnpath-log.txt` go to the Run folder chosen in the panel. With no Run folder chosen, the first run of the session asks for one; the files of that run and the log are then written there. `getEdaPath` is asked once per session, so a call that hangs costs its 2 s limit once.
+
 ## [0.1.36] - 2026-11-26
 
 Numbered above 0.1.35, main's version. First pushed as 0.1.35; renumbered after #15 took 0.1.35 and merged.

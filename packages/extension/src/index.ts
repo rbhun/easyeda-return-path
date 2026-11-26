@@ -9,7 +9,7 @@ import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis, toggleOverlay } from './overlay';
 import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, report, shareLastRun, sharedLastRun } from './panel';
-import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFilePath, logStartup, readStored, recordResult, runFolder, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, writeStored } from './runner';
+import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
 
@@ -72,8 +72,21 @@ async function recorded(command: string, title: string, fn: () => Promise<void>)
 		await guarded(title, fn);
 	}
 	finally {
-		await endRun();
+		if (!await endRun())
+			await offerRunFolder();
 	}
+}
+
+let askedRunFolder: unknown;
+
+/** Once per session, when the documents folder is unknown and no Run folder is chosen, asks for one and writes the run there. */
+async function offerRunFolder(): Promise<void> {
+	const run = unwrittenRun();
+	if (!run?.askable || askedRunFolder === eda)
+		return;
+	askedRunFolder = eda;
+	if (await confirm(t('The run files (.log and .results.json) could not be written: ${1}.\n\nChoose a folder for them?', run.reason), t('Run folder'), t('Choose folder...')))
+		await setRunFolder();
 }
 
 /** The panel's Selected trace: the check that fits the selection, HF for a signal net and DC, without asking first, for a power rail. */
@@ -449,9 +462,12 @@ export async function showSavedLog(): Promise<void> {
 	await guarded(t('Saved log'), async () => {
 		const path = await logFilePath();
 		const all = savedLog();
+		const problem = logFileProblem();
 		const where = path
 			? t('The full log is also written to: ${1}', path)
-			: t('To have the log written to a file as well, allow "External Interaction" for this extension in Advanced > Extension Manager.');
+			: problem
+				? t('The log file ${1} is not written: ${2}', 'returnpath-log.txt', problem)
+				: t('To have the log written to a file as well, allow "External Interaction" for this extension in Advanced > Extension Manager.');
 		const body = [where, '', ...all.slice(-40)].join('\n');
 		if (await confirm(body, t('Saved log (last ${1} of ${2} lines)', String(Math.min(40, all.length)), String(all.length)), t('Save as file...')))
 			await saveLogAs();
@@ -477,10 +493,16 @@ export async function setRunFolder(): Promise<void> {
 		if (folder === undefined && current !== undefined)
 			return;
 		await storeRunFolder(folder?.trim() || undefined);
-		const dir = await runFolder();
-		log(`run folder: ${dir ?? 'none (no file access)'}`);
-		eda.sys_Dialog.showInformationMessage(dir
-			? t('Each analysis now writes its .log and .results.json to: ${1}', dir)
-			: t('Run files need file access: allow "External Interaction" for this extension in Advanced > Extension Manager (desktop client).'), title);
+		const status = await runFolderStatus();
+		log(`run folder: ${status.dir ?? `none (${status.reason})`}`);
+		const written = status.dir !== null ? await writeUnwrittenRun() : null;
+		const logPath = await logFilePath();
+		eda.sys_Dialog.showInformationMessage(status.dir !== null
+			? [
+					t('Each analysis now writes its .log and .results.json to: ${1}', status.dir),
+					...(written ? [t('The last run\'s files were written there too.')] : []),
+					...(logPath ? [t('The full log is also written to: ${1}', logPath)] : []),
+				].join('\n\n')
+			: t('Run files are not written: ${1}', status.reason), title);
 	});
 }

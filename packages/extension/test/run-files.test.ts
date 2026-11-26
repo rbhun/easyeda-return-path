@@ -38,7 +38,7 @@ function install(host: MockHost, answer: (d: DialogCall) => unknown = d => d.dfl
 
 /** The run files written to `dir`, as [log text, parsed results] per run. */
 function runs(files: Map<string, string>, dir: string) {
-	const names = [...files.keys()].filter(k => k.startsWith(dir)).map(k => k.slice(dir.length + 1)).sort();
+	const names = [...files.keys()].filter(k => k.startsWith(dir)).map(k => k.slice(dir.length + 1)).filter(n => n !== 'returnpath-log.txt').sort();
 	for (const n of names) assert.match(n, RUN);
 	const bases = [...new Set(names.map(n => n.replace(/\.(log|results\.json)$/, '')))];
 	return bases.map((b) => {
@@ -128,4 +128,76 @@ test('without file access the run is logged as not written and nothing fails', a
 	assert.equal(mock.files.size, 0);
 	assert.ok(runner.savedLog().some(l => /run files not written/.test(l)));
 	assert.equal(mock.messages.filter(m => /Error/.test(m)).length, 0);
+});
+
+const CHOSEN = '/Users/me/ReturnPathRuns';
+const never = () => new Promise<never>(() => {});
+type Fs = Record<string, unknown>;
+
+test('when the run files cannot be written, the log names the API that is missing or the error, not the permission', async () => {
+	const cases: [string, (fs: Fs) => void, RegExp][] = [
+		['no getEdaPath', fs => delete fs.getEdaPath, /run files not written: sys_FileSystem\.getEdaPath is not available in this EasyEDA version; choose a Run folder/],
+		['empty path', fs => (fs.getEdaPath = async () => ''), /run files not written: sys_FileSystem\.getEdaPath returned an empty path; choose a Run folder/],
+		['throws', fs => (fs.getEdaPath = async () => {
+			throw new Error('getEdaPath is not supported on this platform');
+		}), /run files not written: sys_FileSystem\.getEdaPath failed: getEdaPath is not supported on this platform; choose a Run folder/],
+		['never answers', fs => (fs.getEdaPath = never), /run files not written: sys_FileSystem\.getEdaPath did not answer within \d+ s; choose a Run folder/],
+		['no saveFileToFileSystem', fs => delete fs.saveFileToFileSystem, /run files not written: sys_FileSystem\.saveFileToFileSystem is not available \(allow "External Interaction"/],
+	];
+	for (const [name, change, expected] of cases) {
+		const mock = install({ fileSystem: 'allowed' }, () => false);
+		change(mock.eda.sys_FileSystem as Fs);
+		await ext.showReturnPath();
+		const lines = runner.savedLog();
+		assert.ok(lines.some(l => expected.test(l)), `${name}:\n${lines.filter(l => /not written/.test(l)).join('\n')}`);
+		if (name !== 'no saveFileToFileSystem')
+			assert.ok(!lines.some(l => /run files not written: allow/.test(l)), name);
+		assert.equal(mock.files.size, 0, name);
+		assert.equal(mock.dialogs.filter(d => /could not be written/.test(d.prompt)).length, name === 'no saveFileToFileSystem' ? 0 : 1, name);
+	}
+});
+
+test('when getEdaPath fails, the run files and the log file go to the chosen Run folder', async () => {
+	const storage = new Map<string, unknown>([['runFolder', CHOSEN]]);
+	const mock = install({ fileSystem: 'allowed', storage }, d => (d.kind === 'confirm' ? false : d.dflt));
+	delete (mock.eda.sys_FileSystem as Fs).getEdaPath;
+	await ext.showReturnPath();
+	assert.equal(runs(mock.files, CHOSEN).length, 1);
+	assert.match(mock.files.get(`${CHOSEN}/returnpath-log.txt`) ?? '', /Return path: finished.*\n(.*\n)*.*run files written: /);
+	assert.ok(runner.savedLog().some(l => /log file goes to the Run folder: sys_FileSystem\.getEdaPath is not available/.test(l)));
+	assert.equal(await runner.logFilePath(), `${CHOSEN}/returnpath-log.txt`);
+	assert.equal(mock.dialogs.filter(d => /could not be written/.test(d.prompt)).length, 0, 'not asked when a folder is chosen');
+});
+
+test('when getEdaPath fails and no Run folder is chosen, one question per session; the chosen folder gets that run and the log', async () => {
+	const mock = install({ fileSystem: 'allowed' }, (d) => {
+		if (d.kind === 'confirm')
+			return /could not be written/.test(d.prompt);
+		return d.kind === 'input' ? CHOSEN : d.dflt;
+	});
+	(mock.eda.sys_FileSystem as Fs).getEdaPath = async () => {
+		throw new Error('boom');
+	};
+	await ext.showReturnPath();
+	const asked = mock.dialogs.filter(d => /could not be written/.test(d.prompt));
+	assert.equal(asked.length, 1);
+	assert.match(asked[0].prompt, /sys_FileSystem\.getEdaPath failed: boom/);
+	const [run] = runs(mock.files, CHOSEN);
+	assert.equal(run.results.command, 'HF check');
+	assert.match(mock.messages.at(-1)!, /last run's files were written there too/);
+	assert.match(mock.files.get(`${CHOSEN}/returnpath-log.txt`) ?? '', /run files written: /);
+
+	await ext.showReturnPath();
+	assert.equal(runs(mock.files, CHOSEN).length, 2);
+	assert.equal(mock.dialogs.filter(d => /could not be written/.test(d.prompt)).length, 1);
+});
+
+test('declining the question leaves the reason in Show Saved Log and does not ask again', async () => {
+	const mock = install({ fileSystem: 'allowed' }, d => (d.kind === 'confirm' ? false : d.dflt));
+	(mock.eda.sys_FileSystem as Fs).getEdaPath = async () => '';
+	await ext.showReturnPath();
+	await ext.showReturnPath();
+	assert.equal(mock.dialogs.filter(d => /could not be written/.test(d.prompt)).length, 1);
+	await ext.showSavedLog();
+	assert.match(mock.dialogs.at(-1)!.prompt, /returnpath-log\.txt is not written: sys_FileSystem\.getEdaPath returned an empty path; choose a Run folder/);
 });

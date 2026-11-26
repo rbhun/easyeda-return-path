@@ -83,6 +83,8 @@ function buffer(): string[] {
 		owner = eda;
 		lines = undefined;
 		logPath = undefined;
+		logProblem = undefined;
+		unwritten = undefined;
 		storageOff = false;
 	}
 	if (!lines) {
@@ -124,24 +126,69 @@ export function log(message: string, level: LogLevel = 'info'): void {
 		(level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(line);
 }
 
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const NO_SAVE = 'sys_FileSystem.saveFileToFileSystem is not available (allow "External Interaction" for this extension in Advanced > Extension Manager; desktop client only)';
+
+/** Why files cannot be written at all, or undefined when the write API is there. */
+function noFileApi(): string | undefined {
+	return api().sys_FileSystem?.saveFileToFileSystem ? undefined : NO_SAVE;
+}
+
+type Folder = { dir: string; reason?: undefined } | { dir: null; reason: string };
+
+let edaPathOwner: unknown;
+let edaPath: Promise<Folder> | undefined;
+
+/** The EasyEDA documents folder from sys_FileSystem.getEdaPath (@beta), or why it is not known; asked once per session. */
+function edaFolder(): Promise<Folder> {
+	if (edaPathOwner !== eda || !edaPath) {
+		edaPathOwner = eda;
+		edaPath = (async (): Promise<Folder> => {
+			const fs = api().sys_FileSystem;
+			if (!fs?.getEdaPath)
+				return { dir: null, reason: 'sys_FileSystem.getEdaPath is not available in this EasyEDA version' };
+			try {
+				const base = await withTimeout(fs.getEdaPath(), saveTimeouts.ms, 'sys_FileSystem.getEdaPath');
+				if (typeof base !== 'string' || !base.trim())
+					return { dir: null, reason: `sys_FileSystem.getEdaPath returned ${typeof base === 'string' ? 'an empty path' : String(base)}` };
+				return { dir: base.trim().replace(/[/\\]+$/, '') };
+			}
+			catch (e) {
+				return { dir: null, reason: e instanceof TimedOut ? e.message : `sys_FileSystem.getEdaPath failed: ${message(e)}` };
+			}
+		})();
+	}
+	return edaPath;
+}
+
+const sepOf = (dir: string) => (dir.includes('\\') && !dir.includes('/') ? '\\' : '/');
+
+/** Why the log file is not written, when it is not. */
+let logProblem: string | undefined;
+
 async function resolveLogPath(): Promise<string | null> {
-	const fs = api().sys_FileSystem;
-	if (!fs?.getEdaPath || !fs.saveFileToFileSystem)
+	logProblem = noFileApi();
+	if (logProblem) {
+		log(`log file not written: ${logProblem}`, 'warn');
 		return null;
-	try {
-		const base = await withTimeout(fs.getEdaPath(), saveTimeouts.ms, 'sys_FileSystem.getEdaPath');
-		if (!base)
+	}
+	const docs = await edaFolder();
+	let dir: string;
+	if (docs.dir !== null) {
+		dir = `${docs.dir}${sepOf(docs.dir)}ReturnPath`;
+	}
+	else {
+		const chosen = chosenRunFolder();
+		if (!chosen) {
+			logProblem = `${docs.reason}; choose a Run folder in the panel to have the log written there`;
+			log(`log file not written: ${logProblem}`, 'warn');
 			return null;
-		const sep = base.includes('\\') ? '\\' : '/';
-		const dir = `${base}${sep}ReturnPath`;
-		await withTimeout(fs.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem');
-		return `${dir}${sep}${LOG_FILE}`;
+		}
+		dir = chosen.replace(/[/\\]+$/, '');
+		log(`log file goes to the Run folder: ${docs.reason}`, 'warn');
 	}
-	catch (e) {
-		if (e instanceof TimedOut)
-			log(`log file disabled: ${e.message}`, 'warn');
-		return null;
-	}
+	await withTimeout(api().sys_FileSystem!.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
+	return `${dir}${sepOf(dir)}${LOG_FILE}`;
 }
 
 async function persist(): Promise<void> {
@@ -167,12 +214,12 @@ async function persist(): Promise<void> {
 		try {
 			const ok = await withTimeout(api().sys_FileSystem!.saveFileToFileSystem!(logPath, new Blob([`${snapshot.join('\n')}\n`], { type: 'text/plain' })), saveTimeouts.ms, 'sys_FileSystem.saveFileToFileSystem');
 			if (!ok)
-				logPath = null;
+				throw new Error('sys_FileSystem.saveFileToFileSystem returned false');
 		}
 		catch (e) {
+			logProblem = `writing ${logPath} failed: ${message(e)}`;
 			logPath = null;
-			if (e instanceof TimedOut)
-				log(`log file disabled: ${e.message}`, 'warn');
+			log(`log file disabled: ${logProblem}`, 'warn');
 		}
 	}
 }
@@ -205,6 +252,11 @@ export function checkpoint(): Promise<void> {
 export async function logFilePath(): Promise<string | null> {
 	await checkpoint();
 	return logPath ?? null;
+}
+
+/** Why the log file is not written (after logFilePath() returned null). */
+export function logFileProblem(): string | undefined {
+	return logPath ? undefined : logProblem;
 }
 
 export function savedLog(): string[] {
@@ -277,27 +329,81 @@ export function chosenRunFolder(): string | undefined {
 
 export async function setRunFolder(folder: string | undefined): Promise<void> {
 	await writeStored(RUN_FOLDER_KEY, folder ?? '');
+	// A log file that had nowhere to go may have a place now.
+	if (!logPath)
+		logPath = undefined;
 }
 
-/** The chosen run folder, else `ReturnPath/runs` in the EasyEDA documents folder; null without file access. */
-export async function runFolder(): Promise<string | null> {
-	const fs = api().sys_FileSystem;
-	if (!fs?.saveFileToFileSystem)
-		return null;
+export type RunFolder = Folder & { /** Choosing a Run folder would fix it (the write API is there). */ askable?: boolean };
+
+/** The chosen run folder, else `ReturnPath/runs` in the EasyEDA documents folder; otherwise why there is none. */
+export async function runFolderStatus(): Promise<RunFolder> {
+	const missing = noFileApi();
+	if (missing)
+		return { dir: null, reason: missing, askable: false };
 	const chosen = chosenRunFolder();
 	if (chosen)
-		return chosen.replace(/[/\\]+$/, '');
-	if (!fs.getEdaPath)
+		return { dir: chosen.replace(/[/\\]+$/, '') };
+	const docs = await edaFolder();
+	if (docs.dir === null)
+		return { dir: null, reason: docs.reason, askable: true };
+	const sep = sepOf(docs.dir);
+	return { dir: `${docs.dir}${sep}ReturnPath${sep}runs` };
+}
+
+export async function runFolder(): Promise<string | null> {
+	return (await runFolderStatus()).dir;
+}
+
+interface UnwrittenRun {
+	base: string;
+	log: string;
+	results: string;
+	reason: string;
+	askable: boolean;
+}
+
+/** The last run whose files had no folder; written by writeUnwrittenRun() once a Run folder is chosen. */
+let unwritten: UnwrittenRun | undefined;
+
+export function unwrittenRun(): Readonly<UnwrittenRun> | undefined {
+	return unwritten && { ...unwritten };
+}
+
+async function writeRunFiles(dir: string, base: string, logText: string, resultsText: string): Promise<string> {
+	const fs = api().sys_FileSystem!;
+	const sep = sepOf(dir);
+	await withTimeout(fs.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
+	const write = async (name: string, text: string, type: string) => {
+		const ok = await withTimeout(fs.saveFileToFileSystem!(`${dir}${sep}${name}`, new Blob([text], { type })), saveTimeouts.ms, 'sys_FileSystem.saveFileToFileSystem');
+		if (!ok)
+			throw new Error(`could not write ${dir}${sep}${name}`);
+	};
+	await write(`${base}.log`, logText, 'text/plain');
+	await write(`${base}.results.json`, resultsText, 'application/json');
+	log(`run files written: ${dir}${sep}${base}.log, .results.json`);
+	return `${dir}${sep}${base}.results.json`;
+}
+
+/** Writes the files of the last run that had no folder, now that there may be one; returns the results path. */
+export async function writeUnwrittenRun(): Promise<string | null> {
+	const run = unwritten;
+	if (!run)
+		return null;
+	const folder = await runFolderStatus();
+	if (folder.dir === null)
 		return null;
 	try {
-		const base = await withTimeout(fs.getEdaPath(), saveTimeouts.ms, 'sys_FileSystem.getEdaPath');
-		if (!base)
-			return null;
-		const sep = base.includes('\\') ? '\\' : '/';
-		return `${base}${sep}ReturnPath${sep}runs`;
+		const path = await writeRunFiles(folder.dir, run.base, run.log, run.results);
+		unwritten = undefined;
+		return path;
 	}
-	catch {
+	catch (e) {
+		log(`run files not written to ${folder.dir}: ${message(e)}`, 'warn');
 		return null;
+	}
+	finally {
+		await checkpoint();
 	}
 }
 
@@ -324,28 +430,23 @@ export async function endRun(): Promise<string | null> {
 		...(run.error ? { error: run.error } : {}),
 		...run.data,
 	};
-	const dir = await runFolder();
-	if (!dir) {
-		log(`run files not written: allow "External Interaction" for this extension (desktop client) to get them`, 'warn');
-		return null;
-	}
-	const fs = api().sys_FileSystem!;
-	const sep = dir.includes('\\') && !dir.includes('/') ? '\\' : '/';
+	const logText = `${run.lines.join('\n')}\n`;
+	const resultsText = `${JSON.stringify(results, null, 2)}\n`;
 	try {
-		await withTimeout(fs.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
-		const write = async (name: string, text: string, type: string) => {
-			const ok = await withTimeout(fs.saveFileToFileSystem!(`${dir}${sep}${name}`, new Blob([text], { type })), saveTimeouts.ms, 'sys_FileSystem.saveFileToFileSystem');
-			if (!ok)
-				throw new Error(`could not write ${dir}${sep}${name}`);
-		};
-		await write(`${run.base}.log`, `${run.lines.join('\n')}\n`, 'text/plain');
-		await write(`${run.base}.results.json`, `${JSON.stringify(results, null, 2)}\n`, 'application/json');
-		log(`run files written: ${dir}${sep}${run.base}.log, .results.json`);
-		return `${dir}${sep}${run.base}.results.json`;
-	}
-	catch (e) {
-		log(`run files not written to ${dir}: ${e instanceof Error ? e.message : String(e)}`, 'warn');
-		return null;
+		const folder = await runFolderStatus();
+		if (folder.dir === null) {
+			const askable = !!folder.askable;
+			log(`run files not written: ${folder.reason}${askable ? '; choose a Run folder in the panel to have them written there' : ''}`, 'warn');
+			unwritten = { base: run.base, log: logText, results: resultsText, reason: folder.reason, askable };
+			return null;
+		}
+		try {
+			return await writeRunFiles(folder.dir, run.base, logText, resultsText);
+		}
+		catch (e) {
+			log(`run files not written to ${folder.dir}: ${message(e)}`, 'warn');
+			return null;
+		}
 	}
 	finally {
 		await checkpoint();
