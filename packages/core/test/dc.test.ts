@@ -273,6 +273,13 @@ test('drawn streamlines: one per load, later ones end where they meet an earlier
   const away = { x: off.x - second[0].x, y: off.y - second[0].y };
   const angle = (Math.acos((along.x * away.x + along.y * away.y) / Math.hypot(along.x, along.y) / Math.hypot(away.x, away.y)) * 180) / Math.PI;
   assert.ok(angle < 30, `joins at ${angle.toFixed(0)}° to the first`);
+  // The joining line bends; it has no copper corner to turn around (the first turns at the neck's).
+  const turns = second.slice(2).map((c, i) => {
+    const [a, m] = [second[i], second[i + 1]];
+    const t = Math.atan2(c.y - m.y, c.x - m.x) - Math.atan2(m.y - a.y, m.x - a.x);
+    return Math.abs(Math.atan2(Math.sin(t), Math.cos(t))) * (180 / Math.PI);
+  });
+  assert.ok(Math.max(...turns) < 25, `sharpest turn ${Math.max(...turns).toFixed(0)}°`);
 });
 
 test('focusInput: one part of the rail, with its own current when one was given', () => {

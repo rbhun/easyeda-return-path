@@ -33,8 +33,14 @@ export interface StreamOptions {
 const MERGE_MM = 0.6;
 /** Radius around a via, mm, on which the flow past it is measured. */
 const VIA_RING_MM = 1;
+/** Length, mm, over which drawn streamlines are smoothed (the Gaussian's sigma; at least one cell). */
+const SMOOTH_MM = 0.35;
+/** How far, mm, the drawn line may stray from the smoothed curve when its points are thinned. */
+const SMOOTH_TOL_MM = 0.03;
 /** A joining streamline meets the earlier one this far, mm, past the point it came close to. */
 const JOIN_MM = 1;
+/** And at least this many times as far as the earlier line lies aside, so the curve onto it stays shallow. */
+const JOIN_SLOPE = 2.5;
 
 interface Mark {
   pt: Pt;
@@ -225,7 +231,7 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
     }
     const segs = segments
       .filter((s) => s.pts.length > 1)
-      .map((s) => ({ layer: s.layer, pts: opts.smooth ? simplifyLine(chaikin(s.pts, 3), g.cell * 0.3) : simplifyLine(s.pts, g.cell * 0.25) }));
+      .map((s) => ({ layer: s.layer, pts: opts.smooth ? simplifyLine(smoothOnCopper(s.pts, byLayer.get(s.layer)!), SMOOTH_TOL_MM) : simplifyLine(s.pts, g.cell * 0.25) }));
     // Later streamlines join the drawn (smoothed) pieces, so a join lands on the line as drawn.
     if (opts.merge)
       for (const sg of segs) {
@@ -248,24 +254,69 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   }
 
   /**
+   * Gaussian smoothing over a fixed length along the line, so turns read as bends rather than grid
+   * corners; the ends (pads, vias, joins) stay put, and a point the smoothing would move off the
+   * layer's copper moves only as far as the copper allows.
+   */
+  function smoothOnCopper(pts: Path, f: (typeof r.layers)[number]): Path {
+    const step = Math.min(g.cell, SMOOTH_MM) / 2;
+    const rs: Path = [pts[0]];
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1];
+      const b = pts[k];
+      const n = Math.max(1, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / step));
+      for (let m = 1; m <= n; m++) rs.push({ x: a.x + ((b.x - a.x) * m) / n, y: a.y + ((b.y - a.y) * m) / n });
+    }
+    if (rs.length < 3) return rs;
+    const sigma = Math.max(SMOOTH_MM, g.cell);
+    const half = Math.ceil((2.5 * sigma) / step);
+    const w = Array.from({ length: half + 1 }, (_, k) => Math.exp(-0.5 * ((k * step) / sigma) ** 2));
+    const onCopper = (q: Pt) => {
+      const [i, j] = cellOf(g, q);
+      return inGrid(g, i, j) && f.weight[j * g.nx + i] > 0;
+    };
+    return rs.map((p, i) => {
+      // A window that shrinks towards the ends keeps them in place without pulling the line aside.
+      const h = Math.min(half, i, rs.length - 1 - i);
+      if (!h) return p;
+      let sx = 0;
+      let sy = 0;
+      let sw = 0;
+      for (let k = -h; k <= h; k++) {
+        sx += w[Math.abs(k)] * rs[i + k].x;
+        sy += w[Math.abs(k)] * rs[i + k].y;
+        sw += w[Math.abs(k)];
+      }
+      for (const a of [1, 0.75, 0.5, 0.25]) {
+        const q = { x: p.x + (sx / sw - p.x) * a, y: p.y + (sy / sw - p.y) * a };
+        if (onCopper(q)) return q;
+      }
+      return p;
+    });
+  }
+
+  /**
    * A curve from p, heading the way the streamline was going, onto an earlier drawn piece: it meets
    * the piece a little downstream of the point it came close to, along the piece's direction, so the
    * two read as one line (a tangent merge instead of a corner).
    */
   function join(pts: Path, p: Pt, hit: Mark): Path {
     const { piece } = hit;
-    // Walk down the earlier piece from the point it came close to.
+    // Walk down the earlier piece from the point it came close to, until a point far enough from p
+    // that the curve onto it stays shallow: well ahead of how far aside the earlier line lies (the
+    // close point itself may lie behind p).
+    const want = Math.max(JOIN_MM, 3 * g.cell, JOIN_SLOPE * Math.hypot(hit.pt.x - p.x, hit.pt.y - p.y));
     let at = hit.pt;
     let i = hit.idx + 1;
-    let left = Math.max(JOIN_MM, 3 * g.cell);
-    while (i < piece.length) {
+    const fine = g.cell / 4;
+    walk: while (i < piece.length) {
       const d = Math.hypot(piece[i].x - at.x, piece[i].y - at.y);
-      if (d >= left) {
-        at = { x: at.x + ((piece[i].x - at.x) * left) / d, y: at.y + ((piece[i].y - at.y) * left) / d };
-        break;
+      const n = Math.max(1, Math.ceil(d / fine));
+      const from = at;
+      for (let m = 1; m <= n; m++) {
+        at = { x: from.x + ((piece[i].x - from.x) * m) / n, y: from.y + ((piece[i].y - from.y) * m) / n };
+        if (Math.hypot(at.x - p.x, at.y - p.y) >= want) break walk;
       }
-      left -= d;
-      at = piece[i];
       i++;
     }
     const prev = pts.length > 1 ? pts[pts.length - 2] : undefined;
