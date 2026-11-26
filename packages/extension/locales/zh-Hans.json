@@ -89,5 +89,6 @@
 	"guess": "推测",
 	"other signal": "其他信号",
 	"source ${1}": "源 ${1}",
-	"source to confirm": "待确认的源"
+	"source to confirm": "待确认的源",
+	"Removed the overlay left on the board by an earlier session. Rerun last draws it again.": "已移除之前会话留在电路板上的叠加层。“重新运行”可再次绘制。"
 }

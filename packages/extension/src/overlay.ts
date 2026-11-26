@@ -1,7 +1,9 @@
 // Draws an analysis as temporary indicator markers: nothing is stored in the document or the
 // undo history (design decision D6). Markers have no fill, so regions are drawn as outlines.
 import { dist, lerp, type Analysis, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
+import extensionConfig from '../extension.json' with { type: 'json' };
 import { MIL } from './eda-board';
+import { readStored, writeStored } from './runner';
 import { roleColour, type Role } from './style';
 
 export type { Rgba } from './style';
@@ -30,6 +32,21 @@ const MAX_PER_CALL = 4000;
 /** The overlay last drawn, kept so it can be hidden and shown again without a new analysis. */
 let shown: { groups: MarkerGroup[]; visible: boolean } | undefined;
 
+/**
+ * Stored while markers are on the canvas, as the version that drew them. Markers outlive the
+ * instance that drew them (an update or a reload of the extension), and the API cannot list them.
+ */
+const ON_CANVAS = 'overlayOnCanvas';
+const markOnCanvas = (on: boolean) => writeStored(ON_CANVAS, on ? extensionConfig.version : false);
+
+/** The version that drew markers still on the canvas, when this instance holds no overlay of its own. */
+export function leftoverOverlay(): string | undefined {
+	if (shown)
+		return undefined;
+	const v = readStored(ON_CANVAS);
+	return typeof v === 'string' && v ? v : undefined;
+}
+
 async function paint(groups: MarkerGroup[]): Promise<number> {
 	await eda.dmt_EditorControl.removeIndicatorMarkers();
 	let n = 0;
@@ -43,6 +60,7 @@ async function paint(groups: MarkerGroup[]): Promise<number> {
 				n += markers.length;
 		}
 	}
+	await markOnCanvas(n > 0);
 	return n;
 }
 
@@ -67,9 +85,11 @@ export function forgetOverlay(): void {
 	shown = undefined;
 }
 
+/** Removes every marker on the canvas, including ones an earlier instance or version drew. */
 export async function clearOverlay(): Promise<void> {
 	shown = undefined;
 	await eda.dmt_EditorControl.removeIndicatorMarkers();
+	await markOnCanvas(false);
 }
 
 /** Draws the current overlay again with the current style; false when there is none or it is hidden. */
@@ -89,8 +109,10 @@ export function overlayState(): 'none' | 'shown' | 'hidden' {
 export async function toggleOverlay(): Promise<boolean | undefined> {
 	if (!shown)
 		return undefined;
-	if (shown.visible)
+	if (shown.visible) {
 		await eda.dmt_EditorControl.removeIndicatorMarkers();
+		await markOnCanvas(false);
+	}
 	else
 		await paint(shown.groups);
 	shown.visible = !shown.visible;

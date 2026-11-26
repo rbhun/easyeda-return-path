@@ -88,5 +88,6 @@
 	"Speed": "Speed",
 	"Speed of ${1}, for example 400k, 12 MHz or 115200.": "Speed of ${1}, for example 400k, 12 MHz or 115200.",
 	"Speed of ${1}: the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.": "Speed of ${1}: the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.",
-	"other signal": "other signal"
+	"other signal": "other signal",
+	"Removed the overlay left on the board by an earlier session. Rerun last draws it again.": "Removed the overlay left on the board by an earlier session. Rerun last draws it again."
 }

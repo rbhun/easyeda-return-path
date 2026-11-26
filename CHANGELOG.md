@@ -2,6 +2,18 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.41] - 2026-11-26
+
+Numbered above 0.1.40, which #20 took.
+
+From Balazs: after an update, an overlay already on the board is not picked up and cannot be cleared.
+
+Markers stay on the canvas when the extension is updated or reloaded, but the new instance starts with no overlay, and the EasyEDA API cannot list markers. So the panel said "Overlay: none" and disabled Clear and Hide.
+
+- **Clear is always available** (except while a run is going). It removes every Return Path marker on the board, including ones an earlier version drew.
+- **Leftover overlays are recognised:** while markers are on the canvas, the version that drew them is kept in the extension's settings. After an update or reload, the panel shows "Overlay: left by v0.1.x", and **Hide** or **Clear** removes those markers. **Rerun last** draws the overlay again. Versions before 0.1.41 did not record this, so markers they left are removed with Clear only.
+- **Clear no longer depends on the instance that drew the overlay.** The instance owning the panel removes the markers itself. Before, Clear was handed to the drawing instance, and nothing happened when that instance was gone.
+
 ## [0.1.40] - 2026-11-26
 
 Numbered above 0.1.39, main's version. First pushed as 0.1.39; renumbered after #19 took 0.1.39 and merged.

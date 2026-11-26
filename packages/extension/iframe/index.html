@@ -117,7 +117,7 @@
 		<h2>Overlay</h2>
 		<div class="row">
 			<button id="toggle">Hide</button>
-			<button id="clear">Clear</button>
+			<button id="clear" title="Removes every Return Path marker on the board, also ones left by an earlier session or version">Clear</button>
 		</div>
 
 		<h2>Result</h2>
@@ -157,13 +157,14 @@
 					if (stale(s)) setTimeout(function () { send({ cmd: 'adopt', snapshot: newest }); }, 0);
 					$('version').textContent = 'v' + s.version;
 					$('state').innerHTML = s.busy ? 'Running: <b></b>' : 'Overlay: <b></b>';
-					$('state').querySelector('b').textContent = s.busy || { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay];
+					$('state').querySelector('b').textContent = s.busy || (s.leftover ? 'left by v' + s.leftover : { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay]);
 					['hf', 'dc', 'rerun', 'toggle', 'clear'].forEach(function (id) { $(id).disabled = !!s.busy; });
 					$('trace').textContent = s.busy ? 'Cancel' : 'Selected trace';
 					$('rerun').disabled = !!s.busy || !s.lastRun;
 					$('toggle').disabled = !!s.busy || s.overlay === 'none';
 					$('toggle').textContent = s.overlay === 'hidden' ? 'Show' : 'Hide';
-					$('clear').disabled = !!s.busy || s.overlay === 'none';
+					// Markers drawn before an update are not always known here, so Clear stays available.
+					$('clear').disabled = !!s.busy;
 					$('lastRun').textContent = s.lastRun ? 'Last: ' + s.lastRun : '';
 
 					var pre = $('result');

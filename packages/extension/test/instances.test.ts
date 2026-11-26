@@ -30,8 +30,7 @@ const bundle = (await esbuild.build({ ...common, absWorkingDir: fileURLToPath(ne
 type Ext = Record<string, (...a: unknown[]) => Promise<void> | void>;
 
 /** One extension instance: own module state and own stored settings, shared editor and message bus. */
-function instance(eda: Record<string, unknown>): Ext {
-	const storage = new Map<string, unknown>();
+function instance(eda: Record<string, unknown>, storage = new Map<string, unknown>()): Ext {
 	const own = { ...eda, sys_Storage: { getExtensionUserConfig: (k: string) => storage.get(k), setExtensionUserConfig: async (k: string, v: unknown) => (storage.set(k, structuredClone(v)), true) } };
 	const ctx = vm.createContext({ eda: own, console, setTimeout, clearTimeout, structuredClone, Blob, TextEncoder, TextDecoder });
 	return vm.runInContext(`${bundle};edaEsbuildExportName`, ctx) as Ext;
@@ -179,4 +178,50 @@ test('Open Panel in a new instance while the page of a gone instance is still op
 	assert.equal(mock.markers.length, 0, 'Clear reaches the new owner, which took over the drawing');
 	assert.match(p.states.at(-1).result.lines[0], /^3V3 \/ GND/);
 	p.close();
+});
+
+test('after an update, markers the old version left on the board are known: the panel names them, and Clear or Hide removes them', async () => {
+	const { version } = (await import('../extension.json', { with: { type: 'json' } })).default;
+	const storage = new Map<string, unknown>();
+	const before = createMockEda(dcBoard(), '3V3');
+	await instance(before.eda, storage).showDcReturn();
+	assert.ok(before.markers.length > 0);
+	assert.equal(storage.get('overlayOnCanvas'), version, 'the drawing version is stored while markers are on the canvas');
+
+	for (const cmd of ['clear', 'toggle'] as const) {
+		// The updated extension: new instance and message bus, the same settings and the same canvas.
+		const after = createMockEda(dcBoard(), '3V3');
+		after.markers.push(...before.markers);
+		storage.set('overlayOnCanvas', version);
+		const updated = instance(after.eda, storage);
+		await updated.showPanel();
+		const p = page(after.eda);
+		await settle(() => p.states.length > 0);
+		assert.equal(p.states.at(-1).overlay, 'shown', `${cmd}: the leftover overlay shows in the panel`);
+		assert.equal(p.states.at(-1).leftover, version);
+		assert.ok(after.logs.some(l => /markers drawn by v[\d.]+ may still be on the canvas/.test(l.message)));
+		after.panelSend({ cmd });
+		await settle(() => p.states.at(-1).overlay === 'none');
+		assert.equal(after.markers.length, 0, `${cmd} removes them`);
+		assert.equal(storage.get('overlayOnCanvas'), false);
+		if (cmd === 'toggle')
+			assert.match(after.toasts.at(-1)!, /Removed the overlay left on the board by an earlier session/);
+		p.close();
+	}
+});
+
+test('Clear works when the instance that drew the overlay is gone without handing it over', async () => {
+	const mock = createMockEda(dcBoard(), '3V3');
+	const owner = instance(mock.eda);
+	await owner.showPanel();
+	mock.panelSend({ cmd: 'hello' });
+	const drawer = shortLived(mock.eda);
+	await drawer.ext.showDcReturn();
+	assert.ok(mock.markers.length > 0);
+	drawer.end();
+	const states = () => mock.published.filter(p => p.topic === 'returnpath.panel.state').map(p => p.message);
+	mock.panelSend({ cmd: 'clear' });
+	await settle(() => mock.markers.length === 0 && states().at(-1).overlay === 'none');
+	assert.equal(mock.markers.length, 0, 'the panel owner removes the markers itself');
+	assert.equal(states().at(-1).overlay, 'none');
 });

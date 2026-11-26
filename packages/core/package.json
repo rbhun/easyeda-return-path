@@ -1,6 +1,6 @@
 {
   "name": "@returnpath/core",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "description": "Return-path geometry core: reference copper, coverage, detours and via returns. No I/O, no Node or DOM APIs.",
   "private": true,
   "type": "module",
