@@ -31,6 +31,8 @@ export interface StreamOptions {
 
 /** Streamlines closer than this, mm, merge when drawn. */
 const MERGE_MM = 0.6;
+/** Radius around a via, mm, on which the flow past it is measured. */
+const VIA_RING_MM = 1;
 
 /** For drawing: one streamline per load, merged where paths meet and smoothed; several per load crowd the view. */
 export const DRAWN_STREAMS: Partial<StreamOptions> = { perLoad: 1, merge: true, smooth: true };
@@ -85,6 +87,8 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   const out: Streamline[] = [];
   /** Streamlines closer than this (cells) are drawn as one. */
   const reach = Math.max(2, Math.ceil(MERGE_MM / g.cell));
+  /** Ring around a via, cells, on which the flow past it is measured. */
+  const ring = Math.min(8, Math.max(2, Math.round(VIA_RING_MM / g.cell)));
   /** Per layer: a point of an earlier streamline in each cell it passed. */
   const taken = new Map<number, Map<number, Pt>>();
   const meets = (layer: number, c: number): Pt | undefined => {
@@ -155,14 +159,28 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
           best = l;
           bestFlow = d * dir;
         }
-        if (best !== layer && bestFlow > 0.3 * via.current) {
+        // One drawn line stands for the whole flow, so it changes layer only where the barrel takes
+        // more current than flows on past the via on this layer. A stitching via that hands over a
+        // small part of a flow both layers carry is passed on the same layer.
+        const hop = best !== layer && bestFlow > 0.3 * via.current && bestFlow > around(f, c).out;
+        if (hop) {
           segments[segments.length - 1].pts.push(via.at);
           layer = best;
           f = byLayer.get(layer)!;
+          segments.push({ layer, pts: [via.at] });
           p = via.at;
-          segments.push({ layer, pts: [p] });
-          continue;
         }
+        // Near a via the field is dominated by the barrel's own radial flow, whose direction at the
+        // centre is noise; leave where the current leaves the ring around the via (for a via feeding
+        // a nearby sink, that is towards the sink).
+        const q = leave(f, c, via.at);
+        if (q) {
+          p = q;
+          segments[segments.length - 1].pts.push(p);
+          stall = 0;
+          lastCell = -1;
+        }
+        continue;
       }
       stall = c === lastCell ? stall + 1 : 0;
       lastCell = c;
@@ -218,6 +236,61 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       for (const s of segs) s.pts.reverse();
     }
     return { load, segments: segs, complete };
+  }
+
+  /**
+   * Current through a ring around cell c on one layer, A, in the walking direction: what leaves the
+   * ring outwards (`out`) and the direction it mostly leaves in.
+   */
+  function around(f: DcLayerField, c: number): { out: number; x: number; y: number } {
+    const ci = c % g.nx;
+    const cj = (c - ci) / g.nx;
+    const cells: { k: number; ux: number; uy: number }[] = [];
+    for (let dj = -ring; dj <= ring; dj++)
+      for (let di = -ring; di <= ring; di++) {
+        const d = Math.hypot(di, dj);
+        if (d >= ring - 0.5 && d < ring + 0.5) cells.push({ k: inGrid(g, ci + di, cj + dj) ? (cj + dj) * g.nx + ci + di : -1, ux: di / d, uy: dj / d });
+      }
+    const arc = (2 * Math.PI * ring * g.cell) / cells.length;
+    let out = 0;
+    const flux: number[] = [];
+    for (const { k, ux, uy } of cells) {
+      const v = k < 0 || !(f.weight[k] > 0) ? 0 : Math.max(0, dir * (f.jx[k] * ux + f.jy[k] * uy) * f.weight[k] * arc);
+      flux.push(v);
+      out += v;
+    }
+    // The direction of the densest outflow (the peak and its two neighbours on the ring), not the
+    // mean: current spreading into a wide plane would pull the mean off the straight path.
+    const order = cells.map((cl, i) => ({ i, a: Math.atan2(cl.uy, cl.ux) })).sort((p, q) => p.a - q.a);
+    let peak = 0;
+    for (let n = 1; n < order.length; n++) if (flux[order[n].i] > flux[order[peak].i]) peak = n;
+    let x = 0;
+    let y = 0;
+    for (const d of [-1, 0, 1]) {
+      const { i } = order[(peak + d + order.length) % order.length];
+      x += flux[i] * cells[i].ux;
+      y += flux[i] * cells[i].uy;
+    }
+    return { out, x, y };
+  }
+
+  /** Where a streamline leaving a via at cell c continues: on the ring where the current leaves it, on copper. */
+  function leave(f: DcLayerField, c: number, at: Pt): Pt | undefined {
+    const a = around(f, c);
+    const m = Math.hypot(a.x, a.y);
+    if (!(m > 0.05 * a.out)) return undefined;
+    for (const r of [ring, ring - 1, ring + 1]) {
+      const q = { x: at.x + (a.x * r * g.cell) / m, y: at.y + (a.y * r * g.cell) / m };
+      const n = 2 * r;
+      let onCopper = true;
+      for (let s = 1; s <= n && onCopper; s++) {
+        const [qi, qj] = cellOf(g, { x: at.x + ((q.x - at.x) * s) / n, y: at.y + ((q.y - at.y) * s) / n });
+        const k = qj * g.nx + qi;
+        onCopper = inGrid(g, qi, qj) && f.weight[k] > 0 && isFinite(f.v[k]);
+      }
+      if (onCopper) return q;
+    }
+    return undefined;
   }
 
   function rkStep(f: DcLayerField, p: Pt): Pt | undefined {
