@@ -68,3 +68,9 @@ test('nets with a prefix before GND are grounds, and pair with the rail they are
   assert.equal(pairGround({ pads: [], pours: [] } as never, '48V', ['GND', '48V_PGND']), '48V_PGND');
   assert.equal(pairGround({ pads: [], pours: [] } as never, '+12V', ['GND', '48V_PGND']), 'GND');
 });
+
+test('geodesic: ends on separate islands get no detour; within one island the path is found', () => {
+  const region = union([rect(0, 0, 10, 4)], [rect(0, 10, 10, 4)]);
+  assert.equal(geodesic(region, { x: 0, y: 1 }, { x: 0, y: 9 }, { minHoleArea: 0.05, window: 5 }), null);
+  assert.ok(geodesic(region, { x: -4, y: 1 }, { x: 4, y: -1 }, { minHoleArea: 0.05, window: 5 }), 'within one island the path is found');
+});

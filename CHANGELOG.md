@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.46] - 2026-11-26
+
+From Balazs: HF check on SD0 in 0.1.44 stopped after 60 s (time budget) "during gaps", on a net of 23 segments.
+
+Since 0.1.44, SD0's bottom stretch, which runs 0.35 mm beside SC0, returns in the Top GND (the Bottom pour lies behind SC0). That pour is in 193 pieces, so SD0 crosses about ten slots, and for most of them the copper on the two sides is not connected. For each, the detour search doubled its window until it covered the whole pour, clipping and preparing the pour again every time. That took 3.5 s in Node and 52 s inside EasyEDA.
+
+- **The detour search first checks that both ends lie on the same piece of copper**; if not, there is no detour, and it says so at once. The pour's pieces are prepared once per analysis. Detours for SD0 take 0.13 s instead of 3.5 s, with the same results; all signal nets of both boards give the same findings, and the rack display's whole run takes 27 s instead of 46 s.
+- **The time-budget message names the phase that used the time**, rather than the one about to start (it said "gaps" for time spent tracing detours).
+
 ## [0.1.45] - 2026-11-26
 
 Numbered above 0.1.44, main's version.

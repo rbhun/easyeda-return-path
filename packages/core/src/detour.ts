@@ -35,7 +35,11 @@ export function geodesic(region: Paths, a: Pt, b: Pt, opts: DetourOptions): Deto
 }
 
 export function* geodesicSteps(region: Paths, a: Pt, b: Pt, opts: DetourOptions): Steps<Detour | null | typeof TOO_COMPLEX> {
-  const rb = bbox(region);
+  // Ends on different islands of the copper have no path between them, however far the window grows.
+  yield { phase: 'detour' };
+  const whole = preparedIslands(region, opts.minHoleArea).find((isl) => pointInPaths(a, isl.paths) && pointInPaths(b, isl.paths));
+  if (!whole) return null;
+  const rb = whole.box;
   const regionSize = Math.max(rb.maxX - rb.minX, rb.maxY - rb.minY);
   const maxNodes = opts.maxNodes ?? DEFAULT_MAX_DETOUR_NODES;
   let half = Math.max(opts.window, dist(a, b));
@@ -52,7 +56,7 @@ export function* geodesicSteps(region: Paths, a: Pt, b: Pt, opts: DetourOptions)
       { x: win.minX, y: win.maxY },
     ];
     yield { phase: 'detour' };
-    const local = prepareRegion(intersect(region, [winRect]), opts.minHoleArea);
+    const local = covers ? [whole.paths] : splitIslands(intersect(whole.paths, [winRect]));
     const island = local.find((isl) => pointInPaths(a, isl) && pointInPaths(b, isl));
     const path = island ? yield* shortestPath(island, a, b, maxNodes, opts.info) : null;
     if (path === TOO_COMPLEX) return TOO_COMPLEX;
@@ -65,6 +69,17 @@ export function* geodesicSteps(region: Paths, a: Pt, b: Pt, opts: DetourOptions)
     if (covers || half > 4 * regionSize) return null;
     half *= 2;
   }
+}
+
+const prepared = new WeakMap<Paths, Map<number, { paths: Paths; box: ReturnType<typeof bbox> }[]>>();
+
+/** The region's islands with small holes filled, computed once per region. */
+function preparedIslands(region: Paths, minHoleArea: number) {
+  let byArea = prepared.get(region);
+  if (!byArea) prepared.set(region, (byArea = new Map()));
+  let islands = byArea.get(minHoleArea);
+  if (!islands) byArea.set(minHoleArea, (islands = prepareRegion(region, minHoleArea).map((paths) => ({ paths, box: bbox(paths) }))));
+  return islands;
 }
 
 function prepareRegion(paths: Paths, minHoleArea: number): Paths[] {
