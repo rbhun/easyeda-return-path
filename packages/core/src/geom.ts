@@ -222,6 +222,23 @@ export class Polyline {
     const l = Math.hypot(d.x, d.y) || 1;
     return { x: d.x / l, y: d.y / l };
   }
+  /** Arc length of the point on the polyline nearest p. */
+  project(p: Pt): number {
+    let best = Infinity;
+    let at = 0;
+    for (let i = 1; i < this.pts.length; i++) {
+      const [a, b] = [this.pts[i - 1], this.pts[i]];
+      const d = sub(b, a);
+      const l2 = d.x * d.x + d.y * d.y;
+      const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * d.x + (p.y - a.y) * d.y) / l2)) : 0;
+      const e = dist(p, lerp(a, b, t));
+      if (e < best) {
+        best = e;
+        at = this.cum[i - 1] + t * Math.sqrt(l2);
+      }
+    }
+    return at;
+  }
   /** Sub-polyline between arc lengths s0 < s1. */
   slice(s0: number, s1: number): Path {
     const out: Path = [this.at(s0)];

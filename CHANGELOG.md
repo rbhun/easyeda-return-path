@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.49] - 2026-11-26
+
+HF check: return lines that follow the real copper (SD0 on the rack display board).
+
+- **The return beyond a neighbouring trace counts again**: a pour on the trace's own layer is the coplanar reference when it is the nearest return copper, even with another trace in between (SD0 beside SC0). The return runs in it as one continuous line; before, the trace was taken as referenced to the far plane, and its return was a broken line along the trace with a detour around C84.
+- **Short plane stretches between coplanar ones are merged**: a stretch shorter than one via reach no longer sends the return down through a via and back up.
+- **The loop closes at a connector or module pin in the middle of the trace**: when the trace passes through a pin of a part that is not a passive (such as the OLED module), the return starts from that part's nearest ground pin, not from the end of the trace.
+- **Via routes**: where a gap splits the reference into islands that GND vias join through the other layer, the return is drawn down one via, along that layer's copper and up the next, and the finding names the vias.
+- **Detours are drawn around every hole**, small ones too, and small detours (under 1 mm extra) are drawn as well. A coplanar return is drawn only within the trace's footprint or at the pour edge, never further out.
+- **Colours**: the signal trace is now yellow (matching the DC view), and hops are dashed white.
+
 ## [0.1.48] - 2026-11-26
 
 From Balazs, on the DC lines: a nicer join where one line meets another, a little smoothing, and a focus mode for one pad.

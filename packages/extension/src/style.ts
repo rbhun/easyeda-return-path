@@ -26,11 +26,11 @@ export interface RoleStyle { colour: ColourName; width: number; visible: boolean
 
 export const DEFAULT_STYLE: Record<Role, RoleStyle> = {
 	supply: { colour: 'yellow', width: 2, visible: true },
-	signal: { colour: 'white', width: 2, visible: true },
+	signal: { colour: 'yellow', width: 2, visible: true },
 	returnTop: { colour: 'magenta', width: 5, visible: true },
 	returnOther: { colour: 'cyan', width: 5, visible: true },
 	returnInner: { colour: 'green', width: 5, visible: true },
-	hop: { colour: 'yellow', width: 2, visible: true },
+	hop: { colour: 'white', width: 2, visible: true },
 	gap: { colour: 'red', width: 3, visible: true },
 	band: { colour: 'white', width: 1, visible: false },
 };

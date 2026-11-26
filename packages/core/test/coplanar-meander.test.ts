@@ -99,7 +99,7 @@ test('the drawn return stays in reference copper and off other traces', () => {
   assertInCopper(meanderBoard(), 'SIG');
 });
 
-test('a pour beyond a neighbouring trace is not a coplanar reference: the return stays in the plane under the trace', () => {
+test('a pour beyond a neighbouring trace is still the nearest return copper: the return runs in it, beyond the neighbour', () => {
   // SIG on Bottom at y = 10 with NEIGH 0.35 mm beside it; the Bottom GND pour starts past NEIGH, within
   // the coplanar distance of SIG but behind NEIGH. A Top GND plane covers the board.
   const board = meanderBoard();
@@ -115,6 +115,21 @@ test('a pour beyond a neighbouring trace is not a coplanar reference: the return
     { id: 'pt', net: 'GND', layer: 1, name: 'Top GND', priority: 1, outline: [rect(20, 10, 39.4, 19.4)], poured: [rect(20, 10, 39.4, 19.4)] },
   ];
   const an = assertInCopper(board, 'SIG');
-  assert.deepEqual(an.chains.map((c) => [c.ref?.layer, !!c.ref?.coplanar]), [[1, false]]);
-  assert.ok(an.returnPath.traces.every((t) => t.layer === 1 && t.pts.every((p) => Math.abs(p.y - 10) < 1e-6)), 'drawn under the trace');
+  assert.deepEqual(an.chains.map((c) => [c.ref?.layer, !!c.ref?.coplanar]), [[2, true]]);
+  assert.ok(an.returnPath.traces.length && an.returnPath.traces.every((t) => t.layer === 2 && t.pts.every((p) => p.y > 10.6)), 'drawn in the pour, beyond NEIGH');
+});
+
+test('a connector pin the trace passes through closes the loop through its own ground pin', () => {
+  // SIG runs through J1 pad 1 at x = 10 on its way to the via (a pull-up beyond the pin, say); J1 pad 2 is GND.
+  const board = meanderBoard();
+  board.components = [{ id: 'j1', designator: 'J1', at: { x: 10, y: 11 }, rotation: 0, layer: 2, padIds: ['p1', 'p2'] }];
+  board.pads = [
+    { id: 'p1', net: 'SIG', layer: 2, number: '1', at: { x: 10, y: 10 }, shape: [rect(10, 10, 0.6, 0.6)], holeDiameter: 0, componentId: 'j1' },
+    { id: 'p2', net: 'GND', layer: 2, number: '2', at: { x: 10, y: 12 }, shape: [rect(10, 12, 0.6, 0.6)], holeDiameter: 0, componentId: 'j1' },
+  ];
+  const an = analyzeNet(board, 'SIG', { drivers: ['J1'] });
+  const pin = an.returnPath.jumps.find((j) => j.kind === 'pin' && j.label === 'J1.2');
+  assert.ok(pin, an.returnPath.jumps.map((j) => `${j.kind} ${j.label}`).join(', '));
+  assert.deepEqual([pin.from, pin.to], [{ x: 10, y: 10 }, { x: 10, y: 12 }]);
+  assert.ok(!an.findings.some((f) => f.kind === 'driver-loop' && /not at an end/.test(f.message)), 'J1 can be the driver');
 });

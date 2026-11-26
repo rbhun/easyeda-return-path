@@ -99,9 +99,9 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
     const line = new Polyline(c.chain.pts);
     const L = line.length;
     const halfWidth = (trackById.get(c.chain.trackIds[0])?.width ?? 0.2) / 2;
-    const breaks = c.gaps.filter((g) => g.kind !== 'via-antipad').sort((a, b) => a.s0 - b.s0);
+    const breaks = [...c.gaps.filter((g) => g.kind !== 'via-antipad'), ...c.quietGaps].sort((a, b) => a.s0 - b.s0);
     const exclude = ref.coplanar ? net : undefined;
-    const aside = halfWidth + ref.h;
+    const aside = halfWidth;
     const maxGap = opts.maxCoplanarGap;
     const push = (s0: number, s1: number) => {
       if (s1 - s0 < 1e-6) return;
@@ -129,7 +129,7 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
         flush();
       };
       if (!ref.coplanar) {
-        // Under the trace on the plane, stepping aside around holes (antipads, crossing traces' clearance).
+        // Under the trace on the plane; where the plane has no copper there, the gap's detour or via route carries it.
         // It keeps to the side it took unless the other is clearly nearer, so it does not zigzag or fold back at corners.
         let lastSide = 1;
         trace((at) => {
@@ -169,7 +169,10 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
     for (const g of breaks) {
       push(s, g.s0);
       s = g.s1;
-      if (g.detour) traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: g.detour.path, detour: true });
+      if (g.viaRoute) {
+        for (const leg of g.viaRoute.legs) if (leg.path.length > 1) traces.push({ layer: leg.layer, signalLayer: c.chain.layer, pts: leg.path, detour: true });
+        for (const v of g.viaRoute.vias) jumps.push({ kind: 'via', from: v, to: v, label: `${g.netBefore} via`, distance: 0, severity: 'ok' });
+      } else if (g.detour) traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: g.drawn ?? g.detour.path, detour: true });
       else if (g.bridge) {
         const b = g.bridge;
         const label = b.component.designator;
@@ -192,19 +195,29 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
       if (t.target && t.distance !== undefined)
         jumps.push({ kind: t.kind === 'decap' ? 'decap' : 'via', from: v.via.at, to: t.target.at, label: t.target.label, distance: t.distance, severity: t.severity });
 
-  // Loop closure: where the trace ends on a part's pad, the return leaves the reference copper
+  // Loop closure: where the trace ends on (or passes through) a part's pad, the return leaves the reference copper
   // through that part's pin on the reference net (ground, or the supply for a VCC-referenced trace).
   const seen = new Set<string>();
   const endNets = new Map<string, string>();
   for (const c of chains) {
     if (!c.ref) continue;
-    const ends: [Pt, Pt][] = [
-      [c.chain.pts[0], c.chain.pts[1]],
-      [c.chain.pts[c.chain.pts.length - 1], c.chain.pts[c.chain.pts.length - 2]],
+    const ends: [Pt, Pt, Pad | undefined][] = [
+      [c.chain.pts[0], c.chain.pts[1], undefined],
+      [c.chain.pts[c.chain.pts.length - 1], c.chain.pts[c.chain.pts.length - 2], undefined],
     ];
-    for (const [end, inward] of ends) {
-      if (ownVias.some((v) => dist(v.at, end) <= v.diameter / 2 + 0.01)) continue;
-      const pad = padAt(board, end, net, c.chain.layer);
+    // A part the trace passes through on the way (a connector pin with a pull-up beyond it) closes the loop there too.
+    const line = new Polyline(c.chain.pts);
+    for (const pd of board.pads) {
+      if (pd.net !== net || !pd.componentId || (pd.layer !== c.chain.layer && pd.layer !== MULTI_LAYER)) continue;
+      const s = line.project(pd.at);
+      if (s < 0.05 || s > line.length - 0.05 || distToPaths(line.at(s), pd.shape) > 0.05) continue;
+      const comp = board.components.find((x) => x.id === pd.componentId);
+      if (!comp || isPassive(comp)) continue;
+      ends.push([line.at(s), line.at(s < line.length / 2 ? Math.min(line.length, s + 1) : Math.max(0, s - 1)), pd]);
+    }
+    for (const [end, inward, onPad] of ends) {
+      if (!onPad && ownVias.some((v) => dist(v.at, end) <= v.diameter / 2 + 0.01)) continue;
+      const pad = onPad ?? padAt(board, end, net, c.chain.layer);
       if (!pad?.componentId || seen.has(pad.id)) continue;
       seen.add(pad.id);
       const comp = board.components.find((x) => x.id === pad.componentId);
