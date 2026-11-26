@@ -103,9 +103,15 @@ test('2-layer coplanar return: drawn beside the trace; parts without a ground pa
   const an = analyzeNet(b, 'CLK');
   const plane = an.returnPath.traces.filter((t) => !t.detour);
   assert.ok(plane.length >= 2);
-  // CLK runs along y = 10 from x = 9 to 53; its return runs along both pour edges.
+  // CLK runs along y = 10 from x = 9 to 53, in a pour on both sides; its return is one line along the nearer pour edge.
   const ys = plane.flatMap((t) => t.pts.filter((p) => p.x > 15 && p.x < 50).map((p) => p.y - 10));
-  assert.ok(ys.some((d) => d > 0.2 && d < 0.6) && ys.some((d) => d < -0.2 && d > -0.6), `coplanar return beside the trace on both sides: ${ys}`);
+  assert.ok(ys.length && (ys.every((d) => d > 0.2 && d < 0.6) || ys.every((d) => d < -0.2 && d > -0.6)), `coplanar return beside the trace, on one side: ${ys}`);
+  // Unbroken: the pieces (the detour round the break in the pour included) meet end to end.
+  const pieces = an.returnPath.traces.filter((t) => t.signalLayer === plane[0].signalLayer);
+  const ends = pieces.flatMap((t) => [t.pts[0], t.pts[t.pts.length - 1]]);
+  const loose = ends.filter((e) => ends.filter((f) => Math.hypot(e.x - f.x, e.y - f.y) < 0.05).length < 2);
+  assert.equal(loose.length, 2, `one line with two ends: ${JSON.stringify(loose)}`);
+  assert.ok(Math.min(...loose.map((e) => e.x)) < 15 && Math.max(...loose.map((e) => e.x)) > 50, 'from end to end of the trace');
   assert.deepEqual(an.findings.filter((f) => f.kind === 'loop-closure').map((f) => f.severity), ['warn', 'warn']);
 });
 

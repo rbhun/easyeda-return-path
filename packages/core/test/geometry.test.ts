@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { arcPoints, area, difference, dropNarrow, geodesic, isGroundNet, pairGround, pouredScale, rect, scalePaths, splitIslands, union } from '../src/index.js';
+import { arcPoints, area, difference, dropNarrow, geodesic, leastInductancePath, pathInductance, Polyline, runSync, viaInductance, isGroundNet, pairGround, pouredScale, rect, scalePaths, splitIslands, union } from '../src/index.js';
 
 test('arc discretisation keeps radius', () => {
   const pts = arcPoints({ x: 1, y: 0 }, { x: 0, y: 1 }, 90);
@@ -94,4 +94,30 @@ test('geodesic with an inset keeps inside the copper; ends at the copper edge st
   const toSlot = (p: { x: number; y: number }) => Math.hypot(Math.max(0, Math.abs(p.x) - 0.5), Math.max(0, -2 - p.y, p.y - 10));
   for (const p of det.path.slice(2, -2)) assert.ok(toSlot(p) >= 0.095, `(${p.x}, ${p.y}) hugs the slot`);
   assert.equal(geodesic(plane, a, b, { minHoleArea: 0.1, window: 3, inset: 0.1 }), null, 'without snapping, ends on the edge have no path');
+});
+
+test('the return keeps to copper that carries on: a nearer strip that ends gets no line', () => {
+  // Trace along y = 0 from x 0 to 10. Above it a strip 0.3 mm away ends at x 7; below, one 0.4 mm away runs the whole length.
+  // The two join only round the start of the trace.
+  const inCopper = (p: { x: number; y: number }) =>
+    (p.y >= 0.3 && p.y <= 0.8 && p.x >= -1 && p.x <= 7) || (p.y <= -0.4 && p.y >= -0.9 && p.x >= -1 && p.x <= 11) || (p.x >= -1 && p.x <= -0.5 && p.y >= -0.9 && p.y <= 0.8);
+  const line = new Polyline([
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+  ]);
+  const path = runSync(leastInductancePath({ inCopper, line, s0: 0, s1: 10, halfWidth: 0.1, h: 0, corridor: 1.5, from: null, to: null }))!;
+  assert.ok(path);
+  assert.ok(path[path.length - 1].x > 9.5, 'reaches the far end');
+  assert.ok(path.filter((p) => p.x > 1).every((p) => p.y < 0), `runs in the strip that carries on: ${JSON.stringify(path)}`);
+});
+
+test('loop inductance: a via through a 1.6 mm board is about 1.3 nH; a return further from the trace adds more', () => {
+  assert.ok(Math.abs(viaInductance(1.6, 0.3) - 1.3) < 0.05, `${viaInductance(1.6, 0.3)}`);
+  const line = new Polyline([
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+  ]);
+  const at = (y: number) => pathInductance([{ x: 0, y }, { x: 10, y }], line, 0.1, 0);
+  assert.ok(at(0.3) < at(1) && at(1) < at(3));
+  assert.ok(Math.abs(pathInductance([{ x: 0, y: 0 }, { x: 10, y: 0 }], line, 0.1, 1.5) - 10 * 0.2 * Math.log(1 + 225)) < 1e-6);
 });

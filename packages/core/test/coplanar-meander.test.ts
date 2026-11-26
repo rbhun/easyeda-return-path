@@ -51,7 +51,10 @@ test('a meander in a wider pour clearance returns in the plane under it, through
   // Every return is tagged with its signal trace's layer; on the plane it runs on the trace, in the pour beside it.
   assert.ok(an.returnPath.traces.every((t) => t.signalLayer === (t.pts.every((p) => p.x > 37.5) ? 1 : 2)));
   const onPlane = an.returnPath.traces.filter((t) => t.layer === 1);
-  assert.ok(onPlane.length > 0 && onPlane.every((t) => t.pts.every((p) => tracksDist(p) < 0.01)), 'the plane return lies on the meander');
+  // The plane is 1.5 mm below a meander 0.6 mm tall: the image current follows the meander's course, not each loop.
+  assert.ok(onPlane.length > 0 && onPlane.every((t) => t.pts.every((p) => tracksDist(p) < 0.25)), 'the plane return lies under the meander');
+  const xs = onPlane.flatMap((t) => t.pts.map((p) => p.x));
+  assert.ok(Math.min(...xs) < 15 && Math.max(...xs) > 16.5, 'from one end of the meander to the other');
   const beside = an.returnPath.traces.filter((t) => t.layer === 2 && t.pts.every((p) => p.x < 37));
   assert.ok(beside.length > 0 && beside.every((t) => t.pts.every((p) => tracksDist(p) > 0.2)), 'the coplanar return lies beside the trace');
 });

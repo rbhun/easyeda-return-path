@@ -51,7 +51,10 @@ function hfPercent() {
 			last = chainStart;
 		}
 		else if (tick.phase === 'vias') {
-			last = 90 + 10 * f;
+			last = 90 + 3 * f;
+		}
+		else if (tick.phase === 'return path') {
+			last = Math.max(last, 93 + 7 * f);
 		}
 		else if (within[tick.phase]) {
 			const [a, w] = within[tick.phase];
