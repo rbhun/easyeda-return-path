@@ -2,6 +2,8 @@
 // reference layer, and the hops it makes off the plane (bridging caps, return vias, decaps, and the
 // IC ground pins that close the loop at the ends of the net).
 import type { ChainResult, Finding, Severity, ViaResult } from './analyze.js';
+import { isGroundNet } from './dc/rails.js';
+import { driverLoop, isPassive, type DriverLoop } from './driver.js';
 import { add, dist, distToPaths, dot, len, mul, Polyline, sub } from './geom.js';
 import { MULTI_LAYER, type Board, type Pad, type Path, type Pt } from './types.js';
 
@@ -13,7 +15,8 @@ export interface ReturnTrace {
   detour?: boolean;
 }
 
-export type ReturnJumpKind = 'via' | 'decap' | 'bridge' | 'pin';
+/** `supply`: the driver's other edge, from its reference-net pin through the decap to its supply pin. */
+export type ReturnJumpKind = 'via' | 'decap' | 'bridge' | 'pin' | 'supply';
 
 export interface ReturnJump {
   kind: ReturnJumpKind;
@@ -27,6 +30,15 @@ export interface ReturnJump {
 export interface ReturnPath {
   traces: ReturnTrace[];
   jumps: ReturnJump[];
+  /** Driver-side loop closure for each driver that was chosen or guessed. */
+  drivers: DriverLoop[];
+}
+
+export interface DriverOptions {
+  /** Designators of the parts that drive the net; none means only the per-end pins are drawn. */
+  drivers?: string[];
+  /** Driver pin → decap → driver pin path length, mm. */
+  driverDecap: { good: number; warn: number };
 }
 
 /** Net of the reference copper at p on a layer, optionally ignoring one net. */
@@ -60,9 +72,10 @@ function padAt(board: Board, p: Pt, net: string, layer: number): Pad | undefined
 
 /**
  * Builds the return path from the per-chain results. Also adds one finding per net end, naming
- * the pin where the return leaves the reference copper (or saying the part has none).
+ * the pin where the return leaves the reference copper (or saying the part has none), and one per
+ * driver for the edge that has to cross to the other supply net through a decap.
  */
-export function buildReturnPath(board: Board, net: string, chains: ChainResult[], vias: ViaResult[], netAt: NetAt, findings: Finding[]): ReturnPath {
+export function buildReturnPath(board: Board, net: string, chains: ChainResult[], vias: ViaResult[], netAt: NetAt, findings: Finding[], opts: DriverOptions): ReturnPath {
   const traces: ReturnTrace[] = [];
   const jumps: ReturnJump[] = [];
   const trackById = new Map(board.tracks.map((t) => [t.id, t]));
@@ -114,6 +127,7 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
   // Loop closure: where the trace ends on a part's pad, the return leaves the reference copper
   // through that part's pin on the reference net (ground, or the supply for a VCC-referenced trace).
   const seen = new Set<string>();
+  const endNets = new Map<string, string>();
   for (const c of chains) {
     if (!c.ref) continue;
     const ends: [Pt, Pt][] = [
@@ -126,7 +140,8 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
       if (!pad?.componentId || seen.has(pad.id)) continue;
       seen.add(pad.id);
       const comp = board.components.find((x) => x.id === pad.componentId);
-      if (!comp) continue;
+      // Single-pad parts are test points or labels: the net just ends there.
+      if (!comp || comp.padIds.length < 2) continue;
       // The reference net under the trace just before it reaches the pad (the pad's own antipad hides it at the pad).
       const step = Math.min(dist(end, inward), Math.max(0.5, 3 * c.ref.h));
       const probeAt = add(end, mul(sub(inward, end), step / (dist(end, inward) || 1)));
@@ -137,14 +152,48 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
       const candidates = board.pads.filter((p) => p.componentId === comp.id && p.id !== pad.id && p.net && (p.net === endNet || (!endNet && c.refNets.includes(p.net))));
       const pin = candidates.sort((a, b) => dist(a.at, pad.at) - dist(b.at, pad.at))[0];
       const where = `${comp.designator} pad ${pad.number}`;
+      if (endNet && !endNets.has(comp.designator)) endNets.set(comp.designator, endNet);
       if (pin) {
         const d = dist(pin.at, pad.at);
         jumps.push({ kind: 'pin', from: pad.at, to: pin.at, label: `${comp.designator}.${pin.number}`, distance: d, severity: 'ok' });
         findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the return leaves ${pin.net} copper through ${comp.designator} pad ${pin.number} (${pin.net}), ${d.toFixed(2)} mm from the signal pad`, at: pad.at });
+      } else if (isPassive(comp) || /^[XY]\d/i.test(comp.designator)) {
+        findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the signal continues through ${comp.designator} onto another net, and its return goes on with it (not traced past ${comp.designator})`, at: pad.at });
       } else {
         findings.push({ severity: 'warn', kind: 'loop-closure', message: `${where}: ${comp.designator} has no pad on ${endNet ?? 'the reference net'}, so the return path cannot close at this end`, at: pad.at });
       }
     }
   }
-  return { traces, jumps };
+
+  const drivers: DriverLoop[] = [];
+  for (const d of opts.drivers ?? []) {
+    const refNet = endNets.get(d);
+    if (!refNet) {
+      findings.push({ severity: 'warn', kind: 'driver-loop', message: `${d} (driver): not at an end of the routed trace over reference copper, so its supply loop is not traced`, at: chains[0]?.chain.pts[0] ?? { x: 0, y: 0 } });
+      continue;
+    }
+    const loop = driverLoop(board, d, net, refNet);
+    if (!loop?.refPin) continue;
+    drivers.push(loop);
+    const toGround = isGroundNet(refNet);
+    const [direct, other] = toGround ? ['falling', 'rising'] : ['rising', 'falling'];
+    const at = loop.signalPad.at;
+    const first = `${d} (driver): the ${direct} edge returns into ${d} pad ${loop.refPin.number} (${refNet})`;
+    if (!loop.supplyPin) {
+      findings.push({ severity: 'warn', kind: 'driver-loop', message: `${first}; ${d} has no ${toGround ? 'supply' : 'ground'} pin on this board, so the ${other}-edge return is not traced`, at });
+      continue;
+    }
+    const supplyNet = loop.supplyPin.net;
+    if (!loop.decap) {
+      findings.push({ severity: 'error', kind: 'driver-loop', message: `${first}; the ${other} edge must reach ${d} pad ${loop.supplyPin.number} (${supplyNet}), but no decap between ${refNet} and ${supplyNet} was found`, at });
+      continue;
+    }
+    const { component, refPad, supplyPad, length } = loop.decap;
+    const t = opts.driverDecap;
+    const severity: Severity = length <= t.good ? 'ok' : length <= t.warn ? 'warn' : 'error';
+    jumps.push({ kind: 'supply', from: loop.refPin.at, to: refPad.at, label: component.designator, distance: dist(loop.refPin.at, refPad.at), severity });
+    jumps.push({ kind: 'supply', from: supplyPad.at, to: loop.supplyPin.at, label: component.designator, distance: dist(supplyPad.at, loop.supplyPin.at), severity });
+    findings.push({ severity, kind: 'driver-loop', message: `${first}; the ${other} edge through decap ${component.designator} into ${d} pad ${loop.supplyPin.number} (${supplyNet}), ${length.toFixed(2)} mm pin to cap to pin`, at });
+  }
+  return { traces, jumps, drivers };
 }

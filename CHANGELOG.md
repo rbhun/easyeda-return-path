@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.23] - 2026-11-26
+
+High-frequency view, milestone 3 of `docs/hf-plan.md`: the loop at the driver. Until now each end of the net closed the return into the nearest pin of the same part on the reference net (usually GND). That is only half of it: when a CMOS output drives high, the current comes from its supply pin, so on a ground reference the rising edge returns through a decap into the driver's supply pin.
+
+- **Driver question:** Show for Selected Net reads the pin names from the netlist (as DC Return Current does) and guesses the driver from them (`TX`, `MOSI`, `DOUT`, `MCO`, `OSC_OUT`… drive; `RX`, `MISO`, `DIN`… receive). When the names do not settle it, or the net is a bus driven from either end (`SDA`, `SCL`, `SWDIO`, USB data), it asks which part drives the net, with "All of them" and "None" as choices. Closing the question skips the driver loop. Rerun Last Analysis keeps the answer.
+- **Driver loop:** for the driver, one finding names both edges, for example "U1 (driver): the falling edge returns into U1 pad 2 (GND); the rising edge through decap C1 into U1 pad 3 (3V3), 8.55 mm pin to cap to pin". The decap is the two-pad part between the reference net and one of the driver's supply nets that gives the shortest ground pin → cap → supply pin loop. Up to 4 mm is ok, up to 10 mm a warning, longer an error; no decap at all is an error. On a supply-net reference the roles swap. The two legs are drawn as hops, in the hop colour of the panel (yellow by default).
+- **Panel:** the HF result in the Return Path panel has the driver line and the driver finding; its last-run label names the driver ("Show for Selected Net: CLK, driver U1"), and Rerun from the panel keeps it. The driver legs are hops, so the panel's hop colour and width restyle them with the others.
+- **Series parts:** a net end at a resistor, ferrite or crystal with no pin on the reference net is now reported as ok ("the signal continues through R5 onto another net…") instead of a warning that the loop cannot close.
+- **CLI:** `--driver U1[,U2]`. Without it the CLI prints the candidates and its guess, and uses the guess only when it is sure. `.epro2` projects now give pins their names (from the symbol of each part's device), and a project without a layer stack is read as a 1.6 mm board (1.5 mm core on two layers; 0.21 / 1.065 / 0.21 mm on four), as the extension already did, instead of 0.2 mm between all layers.
+- **Fixes:** a coplanar detour no longer reports a negative extra length, and segments shorter than 0.1 mm get no band-coverage warning.
+
 ## [0.1.22] - 2026-11-26
 
 Numbered above 0.1.21, the highest version on the open pull requests (the HF line took 0.1.19 to 0.1.21).
@@ -10,6 +21,7 @@ From the owner's run of 0.1.18: the panel opened from the menu knew nothing of t
 
 - **The panel shows menu runs.** EasyEDA appears to run menu actions in separate instances of the extension, which share neither memory nor a fresh view of the stored settings. The instances now keep the result, the last run, the overlay, busy state and style in step over the extension's message bus, and exactly one acts on each panel command: the panel's owner, which hands Hide/Show, Clear and redraws to the instance that drew the overlay. Each result and overlay change is also pushed to a mailbox topic, which the bus keeps until it is pulled; the panel's page pulls it and hands the newest to its owner, which takes over the result, Rerun and the drawing even when the instance that ran the analysis is gone. Hide/Show and Clear from the menu reach whichever instance holds the overlay.
 - **Show/hide per line kind.** Each role in the panel (DC supply, return on top, other and inner layers, hops, gaps and bottleneck, band edges) has a checkbox; hidden roles are not drawn, and the choice is kept with the colours and widths.
+
 
 ## [0.1.18] - 2026-11-26
 
@@ -20,12 +32,14 @@ From the owner's run of 0.1.17 on the rack display: a 9V track selected, Show fo
 - **Board outline.** The rack display's outline is a single rectangle polyline of type `BOARD_OUTLINE`, which the polyline API apparently does not return. The outline is now also looked for on all layers and then in the PCB's document source (`sys_FileManager.getDocumentSource`). The log says how many polylines each step found.
 - **Panel.** Every analysis opens the Return Path panel unless you closed it. Results go to the panel only once its page has connected (said hello); otherwise they stay in the dialog, so a panel that cannot reach the extension never swallows a result. Open Panel reports when EasyEDA refuses to open the window, and the log records what `openIFrame` returned.
 
+
 ## [0.1.17] - 2026-11-26
 
 From the first run on the rack display backup (`rack display_2026-11-23-17-52.epro2`).
 
 - **Parts with no ground pad are no longer default loads.** On the rack display's 3V3 rail, 44 of the 55 default loads were I2C pull-ups, an LED and parts with no GND pin. With no load currents entered, the 1 A total was split equally across all of them, so the TCA9548s and OLEDs that really return current to ground got about a fifth of it. These parts are now listed under "left out: no ground pad", and the wizard still lets you tick them.
 - **CLI: projects with several PCBs.** The CLI analysed the first PCB in the project; on the rack display that is an unrouted copy with 0 tracks, which gave "no copper path" for every OLED and "net has no tracks" for `$1N58`. It now picks the PCB with the most tracks and lists the others in the warning. `--pcb` still overrides. The extension is unaffected (it analyses the open PCB).
+
 
 ## [0.1.16] - 2026-11-26
 

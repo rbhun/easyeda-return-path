@@ -1,4 +1,4 @@
-import { pouredScale, scalePaths, add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
+import { assumedDielectricsMm, pouredScale, scalePaths, add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
 import { parseRecords, type Rec } from './records.js';
 
 /** EasyEDA Pro PCB data is in mil. */
@@ -25,6 +25,8 @@ export interface Sources {
   footprints?: Map<string, string>;
   /** Extra POURED documents (.ecop). */
   poured?: string[];
+  /** Schematic pin names by device uuid, then pin number (from the .epro2's DEVICE and SYMBOL documents). */
+  pinNames?: Map<string, Map<string, string>>;
 }
 
 const conv = (x: number, y: number): Pt => ({ x: x * MIL, y: y * MIL });
@@ -131,7 +133,7 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
   if (pours.some((p) => !p.poured))
     warnings.push('Some pours have no stored fill (POURED); their copper was recomputed from outlines with a uniform clearance.');
 
-  const components = buildComponents(recs, src.footprints ?? new Map(), copperIds, pads, warnings);
+  const components = buildComponents(recs, src.footprints ?? new Map(), copperIds, pads, warnings, src.pinNames);
   for (const t of tracks) nets.add(t.net);
   for (const p of pads) if (p.net) nets.add(p.net);
 
@@ -196,6 +198,15 @@ function buildStackup(recs: Rec[], opts: ParseOptions, warnings: string[]): Boar
     pending = [];
     copper.push({ id, name: str(l.layerName) || `L${id}`, index: copper.length, z, thicknessMm: copperThicknessMm(num(phys.get(id)?.thickness, NaN)) });
   }
+  // No dielectric anywhere in the file: assume the same 1.6 mm board as the extension does.
+  if (opts.defaultDielectricMm === undefined && dielectrics.length && dielectrics.every((d) => d.name === 'assumed')) {
+    const gaps = assumedDielectricsMm(copper.length);
+    dielectrics.forEach((d, i) => (d.thicknessMm = gaps[i]));
+    let zz = 0;
+    copper.forEach((c, i) => (c.z = i ? (zz += gaps[i - 1]) : 0));
+    for (let i = warnings.length - 1; i >= 0; i--) if (warnings[i].startsWith('No dielectric between')) warnings.splice(i, 1);
+    warnings.push(`The file has no layer stack; assuming a 1.6 mm board with dielectrics of ${gaps.map((g) => `${g} mm`).join(', ')}.`);
+  }
   if (subThk.length) warnings.push(`LAYER_PHYS dielectric thickness read as ${unit}.`);
   if (copper.some((c) => c.thicknessMm)) warnings.push('LAYER_PHYS copper thickness read as oz (0.25–6), mm (< 0.25) or µm (> 6); unverified against a real export.');
   return { copper, dielectrics };
@@ -255,7 +266,7 @@ function buildPad(r: Rec, xf: Xform, net: string, copperIds: Set<number>, idPref
   };
 }
 
-function buildComponents(recs: Rec[], footprints: Map<string, string>, copperIds: Set<number>, pads: Pad[], warnings: string[]): Component[] {
+function buildComponents(recs: Rec[], footprints: Map<string, string>, copperIds: Set<number>, pads: Pad[], warnings: string[], pinNames?: Map<string, Map<string, string>>): Component[] {
   const attrs = new Map<string, Map<string, string>>();
   for (const r of recs) {
     if (r.type !== 'ATTR') continue;
@@ -289,9 +300,12 @@ function buildComponents(recs: Rec[], footprints: Map<string, string>, copperIds
     }
     if (!fpCache.has(fpId)) fpCache.set(fpId, parseRecords(fpText).filter((x) => x.type === 'PAD'));
     const nets = padNets.get(r.id) ?? new Map<string, string>();
+    const names = pinNames?.get(a.get('device') ?? str(attrMap['Device']));
     for (const pr of fpCache.get(fpId)!) {
       const pad = buildPad(pr, xf, nets.get(str(pr.num)) ?? str(pr.netName), copperIds, r.id);
       pad.componentId = r.id;
+      const pinName = names?.get(pad.number);
+      if (pinName) pad.pinName = pinName;
       pads.push(pad);
       comp.padIds.push(pad.id);
     }

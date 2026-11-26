@@ -54,5 +54,11 @@
 	"Hops (via, decap, cap, pin)": "Hops (via, decap, cap, pin)",
 	"Gaps and bottleneck": "Gaps and bottleneck",
 	"±3h band edges": "±3h band edges",
-	"This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.": "This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details."
+	"This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.": "This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.",
+	"Driver: not chosen, so only the pin at each end closes the loop.": "Driver: not chosen, so only the pin at each end closes the loop.",
+	"All of them (driven from either end)": "All of them (driven from either end)",
+	"None: skip the driver loop": "None: skip the driver loop",
+	"Which part drives ${1}? Its supply pins and decap close the loop for the edge that does not return straight into its ground pin.": "Which part drives ${1}? Its supply pins and decap close the loop for the edge that does not return straight into its ground pin.",
+	"Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.": "Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.",
+	"Show for Selected Net: ${1}, driver ${2}": "Show for Selected Net: ${1}, driver ${2}"
 }

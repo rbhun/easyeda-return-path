@@ -3,7 +3,7 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, hfApplicability, solveDcSteps, traceStreamlines, DRAWN_STREAMS, type Board, type DcSetupInput, type Pad, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, guessDrivers, hfApplicability, solveDcSteps, traceStreamlines, DRAWN_STREAMS, type Board, type DcSetupInput, type Pad, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
@@ -78,7 +78,7 @@ export async function runReturnPath(ask: Ask): Promise<void> {
 	});
 }
 
-async function hfFor(net: string, ask: Ask): Promise<void> {
+async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<void> {
 	const title = t('Return path');
 	log(`Show for Selected Net: ${net} (v${extensionConfig.version})`);
 	// The name check needs no board, so power and ground nets are turned away before the read.
@@ -93,10 +93,11 @@ async function hfFor(net: string, ask: Ask): Promise<void> {
 	}
 	if (!board)
 		return;
-	await remember({ kind: 'hf', net });
+	const drivers = storedDrivers ?? await chooseDrivers(board, net, loggedAsk(ask));
+	await remember({ kind: 'hf', net, drivers });
 	const ownTracks = board.tracks.filter(tr => tr.net === net).length;
-	log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias`);
-	const analysis = await runSteps(analyzeNetSteps(board, net), { title, timeBudgetMs: HF_BUDGET_MS, percent: hfPercent() });
+	log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias, driver ${drivers.join(', ') || 'none'}`);
+	const analysis = await runSteps(analyzeNetSteps(board, net, { drivers }), { title, timeBudgetMs: HF_BUDGET_MS, percent: hfPercent() });
 	log(`${net}: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${+Number(v).toFixed(3)}`).join(' ')}`);
 	const drawn = await timed('draw markers', () => drawAnalysis(analysis, board), d => `${d.markers} markers`);
 	const lines = [
@@ -104,10 +105,35 @@ async function hfFor(net: string, ask: Ask): Promise<void> {
 		drawn.returnLayers.length
 			? t('Return path on ${1}. Dashed ${2}: hop through a via, decap, bridging cap or IC pin. ${3}: trace over a gap, or band without copper. Thin ${4}: ±3h band edges.', drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name, roleColour('band').name)
 			: t('No return path drawn: the trace has no reference copper.'),
+		drivers.length ? t('Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.', drivers.join(', '), roleColour('hop').name) : t('Driver: not chosen, so only the pin at each end closes the loop.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
 		...board.warnings.map(w => `warning: ${w}`),
 	];
 	await report(title, lines);
+}
+
+/**
+ * The parts that drive the net: guessed from the pin names (netlist), asked when the names do not
+ * settle it. An empty list skips the driver loop (also when the question is closed).
+ */
+async function chooseDrivers(board: Board, net: string, ask: Ask): Promise<string[]> {
+	await addPinNames(board);
+	const guess = guessDrivers(board, net);
+	log(`${net}: driver candidates ${guess.candidates.map(c => `${c.designator} (${c.role}: ${c.why})`).join('; ') || 'none'}; guess ${guess.drivers.join(', ') || 'none'}${guess.confident ? '' : ' (not sure)'}`);
+	if (guess.confident || !guess.candidates.length)
+		return guess.drivers;
+	const ALL = '*';
+	const NONE = '-';
+	const options = [
+		...guess.candidates.map(c => ({ value: c.designator, label: `${c.designator} pad ${c.pad.number}${c.pad.pinName ? ` (${c.pad.pinName})` : ''}` })),
+		...(guess.candidates.length > 1 ? [{ value: ALL, label: t('All of them (driven from either end)') }] : []),
+		{ value: NONE, label: t('None: skip the driver loop') },
+	];
+	const dflt = guess.candidates.find(c => c.role !== 'receiver')?.designator ?? options[0].value;
+	const v = await ask.select(t('Return path'), t('Which part drives ${1}? Its supply pins and decap close the loop for the edge that does not return straight into its ground pin.', net), options, dflt);
+	if (v === undefined || v === NONE)
+		return [];
+	return v === ALL ? guess.candidates.map(c => c.designator) : [v];
 }
 
 /** Wizard step 1, DC solve of the chosen rail and its ground, and the DC overlay (D7). */
@@ -179,7 +205,7 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 	await report(title, lines);
 }
 
-type LastRun = { kind: 'hf'; net: string } | { kind: 'dc'; input: DcSetupInput };
+type LastRun = { kind: 'hf'; net: string; drivers?: string[] } | { kind: 'dc'; input: DcSetupInput };
 const LAST_RUN = 'lastRun';
 
 /** Stored, so Rerun Last Analysis works after a restart too. */
@@ -212,7 +238,7 @@ export async function rerunAnalysis(): Promise<void> {
 	if (run.kind === 'hf') {
 		await guarded(t('Return path'), async () => {
 			await showPanelForRun();
-			await hfFor(run.net, dialogAsk());
+			await hfFor(run.net, dialogAsk(), run.drivers);
 		});
 		return;
 	}
@@ -279,7 +305,7 @@ const panelHost = {
 		if (!run)
 			return undefined;
 		return run.kind === 'hf'
-			? t('Show for Selected Net: ${1}', run.net)
+			? (run.drivers?.length ? t('Show for Selected Net: ${1}, driver ${2}', run.net, run.drivers.join(', ')) : t('Show for Selected Net: ${1}', run.net))
 			: t('DC ${1} / ${2}, source ${3}, loads ${4}', run.input.rail, run.input.ground, run.input.source, (run.input.loads ?? []).join(', ') || '-');
 	},
 };

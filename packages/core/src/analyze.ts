@@ -28,6 +28,10 @@ export interface AnalyzeOptions {
   coplanarRatio: number;
   /** Largest trace-edge-to-pour gap that still counts as coplanar return, mm. */
   maxCoplanarGap: number;
+  /** Driver pin → decap → driver pin path length that is fine / acceptable, mm. */
+  driverDecap: { good: number; warn: number };
+  /** Parts that drive the net (designators); see guessDrivers. */
+  drivers?: string[];
 }
 
 export const defaultOptions: AnalyzeOptions = {
@@ -43,6 +47,7 @@ export const defaultOptions: AnalyzeOptions = {
   maxDetourNodes: DEFAULT_MAX_DETOUR_NODES,
   coplanarRatio: 0.5,
   maxCoplanarGap: 1.0,
+  driverDecap: { good: 4, warn: 10 },
 };
 
 export type Severity = 'error' | 'warn' | 'ok';
@@ -228,7 +233,7 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     yield { phase: 'vias', fraction: i / ownVias.length };
     vias.push(analyzeVia(ctx, via, tracks, findings));
   }
-  const returnPath = buildReturnPath(board, net, results, vias, (p, layer, exclude) => ctx.netAt(p, layer, exclude), findings);
+  const returnPath = buildReturnPath(board, net, results, vias, (p, layer, exclude) => ctx.netAt(p, layer, exclude), findings, opts);
   return { net, refCopper, chains: results, vias, returnPath, findings, stats };
 }
 
@@ -480,7 +485,8 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
         const direct = line.slice(r.s0 - eps, r.s1 + eps);
         const directLength = r.s1 - r.s0 + 2 * eps;
         const loop = [...direct, ...[...det.path].reverse()];
-        gap.detour = { ...det, directLength, extraLength: det.length - directLength, loopArea: enclosedArea(loop), loop };
+        // A coplanar detour starts beside the trace and can come out shorter than the centreline.
+        gap.detour = { ...det, directLength, extraLength: Math.max(0, det.length - directLength), loopArea: enclosedArea(loop), loop };
         findings.push({
           severity: 'error',
           kind: 'slot-crossing',
@@ -505,7 +511,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
   }
 
   for (const c of coverage) {
-    if (c.ratio >= opts.minBandCoverage) continue;
+    if (c.ratio >= opts.minBandCoverage || dist(c.a, c.b) < 0.1) continue;
     const onSeg = (p: Pt) => distPointSeg(p, c.a, c.b) < 1e-6;
     if (gaps.some((g) => g.kind !== 'via-antipad' && (onSeg(g.a) || onSeg(g.b)))) continue;
     const bandText = ref.coplanar ? `coplanar band (${(halfBand - inner).toFixed(2)} mm beside the trace clearance)` : `±3h band (±${halfBand.toFixed(2)} mm)`;
