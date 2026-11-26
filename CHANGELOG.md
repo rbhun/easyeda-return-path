@@ -2,6 +2,10 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.6] - 2026-11-26
+
+- A freeze while fetching a pour fill under 0.1.4 leaves that version's marker set. 0.1.5 read that marker as "skip every fill" for one run before learning which fill hung. The fill is now taken from the saved log at once, so the first run after updating skips only that fill (on the R-Com dongle, `0ca4da6a31655d4b`, which froze both DC Return Current and Show for Selected Net).
+
 ## [0.1.5] - 2026-11-26
 
 On the R-Com dongle, fetching one computed pour fill (`0ca4da6a31655d4b`) froze EasyEDA on every run without a selection. 0.1.4 then computed all pours from their outlines for one run only, so the run after that froze again. A run that recovered this way also ended without a log line after the board read.

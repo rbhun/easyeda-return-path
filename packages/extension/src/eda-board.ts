@@ -349,10 +349,14 @@ const SKIP_POURED = 'pouredIdsThatHang';
  * `'*'` means a hang inside getAll, which names no single fill.
  */
 function hungFetch(marker: unknown): string | undefined {
-	if (typeof marker === 'string' && marker) {
-		const m = /^get:(.+)$/.exec(marker);
-		return m ? m[1] : '*';
-	}
+	const m = typeof marker === 'string' ? /^get:(.+)$/.exec(marker) : null;
+	if (m)
+		return m[1];
+	const fromLog = hungFetchInLog();
+	return fromLog ?? (typeof marker === 'string' && marker ? '*' : undefined);
+}
+
+function hungFetchInLog(): string | undefined {
 	const lines = savedLog();
 	for (let i = lines.length - 1; i >= 0; i--) {
 		const get = /read board: pcb_PrimitivePoured\.get \d+\/\d+ \((.+)\)…$/.exec(lines[i]);

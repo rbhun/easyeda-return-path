@@ -212,14 +212,14 @@ test('computed pour fills are fetched one at a time; a fill whose fetch hung is 
 	}
 });
 
-test('a saved log from an older build that ends in a pour-fill fetch skips that fill', async () => {
+test('a saved log from an older build that ends in a pour-fill fetch skips that fill, also with its marker still set', async () => {
 	const ids = await install({}).eda.pcb_PrimitivePoured.getAllPrimitiveId();
 	const storage = new Map<string, unknown>([['log', [
 		`2026-11-26 01:02:19.100 INFO  read board: pcb_PrimitivePoured.get 1/3 (${ids[0]})…`,
 		`2026-11-26 01:02:19.103 INFO  read board: poured ${ids[0]}: pour -, layer ?, 1 fill regions, 8 path values, 3 ms`,
 		`2026-11-26 01:02:19.104 INFO  read board: pcb_PrimitivePoured.get 2/3 (${ids[1]})…`,
 		'2026-11-26 01:03:40.000 INFO  Show for Selected Net: GND (v0.1.4)',
-	].join('\n')]]);
+	].join('\n')], ['fetchingPouredSince', '2026-11-26T00:09:10.906Z']]);
 	const mock = install({ storage });
 	const get = mock.eda.pcb_PrimitivePoured.get;
 	const fetched: string[] = [];
