@@ -39,7 +39,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.equal(mock.messages.length, 1);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
 	assert.match(mock.messages[0], /^CLK: 8 finding\(s\)/);
-	assert.match(mock.messages[0], /Current drawn where it flows, in the colour of the copper layer it flows in\. Forward \(the signal trace\): Top Layer yellow, Bottom Layer green, with a circle on each via it passes through\. Return: Inner1 blue, Inner2 blue; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer\. Dashed white: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
+	assert.match(mock.messages[0], /Current drawn where it flows, in the colour of the copper layer it flows in\. Forward \(the signal trace\): Top Layer yellow, Bottom Layer green, with a circle on each via it passes through\. Return: Inner1 blue, Top Layer magenta, Inner2 blue; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer\. Dashed white: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
 	assert.match(mock.messages[0], /^CLK: clock at 16 MHz\. Edges ≈ 2\.0 ns .* it acts as a transmission line/m);
 	const pick = mock.wizardPages.find(p => /^Net to check and its speed/.test(p.prompt))!;
 	assert.equal(pick.kind, 'nets', 'net and speed on one page');
@@ -54,7 +54,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.deepEqual(q.options, ['U1', 'U2', '*', '-'], 'no pin names on this board: both ICs offered, plus both and none');
 	assert.match(mock.messages[0], /Driver: U1\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
-	const expectedColors = [COLORS.gap, COLORS.hop, COLORS.signal, COLORS.signalOther, RETURN_COLORS.inner].map(c => JSON.stringify(c));
+	const expectedColors = [COLORS.gap, COLORS.hop, COLORS.signal, COLORS.signalOther, RETURN_COLORS.inner, RETURN_COLORS.top].map(c => JSON.stringify(c));
 	assert.deepEqual(colors, new Set(expectedColors), 'gap, hop, the signal and its return in one colour per copper layer each, all opaque; band edges are hidden by default');
 	assert.ok(mock.markers.every(m => (m.color as { alpha: number }).alpha === 255), 'alpha 255: opaque on a 0–1 (clipped) or a 0–255 scale');
 	assert.ok(mock.markers.every(m => ['r', 'g', 'b'].every(k => [0, 255].includes((m.color as Record<string, number>)[k]))), 'channels only 0 or 255: EasyEDA Pro 3.2 clips colours to a 0–1 scale');
@@ -177,12 +177,12 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	const hops = mock.markers.filter(m => JSON.stringify(m.color) === hopColour).length;
 	assert.ok(hops > hopsWithout, 'the two driver legs are drawn as hops');
 
-	mock.panelSend({ cmd: 'style', style: { hop: { colour: 'magenta', width: 3 } } });
+	mock.panelSend({ cmd: 'style', style: { hop: { colour: 'cyan', width: 3 } } });
 	for (let i = 0; i < 40 && mock.markers.some(m => JSON.stringify(m.color) === hopColour); i++)
 		await new Promise(r => setTimeout(r, 25));
 	assert.equal(mock.markers.filter(m => JSON.stringify(m.color) === hopColour).length, 0, 'driver legs restyled with the other hops');
-	const restyled = mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(PALETTE.magenta));
-	assert.equal(restyled.length, hops, 'no return runs in Top copper on this board, so magenta is the hops alone');
+	const restyled = mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(PALETTE.cyan));
+	assert.equal(restyled.length, hops, 'no return runs in Bottom copper on this board, so cyan is the hops alone');
 	assert.ok(restyled.every(m => m.width === 3));
 	mock.panelSend({ cmd: 'resetStyle' });
 	await new Promise(r => setTimeout(r, 50));

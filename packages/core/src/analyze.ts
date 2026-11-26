@@ -316,6 +316,8 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
 class Context {
   private readonly indexes = new Map<number, [string, EdgeGrid][]>();
   private readonly merged = new Map<string, Paths>();
+  /** Tracks, pads and vias of a net on a layer that has no pour of that net. */
+  private readonly trackOnly = new Map<string, Paths>();
   constructor(
     readonly board: Board,
     readonly refCopper: Map<number, LayerCopper>,
@@ -416,9 +418,29 @@ class Context {
     return round ? { legs: [{ layer: ref.layer, path: round.path }], vias: [], inductance: inPlane } : null;
   }
 
+  /**
+   * Copper of `net` on a layer: its pour where it has one, and otherwise the tracks, pads and vias
+   * that carry it (a ground pad tied to a via by a short trace, on a layer with no pour).
+   */
+  netCopper(layer: number, net: string): Paths {
+    const poured = this.refCopper.get(layer)?.byNet.get(net);
+    if (poured) return poured;
+    const k = `${layer}|${net}`;
+    let c = this.trackOnly.get(k);
+    if (!c) {
+      const parts: Paths = [];
+      for (const t of this.board.tracks) if (t.layer === layer && t.net === net) parts.push(...strokePath([t.a, t.b], t.width));
+      for (const p of this.board.pads) if ((p.layer === layer || p.layer === MULTI_LAYER) && p.net === net) parts.push(...p.shape);
+      for (const v of this.board.vias) if (v.net === net) parts.push(circle(v.at, v.diameter / 2));
+      c = parts.length ? union(parts) : [];
+      this.trackOnly.set(k, c);
+    }
+    return c;
+  }
+
   copperPath(layer: number, net: string, a: Pt, b: Pt): Path | null {
-    const region = this.refCopper.get(layer)?.byNet.get(net);
-    return (region && drawnGeodesic(region, a, b, this.opts.maxDetourNodes)?.path) ?? null;
+    const region = this.netCopper(layer, net);
+    return (region.length && drawnGeodesic(region, a, b, this.opts.maxDetourNodes)?.path) ?? null;
   }
 
   copper(layer: number, exclude?: string): Paths {

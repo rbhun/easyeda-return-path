@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.62] - 2026-11-26
+
+HF check: the return enters a part only through its ground pad, and stays in copper the whole way.
+
+- **Into the pad.** Where a trace ends on a part, the return is drawn through the copper into that part's pad on the reference net. A pad on another layer is reached along that layer's own copper (its ground trace, where the layer has no pour) to the nearest ground via, and the line on the reference layer runs into that via.
+- **Around, not across.** When the copper beside the trace does not reach the pad or via, the rest of the line is the path through the copper, around the trace or the gap that is in the way. Where the copper does not connect, the line stops. Nothing is drawn across the air.
+- A ground pad or via the line reaches is marked with a circle. Dashed hops remain only where the current goes through a part: a bridging cap, a decap, or the driver's other edge.
+
 ## [0.1.61] - 2026-11-26
 
 From Balazs: on the R-Com dongle the +12V ground return from U4 swept down across the board in a big arc, though the bottom layer is one solid pour and the current should go straight back to the source.

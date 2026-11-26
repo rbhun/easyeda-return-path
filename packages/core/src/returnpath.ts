@@ -1,6 +1,7 @@
-// The high-frequency return path as drawable geometry (D7): where the image current runs on each
-// reference layer, and the hops it makes off the plane (bridging caps, return vias, decaps, and the
-// IC ground pins that close the loop at the ends of the net).
+// The high-frequency return path as drawable geometry (D7): one line per stretch of the trace, drawn
+// where the return current can actually flow. It stays in the reference copper, follows the trace, and
+// goes around a trace or a gap when the copper under the trace runs out. It changes layer only at a via
+// of that copper, and it enters a part only through that part's pad on the reference net.
 import type { ChainResult, Finding, ReturnRoute, Severity, ViaResult } from './analyze.js';
 import { isGroundNet } from './dc/rails.js';
 import { driverLoop, isPassive, type DriverLoop } from './driver.js';
@@ -213,6 +214,28 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       return true;
     };
     const draw = (layer: number, pts: Path, detour?: boolean) => traces.push({ layer, signalLayer: c.chain.layer, pts, ...(detour ? { detour } : {}) });
+    // The current keeps to the copper of the reference net. A ground pad or via the corridor missed is reached
+    // through that copper, around every other trace and every hole; where the copper does not connect, nothing is drawn.
+    const pourJoin = (a: Pt, b: Pt): boolean => {
+      if (dist(a, b) < 0.05) return true;
+      const nearNet = (p: Pt) => {
+        const direct = probe.netAt(p, ref.layer, exclude);
+        if (direct) return direct;
+        for (let r = STEP; r <= 0.8 + 1e-9; r += STEP)
+          for (let i = 0; i < 8; i++) {
+            const q = add(p, mul({ x: Math.cos((i * Math.PI) / 4), y: Math.sin((i * Math.PI) / 4) }, r));
+            const n = probe.netAt(q, ref.layer, exclude);
+            if (n) return n;
+          }
+        return null;
+      };
+      const netName = nearNet(a) ?? nearNet(b);
+      if (!netName) return false;
+      const path = probe.copperPath(ref.layer, netName, a, b);
+      if (!path || path.length < 2 || dist(path[0], a) > 0.8 || dist(path[path.length - 1], b) > 0.8) return false;
+      draw(ref.layer, path, true);
+      return true;
+    };
     const solid = (q: Pt) => inCopper(q) && [0, 1, 2, 3].every((k) => inCopper(add(q, mul({ x: Math.cos((k * Math.PI) / 2), y: Math.sin((k * Math.PI) / 2) }, STEP))));
     const copperNear = (p: Pt): Pt | null => {
       const k = `${ref.layer}|${ptKey(p)}`;
@@ -232,9 +255,9 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
     const pinAnchor = (pin: Pad, from: Pt): Anchor | null => {
       if (pin.layer === ref.layer || pin.layer === MULTI_LAYER) return { at: pin.at };
       const stops = [...board.vias.filter((v) => v.net === pin.net).map((v) => v.at), ...board.pads.filter((p) => p.net === pin.net && p.layer === MULTI_LAYER).map((p) => p.at)]
-        .filter((v) => dist(v, pin.at) <= PIN_VIA_REACH && solid(v))
+        .filter((v) => dist(v, pin.at) <= PIN_VIA_REACH && (solid(v) || probe.netAt(v, ref.layer, exclude) === pin.net))
         .sort((u, v) => dist(from, u) + dist(u, pin.at) - (dist(from, v) + dist(v, pin.at)))
-        .slice(0, 3);
+        .slice(0, 4);
       for (const v of stops) {
         const path = probe.copperPath(pin.layer, pin.net, v, pin.at);
         if (path) return { at: v, leg: { layer: pin.layer, path, pin: pin.at } };
@@ -248,8 +271,7 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       if (viaPin) return viaPin;
       if (pin) missed.add(ptKey(pin.at));
       const change = changeVia(p, c.chain.layer) ?? cutViaAt.get(ptKey(p));
-      if (change && solid(change)) return { at: change };
-      if (change) missed.add(ptKey(change));
+      if (change) return { at: change };
       const near = copperNear(p);
       return near && { at: near };
     };
@@ -299,18 +321,32 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
           from,
           to: until,
         });
-      let flow = yield* flowFrom(end, to);
-      // An anchor the copper near the trace does not reach is left to its hop: the return is drawn under the trace alone.
-      if (!flow && end && anchors.has(ptKey(end))) end = null;
-      if (!flow && (!end || (to && anchors.has(ptKey(to))))) flow = yield* flowFrom(end, null);
-      if (!flow && end) flow = yield* flowFrom(null, null);
+      const fromAnchor = end;
+      let flow = yield* flowFrom(fromAnchor, to);
+      const take = (pts: Path) => {
+        const pulled = straighten(pts);
+        if (pulled.slice(1).some((q, i) => dist(q, pulled[i]) > 0.01)) draw(ref.layer, pulled);
+        got.add(ptKey(pts[0]));
+        got.add(ptKey(pts[pts.length - 1]));
+      };
       if (flow && flow.length > 1) {
         end = null;
-        const pulled = straighten(flow);
-        if (pulled.slice(1).some((p, i) => dist(p, pulled[i]) > 0.01)) draw(ref.layer, pulled);
-        got.add(ptKey(flow[0]));
+        take(flow);
         end = flow[flow.length - 1];
-        got.add(ptKey(end));
+        return;
+      }
+      // The corridor beside the trace does not reach the ground pad or via. Draw the part that follows the
+      // trace, then the rest through the copper, around whatever trace or gap is in the way. No line across the air.
+      const mid = fromAnchor || to ? yield* flowFrom(null, null) : null;
+      if (mid && mid.length > 1) {
+        end = null;
+        take(mid);
+        if (fromAnchor && pourJoin(fromAnchor, mid[0])) got.add(ptKey(fromAnchor));
+        end = mid[mid.length - 1];
+        if (to && pourJoin(end, to)) {
+          got.add(ptKey(to));
+          end = to;
+        }
         return;
       }
       const k = Math.max(1, Math.ceil((s1 - s0) / STEP));
@@ -393,7 +429,15 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       };
       const head = longest(0, first - 1);
       const tail = longest(last + 1, k);
-      for (const pts of [head, ...own.map((r) => r.pts), tail]) if (pts && pts.length > 1 && dist(pts[0], pts[pts.length - 1]) >= MIN_RUN) lay(ref.layer, straighten(pts));
+      const drawn: Path[] = [];
+      for (const pts of [head, ...own.map((r) => r.pts), tail]) if (pts && pts.length > 1 && dist(pts[0], pts[pts.length - 1]) >= MIN_RUN) drawn.push(straighten(pts));
+      if (fromAnchor) end = null;
+      for (const pts of drawn) lay(ref.layer, pts);
+      if (fromAnchor && drawn.length && pourJoin(fromAnchor, drawn[0][0])) got.add(ptKey(fromAnchor));
+      if (to && end && pourJoin(end, to)) {
+        got.add(ptKey(to));
+        end = to;
+      }
     };
 
     // Pins the trace passes through close the loop there: the return of each side runs into the pin.
@@ -463,8 +507,14 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       if (t.target && t.distance !== undefined)
         jumps.push({ kind: t.kind === 'decap' ? 'decap' : 'via', from: v.via.at, to: t.target.at, label: t.target.label, distance: t.distance, severity: t.severity });
 
-  // A hop whose end the drawn return reaches is no longer a jump through the air: only its end is marked.
-  for (const j of jumps) if ((j.kind === 'pin' || j.kind === 'via') && reached.has(ptKey(j.to)) && !missed.has(ptKey(j.to))) j.from = j.to;
+  // A ground pad or via the copper return reaches is marked with a circle. One it cannot reach is not
+  // joined with a line: the current cannot cross the air, a trace or a gap to get there.
+  for (let i = jumps.length - 1; i >= 0; i--) {
+    const j = jumps[i];
+    if (j.kind !== 'pin' && j.kind !== 'via') continue;
+    if (reached.has(ptKey(j.to)) && !missed.has(ptKey(j.to))) j.from = j.to;
+    else jumps.splice(i, 1);
+  }
 
   const drivers: DriverLoop[] = [];
   for (const d of opts.drivers ?? []) {
