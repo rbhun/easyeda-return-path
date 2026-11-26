@@ -47,6 +47,28 @@ npm run demo              # CLI demo boards → packages/cli/out/
 
 Versioning: every change raises the minor version and adds an entry to [CHANGELOG.md](CHANGELOG.md); `npm run check:version` (also run in CI) checks it.
 
+## Run files and the sync worker
+
+The extension can write a `.log` and a `.results.json` for every analysis (see the extension README). `npm run sync` (`scripts/agent-sync.mjs`) runs on the machine with EasyEDA and connects these files to a cloud agent. It needs Node ≥ 20 and push access to `origin`.
+
+1. In EasyEDA Pro (desktop), allow **External Interaction** for the extension. Then use **Return Path → Set Run Folder...** and pick `agent-runs/` in this clone. Git ignores that folder.
+2. Run `npm run sync` in this clone, or `npm run sync -- --branch <pull request branch>` to test an agent's change.
+
+Every 30 s (`--interval`), the worker does three things:
+
+- **Pull:** it fast-forwards the branch. It never pulls over local changes in tracked files. When code arrived, it rebuilds (`npm ci` when a `package.json` changed) and prints the `.eext` to import.
+- **Collect:** it copies new run files from `agent-runs/` (or `--inbox <dir>`, repeatable).
+- **Push:** it pushes them to the orphan branch `agent-runs`.
+
+`--once`, `--no-pull`, `--no-build` and `--no-push` limit a cycle. Agents read the runs with:
+
+```bash
+git fetch origin agent-runs
+git show origin/agent-runs:LATEST                       # newest run, e.g. return-path_20261126-101500_ab12cd34
+git show "origin/agent-runs:runs/$(git show origin/agent-runs:LATEST).results.json"
+git show "origin/agent-runs:runs/$(git show origin/agent-runs:LATEST).log"
+```
+
 ## Status
 
 Early development. The geometry is validated on synthetic boards only. The first run inside

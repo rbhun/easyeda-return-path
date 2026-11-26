@@ -2,6 +2,23 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.27] - 2026-11-26
+
+Run files for the agent, so a cloud agent can read what a run on your machine did without screenshots or pasted logs.
+
+- **Run files:** every Show for Selected Net, DC Return Current and Rerun Last Analysis writes two files named `return-path_<YYYYMMDD-HHMMSS>_<id>`:
+  - **`.log`:** the log lines of that run alone.
+  - **`.results.json`:** what the run found. It has the schema `returnpath-run/v1` and holds the version, command, status (`ok`, `cancelled`, `stopped` or `error`, with message and stack), net, board sizes, and the final report lines.
+    - High-frequency runs add the driver, the analysis stats and every finding with its position, plus the marker count and the return layers.
+    - DC runs add the rail, ground, source, loads, the grid, and per net the drop, bottleneck, unreached loads and solver figures.
+  - A DC hand-off from Show for Selected Net stays one run.
+  - Like the log file, the run files need **Allow External Interaction**. Without it, the run logs "run files not written" and nothing else changes.
+- **Return Path → Set Run Folder...:** picks the folder for the run files. The default is `ReturnPath/runs` in the EasyEDA documents folder. Point it at `agent-runs/` in your clone of this repository so the sync worker picks the files up.
+- **Sync worker, `npm run sync`** (`scripts/agent-sync.mjs`): runs on the machine with EasyEDA. Every 30 s it does three things:
+  - **Pull:** it fast-forwards the branch it follows (`--branch <name>` to test a pull request). It skips the pull while tracked files have local changes. When code arrives, it runs `npm ci` if a `package.json` changed and `npm run build:extension`, then prints the `.eext` to import.
+  - **Collect:** it copies new run files from `agent-runs/`.
+  - **Push:** it pushes them to the orphan branch `agent-runs`, through a separate worktree in `.agent-runs-branch/`. `LATEST` on that branch names the newest run.
+
 ## [0.1.26] - 2026-11-26
 
 Numbered above 0.1.25, which the HF fix takes (#8 takes 0.1.24).

@@ -106,7 +106,9 @@ const stamp = () => {
 export function log(message: string, level: LogLevel = 'info'): void {
 	const line = `${PREFIX} ${message}`;
 	const b = buffer();
-	b.push(`${stamp()} ${level.toUpperCase().padEnd(5)} ${message}`);
+	const stamped = `${stamp()} ${level.toUpperCase().padEnd(5)} ${message}`;
+	b.push(stamped);
+	currentRun?.lines.push(stamped);
 	if (b.length > MAX_LINES)
 		b.splice(0, b.length - MAX_LINES);
 	dirty = true;
@@ -213,6 +215,141 @@ export function savedLog(): string[] {
 export async function saveLogAs(): Promise<void> {
 	await checkpoint();
 	await api().sys_FileSystem?.saveFile?.(new Blob([`${buffer().join('\n')}\n`], { type: 'text/plain' }), LOG_FILE);
+}
+
+// Run files: each analysis also writes `<base>.log` (its own log lines) and `<base>.results.json`
+// (what it found) to the run folder, named `return-path_<YYYYMMDD-HHMMSS>_<id>` so they sort by time
+// and pair up. scripts/agent-sync.mjs ships them to the agent-runs branch. Needs the same
+// "External Interaction" permission as the log file.
+
+const RUN_FOLDER_KEY = 'runFolder';
+
+export type RunStatus = 'ok' | 'cancelled' | 'stopped' | 'error';
+
+interface RunRecord {
+	base: string;
+	command: string;
+	startedAt: Date;
+	t0: number;
+	lines: string[];
+	data: Record<string, unknown>;
+	status: RunStatus;
+	error?: { message: string; stack?: string };
+	depth: number;
+}
+
+let currentRun: RunRecord | undefined;
+
+const runBase = (d: Date) => {
+	const p = (n: number) => String(n).padStart(2, '0');
+	const id = Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+	return `return-path_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${id}`;
+};
+
+/** Starts collecting a run; a run started inside another one (e.g. the DC hand-off) joins the outer run. */
+export function beginRun(command: string): void {
+	if (currentRun) {
+		currentRun.depth++;
+		return;
+	}
+	const startedAt = new Date();
+	currentRun = { base: runBase(startedAt), command, startedAt, t0: now(), lines: [], data: {}, status: 'ok', depth: 0 };
+}
+
+/** Adds a top-level field to the running run's results file. */
+export function recordResult(key: string, value: unknown): void {
+	if (currentRun)
+		currentRun.data[key] = value;
+}
+
+function failRun(status: RunStatus, message: string, stack?: string): void {
+	if (!currentRun)
+		return;
+	currentRun.status = status;
+	currentRun.error = { message, stack };
+}
+
+/** The folder chosen with Set Run Folder..., if any. */
+export function chosenRunFolder(): string | undefined {
+	const v = readStored(RUN_FOLDER_KEY);
+	return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
+
+export async function setRunFolder(folder: string | undefined): Promise<void> {
+	await writeStored(RUN_FOLDER_KEY, folder ?? '');
+}
+
+/** The chosen run folder, else `ReturnPath/runs` in the EasyEDA documents folder; null without file access. */
+export async function runFolder(): Promise<string | null> {
+	const fs = api().sys_FileSystem;
+	if (!fs?.saveFileToFileSystem)
+		return null;
+	const chosen = chosenRunFolder();
+	if (chosen)
+		return chosen.replace(/[/\\]+$/, '');
+	if (!fs.getEdaPath)
+		return null;
+	try {
+		const base = await withTimeout(fs.getEdaPath(), saveTimeouts.ms, 'sys_FileSystem.getEdaPath');
+		if (!base)
+			return null;
+		const sep = base.includes('\\') ? '\\' : '/';
+		return `${base}${sep}ReturnPath${sep}runs`;
+	}
+	catch {
+		return null;
+	}
+}
+
+/** Ends the run and writes its two files; returns the results path, or null when they could not be written. */
+export async function endRun(): Promise<string | null> {
+	const run = currentRun;
+	if (!run)
+		return null;
+	if (run.depth > 0) {
+		run.depth--;
+		return null;
+	}
+	const finishedAt = new Date();
+	log(`${run.command}: run ${run.base} ${run.status} in ${Math.round(now() - run.t0)} ms`);
+	currentRun = undefined;
+	const results = {
+		schema: 'returnpath-run/v1',
+		version: extensionConfig.version,
+		command: run.command,
+		status: run.status,
+		startedAt: run.startedAt.toISOString(),
+		finishedAt: finishedAt.toISOString(),
+		durationMs: finishedAt.getTime() - run.startedAt.getTime(),
+		...(run.error ? { error: run.error } : {}),
+		...run.data,
+	};
+	const dir = await runFolder();
+	if (!dir) {
+		log(`run files not written: allow "External Interaction" for this extension (desktop client) to get them`, 'warn');
+		return null;
+	}
+	const fs = api().sys_FileSystem!;
+	const sep = dir.includes('\\') && !dir.includes('/') ? '\\' : '/';
+	try {
+		await withTimeout(fs.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
+		const write = async (name: string, text: string, type: string) => {
+			const ok = await withTimeout(fs.saveFileToFileSystem!(`${dir}${sep}${name}`, new Blob([text], { type })), saveTimeouts.ms, 'sys_FileSystem.saveFileToFileSystem');
+			if (!ok)
+				throw new Error(`could not write ${dir}${sep}${name}`);
+		};
+		await write(`${run.base}.log`, `${run.lines.join('\n')}\n`, 'text/plain');
+		await write(`${run.base}.results.json`, `${JSON.stringify(results, null, 2)}\n`, 'application/json');
+		log(`run files written: ${dir}${sep}${run.base}.log, .results.json`);
+		return `${dir}${sep}${run.base}.results.json`;
+	}
+	catch (e) {
+		log(`run files not written to ${dir}: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+		return null;
+	}
+	finally {
+		await checkpoint();
+	}
 }
 
 export function logStartup(): void {
@@ -354,6 +491,7 @@ export async function guarded(title: string, fn: () => Promise<void>): Promise<v
 	catch (e) {
 		if (e instanceof AnalysisAborted) {
 			log(`${title}: ${e.reason}: ${e.message}`, 'warn');
+			failRun(e.reason === 'cancelled' ? 'cancelled' : 'stopped', `${e.reason}: ${e.message}`);
 			if (e.reason === 'cancelled')
 				toast(e.message);
 			else
@@ -362,6 +500,7 @@ export async function guarded(title: string, fn: () => Promise<void>): Promise<v
 		}
 		const err = e instanceof Error ? e : new Error(String(e));
 		log(`${title}: error: ${err.message}${err.stack ? `\n${err.stack}` : ''}`, 'error');
+		failRun('error', err.message, err.stack);
 		await checkpoint();
 		eda.sys_Dialog.showInformationMessage(`${t('Error')}: ${err.message}\n\n${t('Details are in the log panel (bottom panel, shortcut S, Log tab).')}`, title);
 	}
