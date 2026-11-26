@@ -9,6 +9,8 @@
 //   coplanar     Top GND pour too, with a keepout break (x 30–31.5, y 7–16) across CLK: CLK and DATA
 //                return in the pour beside them; CLK's return detours around the break, DATA's around the slot.
 //   bottom-only  No Top pour: CLK returns in the Bottom pour 1.5 mm below and crosses the slot.
+//   half-top     Top GND pour only left of x = 30, with a GND via at its edge beside CLK: CLK returns
+//                in that pour, then drops through the via to the Bottom pour for the rest of its run.
 //
 // Usage: tsx src/synth/make-2layer-board.ts [outDir]
 
@@ -16,7 +18,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { m, packEpro, rectPoly, serialize, type FootprintPad, type Line, type Payload } from './make-board.js';
 
-export type TwoLayerVariant = 'coplanar' | 'bottom-only';
+export type TwoLayerVariant = 'coplanar' | 'bottom-only' | 'half-top';
 
 export function buildTwoLayerBoard(variant: TwoLayerVariant): { pcb: Line[]; fps: Record<string, FootprintPad[]> } {
   const L: Line[] = [];
@@ -41,11 +43,17 @@ export function buildTwoLayerBoard(variant: TwoLayerVariant): { pcb: Line[]; fps
   for (const net of ['CLK', 'DATA']) push('NET', { netType: 'Signal' }, net);
   push('POLY', { groupId: 0, netName: '', layerId: 11, width: m(0.15), path: rectPoly(0, 0, 60, 40) });
 
+  const via = (net: string, x: number, y: number, stitching = 0) =>
+    push('VIA', { groupId: 0, netName: net, ruleName: '', centerX: m(x), centerY: m(y), holeDiameter: m(0.3), viaDiameter: m(0.6), viaType: stitching });
   push('POUR', { groupId: 0, netName: 'GND', layerId: 2, width: m(0.25), name: 'Bottom GND', order: 1, path: [rectPoly(0.3, 0.3, 59.7, 39.7)], pourType: ['SOLID', 0], keepIsland: 0 });
   push('REGION', { groupId: 0, layerId: 2, width: 0, prohibitType: [7], path: [rectPoly(40, 0, 41.2, 14)], name: 'bottom slot' });
   if (variant === 'coplanar') {
     push('POUR', { groupId: 0, netName: 'GND', layerId: 1, width: m(0.25), name: 'Top GND', order: 1, path: [rectPoly(0.3, 0.3, 59.7, 39.7)], pourType: ['SOLID', 0], keepIsland: 0 });
     push('REGION', { groupId: 0, layerId: 1, width: 0, prohibitType: [7], path: [rectPoly(30, 7, 31.5, 16)], name: 'top break' });
+  }
+  if (variant === 'half-top') {
+    push('POUR', { groupId: 0, netName: 'GND', layerId: 1, width: m(0.25), name: 'Top GND', order: 1, path: [rectPoly(0.3, 0.3, 30, 39.7)], pourType: ['SOLID', 0], keepIsland: 0 });
+    via('GND', 29.5, 11.2, 1);
   }
 
   const comps: [string, string, string, number, number, Record<string, string>][] = [
@@ -65,8 +73,6 @@ export function buildTwoLayerBoard(variant: TwoLayerVariant): { pcb: Line[]; fps
     for (const [num, net] of Object.entries(nets)) push('PAD_NET', { padNum: num, padNet: net, padId: '' }, cid);
   }
 
-  const via = (net: string, x: number, y: number, stitching = 0) =>
-    push('VIA', { groupId: 0, netName: net, ruleName: '', centerX: m(x), centerY: m(y), holeDiameter: m(0.3), viaDiameter: m(0.6), viaType: stitching });
   const track = (net: string, layer: number, pts: [number, number][], w: number) => {
     for (let i = 1; i < pts.length; i++)
       push('LINE', { groupId: 0, netName: net, layerId: layer, startX: m(pts[i - 1][0]), startY: m(pts[i - 1][1]), endX: m(pts[i][0]), endY: m(pts[i][1]), width: m(w) });
@@ -121,7 +127,7 @@ export function buildTwoLayerEpro(variant: TwoLayerVariant, form: 'object' | 'ar
 if (process.argv[1]?.endsWith('make-2layer-board.ts')) {
   const out = process.argv[2] ?? 'examples';
   mkdirSync(out, { recursive: true });
-  for (const v of ['coplanar', 'bottom-only'] as const) {
+  for (const v of ['coplanar', 'bottom-only', 'half-top'] as const) {
     writeFileSync(join(out, `2layer-${v}.epro`), buildTwoLayerEpro(v));
     writeFileSync(join(out, `2layer-${v}.epcb`), serialize(buildTwoLayerBoard(v).pcb, 'object', 'PCB'));
     console.log(`wrote ${join(out, `2layer-${v}.epro`)} and .epcb`);

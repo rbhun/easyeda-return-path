@@ -32,13 +32,24 @@ function wrap(text: string, max: number): string[] {
   return out;
 }
 
+/** A long, thin board is cut into rows stacked top to bottom, so the picture keeps a readable shape. */
+export function foldRows(widthMm: number, heightMm: number): number {
+  const aspect = widthMm / Math.max(heightMm, 1e-6);
+  return aspect > 5 ? Math.max(2, Math.min(8, Math.round(Math.sqrt(aspect / 2.5)))) : 1;
+}
+
 export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): string {
-  const s = view.pxPerMm ?? 15;
   const bb = bbox(board.outline);
+  const [bw, bh] = [bb.maxX - bb.minX, bb.maxY - bb.minY];
+  const rows = foldRows(bw, bh);
+  const overlap = rows > 1 ? Math.min(3, bw / rows / 10) : 0;
+  const rowMm = bw / rows + 2 * overlap;
+  const s = view.pxPerMm ?? (rows > 1 ? Math.min(30, 1800 / rowMm) : 15);
   const margin = 24;
   const top = 56;
-  const W = (bb.maxX - bb.minX) * s + 2 * margin;
-  const H = Math.max((bb.maxY - bb.minY) * s + top + margin, 640);
+  const rowGap = 48;
+  const W = rowMm * s + 2 * margin;
+  const H = Math.max(rows * bh * s + (rows - 1) * rowGap + top + margin, 640);
   const P = (p: Pt) => [margin + (p.x - bb.minX) * s, top + (bb.maxY - p.y) * s] as const;
   const d = (paths: Paths, close = true) =>
     paths
@@ -48,7 +59,7 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
   const line = (path: Path) => d([path], false);
   const layerName = (id: number) => board.stackup.copper.find((l) => l.id === id)?.name ?? `L${id}`;
   const out: string[] = [];
-  const el = (s: string) => out.push(s);
+  const el = (...s: string[]) => out.push(...s);
 
   const nets = [...new Set([...an.refCopper.values()].flatMap((lc) => [...lc.byNet.keys()]))].sort((a, b) => (a === 'GND' ? -1 : b === 'GND' ? 1 : a.localeCompare(b)));
   const netColor = (n: string) => NET_COLORS[nets.indexOf(n) % NET_COLORS.length];
@@ -58,10 +69,13 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
   const chains = an.chains.filter((c) => view.refLayer === undefined || c.ref?.layer === view.refLayer);
   const refLayers = view.refLayer !== undefined ? [view.refLayer] : [...new Set(an.chains.map((c) => c.ref?.layer).filter((x): x is number => x !== undefined))];
 
-  el(`<svg xmlns="http://www.w3.org/2000/svg" width="${f(W + PANEL_W)}" height="${f(H)}" viewBox="0 0 ${f(W + PANEL_W)} ${f(H)}" font-family="${FONT}">`);
+  const header = (h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${f(W + PANEL_W)}" height="${f(h)}" viewBox="0 0 ${f(W + PANEL_W)} ${f(h)}" font-family="${FONT}">`;
+  const headerAt = out.length;
+  el(header(H));
   el(`<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#ef4444" fill-opacity="0.25"/><line x1="0" y1="0" x2="0" y2="6" stroke="#ef4444" stroke-width="2.5"/></pattern></defs>`);
   el(`<rect width="100%" height="100%" fill="#0b0f16"/>`);
   el(`<text x="${margin}" y="34" fill="#e5e7eb" font-size="20" font-weight="bold">${esc(view.title)}</text>`);
+  const boardStart = out.length;
   el(`<path d="${d(board.outline)}" fill="#151b26" stroke="#94a3b8" stroke-width="1.5"/>`);
 
   // Reference copper.
@@ -105,7 +119,7 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
   // Return path: under (or beside) the trace on its reference layer, dashed where it hops off the plane.
   for (const t of an.returnPath.traces) {
     if (view.refLayer !== undefined && t.layer !== view.refLayer) continue;
-    el(`<path d="${line(t.pts)}" fill="none" stroke="${RETURN_COLOR}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" opacity="0.95"/>`);
+    el(`<path d="${line(t.pts)}" fill="none" stroke="${RETURN_COLOR}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-opacity="0.95"/>`);
   }
   for (const j of an.returnPath.jumps) {
     const [x1, y1] = P(j.from);
@@ -148,10 +162,26 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
     el(`<text x="${f(x - 14)}" y="${f(y - 10)}" fill="#0b0f16" font-size="11" font-weight="bold" text-anchor="middle">${i + 1}</text>`);
   });
 
+  if (rows > 1) {
+    // Everything drawn so far is the board in one long strip; show it as stacked, clipped rows.
+    const strip = out.splice(boardStart);
+    for (let i = 0; i < rows; i++) {
+      const x0 = (i * bw) / rows - overlap;
+      el(`<defs><clipPath id="row${i}" clipPathUnits="userSpaceOnUse"><rect x="${f(margin + x0 * s)}" y="${f(top - 30)}" width="${f(rowMm * s)}" height="${f(bh * s + 50)}"/></clipPath></defs>`);
+    }
+    for (let i = 0; i < rows; i++) {
+      const x0 = (i * bw) / rows - overlap;
+      const dy = i * (bh * s + rowGap);
+      el(`<g transform="translate(${f(-x0 * s)} ${f(dy)})"><g clip-path="url(#row${i})">`, ...strip, '</g></g>');
+      el(`<text x="${margin}" y="${f(top + dy - 8)}" fill="#64748b" font-size="11">x ${f(bb.minX + Math.max(0, x0))} … ${f(bb.minX + Math.min(bw, x0 + rowMm))} mm${i ? ' (continued)' : ''}</text>`);
+    }
+  }
+
   // Side panel.
   const px = W + 8;
   let py = 34;
-  el(`<rect x="${f(W)}" y="0" width="${PANEL_W}" height="${f(H)}" fill="#111827"/>`);
+  const panelAt = out.length;
+  el('');
   el(`<text x="${px + 8}" y="${py}" fill="#e5e7eb" font-size="16" font-weight="bold">Net ${esc(an.net)}: findings</text>`);
   py += 26;
   shown.forEach((fd, i) => {
@@ -222,6 +252,9 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
     }
   });
 
+  const fullH = Math.max(H, py + margin);
+  out[headerAt] = header(fullH);
+  out[panelAt] = `<rect x="${f(W)}" y="0" width="${PANEL_W}" height="${f(fullH)}" fill="#111827"/>`;
   el('</svg>');
   return out.join('\n');
 

@@ -119,6 +119,13 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
     push(s, L);
   }
 
+  // Where the return moves between a pour beside the trace and the plane below, it goes through a via.
+  for (const c of chains)
+    if (c.chain.cut?.[0] && c.chain.cutVia) {
+      const v = c.chain.cutVia;
+      jumps.push({ kind: 'via', from: c.chain.pts[0], to: v.at, label: `${v.net} via`, distance: dist(c.chain.pts[0], v.at), severity: 'ok' });
+    }
+
   for (const v of vias)
     for (const t of v.transitions)
       if (t.target && t.distance !== undefined)

@@ -103,6 +103,10 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<v
 	if (!scope.ok) {
 		recordResult('outcome', `not a signal net (${scope.kind})`);
 		log(`${net}: not a signal net (${scope.kind}); high-frequency check skipped`, 'warn');
+		if (scope.kind === 'bias') {
+			eda.sys_Dialog.showInformationMessage(scope.message!, title);
+			return;
+		}
 		if (await confirm(scope.message!, title, t('Open DC view')))
 			await runDcReturn(ask, scope.kind === 'power' ? net : undefined, scope.kind === 'power');
 		return;
