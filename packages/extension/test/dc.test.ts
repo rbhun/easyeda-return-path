@@ -33,7 +33,7 @@ async function run(selected: string, answer?: (d: DialogCall) => unknown) {
 test('wizard step 1 with the guessed defaults, then the DC overlay', async () => {
 	const mock = await run('3V3');
 	const kinds = mock.dialogs.map(d => d.kind);
-	assert.deepEqual(kinds, ['select', 'multi', 'input'], 'a selected rail skips steps 1 and 2: source, loads, currents (one ground: no pairing dialog)');
+	assert.deepEqual(kinds, ['select', 'multi', 'currents'], 'a selected rail skips steps 1 and 2: source, loads, currents (one ground: no pairing dialog)');
 	assert.ok(mock.logs.some(l => /rail 3V3 taken from the selection; steps 1 and 2 skipped/.test(l.message)));
 	const u1 = board.components.find(c => c.designator === 'U1')!.id;
 	assert.equal(mock.dialogs[0].dflt, u1, 'U1 guessed as the source');
@@ -41,13 +41,14 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.match(mock.dialogs[0].prompt, /Other candidate sources are left out/);
 	const des = (id: string) => board.components.find(c => c.id === id)!.designator;
 	assert.deepEqual((mock.dialogs[1].dflt as string[]).map(des), ['U2', 'U3', 'J2']);
+	assert.equal(mock.dialogs[2].dflt, 'U2=100mA, U3=100mA, J2=100mA', 'every load prefilled with 100 mA');
 
 	assert.ok(mock.iframes.has('returnPathPanel'), 'an analysis opens the panel');
 	assert.equal(mock.messages.length, 1);
 	const msg = mock.messages[0];
 	assert.match(msg, /^3V3 \/ GND: source U1, loads U2, U3, J2\./);
-	assert.match(msg, /3V3: drop \d+\.\d+ mV\/A/);
-	assert.match(msg, /GND: drop \d+\.\d+ mV\/A/);
+	assert.match(msg, /3V3: drop \d+\.\d+ mV,/);
+	assert.match(msg, /GND: drop \d+\.\d+ mV,/);
 	assert.doesNotMatch(msg, /Contours drawn/);
 	assert.match(msg, /Streamlines: 3V3 supply yellow; GND return magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
@@ -68,7 +69,7 @@ test('wizard: user picks another source and gives currents', async () => {
 	const mock = await run('', (d) => {
 		if (d.kind === 'select' && /active source/.test(d.prompt))
 			return j2;
-		if (d.kind === 'input')
+		if (d.kind === 'currents')
 			return 'U2=150mA, U3=0.02';
 		return d.dflt;
 	});
@@ -90,7 +91,7 @@ test('wizard: with several grounds, the ground is asked once, for the rail being
 	const mock = createMockEda({ ...board, vias: [...board.vias, { ...board.vias[0], id: 'pgnd-via', net: 'VBUS_PGND' }] }, '3V3');
 	(globalThis as Record<string, unknown>).eda = mock.eda;
 	await ext.showDcReturn();
-	assert.deepEqual(mock.dialogs.map(d => d.kind), ['select', 'select', 'multi', 'input']);
+	assert.deepEqual(mock.dialogs.map(d => d.kind), ['select', 'select', 'multi', 'currents']);
 	assert.match(mock.dialogs[0].prompt, /Step 3\/5: ground that carries the return current of 3V3/);
 	assert.equal(mock.dialogs[0].dflt, 'GND');
 	assert.ok(mock.markers.length > 0);
@@ -156,7 +157,7 @@ test('hide/show keeps the overlay; rerun repeats the last DC analysis on the cha
 	await ext.toggleReturnPath();
 	assert.match(fresh.toasts.at(-1)!, /No overlay to show/);
 
-	const first = createMockEda(board, '3V3', [], d => (d.kind === 'input' ? 'U2=150mA, U3=0.02' : d.dflt), { storage });
+	const first = createMockEda(board, '3V3', [], d => (d.kind === 'currents' ? 'U2=150mA, U3=0.02' : d.dflt), { storage });
 	(globalThis as Record<string, unknown>).eda = first.eda;
 	await ext.showDcReturn();
 	const drawn = first.markers.map(m => JSON.stringify(m));
@@ -179,6 +180,22 @@ test('hide/show keeps the overlay; rerun repeats the last DC analysis on the cha
 	await ext.clearReturnPath();
 	await ext.toggleReturnPath();
 	assert.equal(after.markers.length, 0, 'Clear Overlay forgets it');
+});
+
+test('currents page: prefilled from the last run on the same rail; clearing every field gives the per-amp view', async () => {
+	const storage = new Map<string, unknown>();
+	const first = createMockEda(board, '3V3', [], d => (d.kind === 'currents' ? 'U2=150mA, U3=0.02' : d.dflt), { storage });
+	(globalThis as Record<string, unknown>).eda = first.eda;
+	await ext.showDcReturn();
+
+	const again = createMockEda(board, '3V3', [], d => (d.kind === 'currents' ? '' : d.dflt), { storage });
+	(globalThis as Record<string, unknown>).eda = again.eda;
+	await ext.showDcReturn();
+	const page = again.wizardPages.find(p => p.kind === 'currents')!;
+	assert.deepEqual(page.options.map(o => o.value), ['U2', 'U3', 'J2'], 'one field per ticked load, by designator');
+	assert.deepEqual(page.value, ['150mA', '20mA', '100mA'], 'the last run\'s currents, 100 mA for a load it had none for');
+	assert.match(again.messages.at(-1)!, /per amp/);
+	await ext.clearReturnPath();
 });
 
 test('Show for Selected Net on a switching node (a net on an inductor) offers the DC view for that net without asking for the rail', async () => {
@@ -228,7 +245,7 @@ test('panel: opens without blocking, runs DC from a button, shows the result the
 	assert.match(done.result.lines[0], /^3V3 \/ GND: source U1/);
 	assert.equal(done.overlay, 'shown');
 	assert.match(done.lastRun, /^DC 3V3 \/ GND, source U1/);
-	assert.equal(mock.messages.length, 0, 'no modal result dialog while the panel is open');
+	assert.equal(mock.infoDialogs.length, 0, 'no modal result dialog');
 	assert.match(mock.toasts.at(-1)!, /result is in the Return Path panel/);
 
 	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 255 });
@@ -256,7 +273,8 @@ test('panel: opens without blocking, runs DC from a button, shows the result the
 	mock.iframes.delete('returnPathPanel');
 	await ext.showDcReturn();
 	assert.ok(!mock.iframes.has('returnPathPanel'), 'closed by the user: an analysis does not reopen it');
-	assert.equal(mock.messages.length, 1, 'and the result is shown in a dialog');
+	assert.equal(mock.infoDialogs.length, 0, 'and no result dialog either');
+	assert.ok(mock.toasts.some(t => /open the Return Path panel to see the result/.test(t)), 'a toast points to the panel');
 });
 
 test('a ground with no copper path from any load is reported in words and gets no contours', async () => {
@@ -273,7 +291,7 @@ test('a ground with no copper path from any load is reported in words and gets n
 
 test('every wizard question is asked in one wizard window: one page layout, select-all for loads, cancel stops the wizard', async () => {
 	const mock = await run('3V3');
-	assert.deepEqual(mock.wizardPages.map(p => p.kind), ['select', 'multi', 'input'], 'source, loads and currents all in the window');
+	assert.deepEqual(mock.wizardPages.map(p => p.kind), ['select', 'multi', 'currents'], 'source, loads and currents all in the window');
 	assert.equal(mock.wizard.opens, 1, 'the window stays open from the first question to the last');
 	assert.ok(!mock.iframes.has('returnPathWizard'), 'and closes before the analysis runs');
 	const q = mock.wizardPages.find(p => /Step 5\/5/.test(p.prompt))!;
@@ -325,7 +343,7 @@ test('the menu has only Open Panel, Show Saved Log and About; everything else ru
 	for (const i of items)
 		assert.equal(typeof (ext as Record<string, unknown>)[i.registerFn], 'function');
 	const html = await import('node:fs').then(fs => fs.readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8'));
-	for (const id of ['hf', 'dc', 'rerun', 'cancel', 'toggle', 'clear', 'log', 'runFolder'])
+	for (const id of ['hf', 'dc', 'trace', 'rerun', 'toggle', 'clear', 'log', 'runFolder'])
 		assert.ok(html.includes(`id="${id}"`), `the panel has the ${id} button`);
 });
 

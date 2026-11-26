@@ -55,7 +55,7 @@ test('two instances: a menu run in one shows in the panel opened by the other, a
 	assert.equal(states().at(-1).result, undefined);
 
 	await menuSide.showDcReturn();
-	assert.equal(mock.messages.length, 0, 'the panel is open and connected: no result dialog');
+	assert.equal(mock.infoDialogs.length, 0, 'no result dialog');
 	assert.match(mock.toasts.at(-1)!, /result is in the Return Path panel/);
 	assert.match(states().at(-1).result.lines[0], /^3V3 \/ GND: source U1/);
 	assert.match(states().at(-1).lastRun, /^DC 3V3 \/ GND, source U1/);
@@ -131,7 +131,7 @@ test('an instance that ran an analysis and is gone: the panel opened later shows
 	const mock = createMockEda(dcBoard(), '3V3');
 	const menu = shortLived(mock.eda);
 	await menu.ext.showDcReturn();
-	assert.equal(mock.messages.length, 1, 'no page has connected yet: the result is shown in a dialog');
+	assert.equal(mock.infoDialogs.length, 0, 'no page has connected yet, and still no result dialog');
 	const drawn = mock.markers.length;
 	assert.ok(drawn > 0);
 	menu.end();
@@ -157,7 +157,7 @@ test('an instance that ran an analysis and is gone: the panel opened later shows
 	mock.panelSend({ cmd: 'rerun' });
 	await settle(() => mock.toasts.some(t => /result is in the Return Path panel/.test(t)) && !p.states.at(-1).busy);
 	assert.equal(mock.dialogs.length, dialogs, 'Rerun uses the last run of the gone instance, without the wizard');
-	assert.equal(mock.messages.length, 1, 'and its result goes to the panel');
+	assert.equal(mock.infoDialogs.length, 0, 'and its result goes to the panel');
 	p.close();
 });
 

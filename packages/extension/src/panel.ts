@@ -26,7 +26,7 @@ export const TOPIC_MAILBOX = 'returnpath.panel.mailbox';
 /** What the mailbox carries: the shared fields that outlive an instance, and the overlay drawing. */
 export interface Snapshot { from: string; fields: Stamped; overlay?: { groups: MarkerGroup[]; visible: boolean } }
 
-type RunCmd = 'hf' | 'dc' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder';
+type RunCmd = 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder';
 export type PanelCommand = { to?: string } & (
 	| { cmd: 'hello' }
 	| { cmd: RunCmd }
@@ -273,7 +273,7 @@ async function onCommand(m: PanelCommand): Promise<void> {
 		toast(t('Busy: ${1}', shared.busy));
 		return;
 	}
-	const labels: Record<string, string> = { hf: 'HF check', dc: 'DC check', rerun: 'Rerun', toggle: '', clear: '', cancel: '', log: '', runFolder: '' };
+	const labels: Record<string, string> = { hf: 'HF check', dc: 'DC check', trace: 'Selected trace', rerun: 'Rerun', toggle: '', clear: '', cancel: '', log: '', runFolder: '' };
 	const busy = labels[m.cmd] || undefined;
 	if (busy)
 		share({ busy, busyOwner: me });
@@ -389,15 +389,13 @@ export async function panelIsOpen(): Promise<boolean> {
 	}
 }
 
-/** Shows a result in the panel when it is open and its page connected, else in a dialog; the panel gets it either way. */
+/** Shows a result in the panel, opening it unless the user closed it; there is no result dialog. */
 export async function report(title: string, lines: string[]): Promise<void> {
 	share({ result: { title, lines, at: new Date().toLocaleTimeString() } });
 	publishState();
 	pushSnapshot();
-	// A panel whose page never connected (no API access in the frame) would swallow the result.
-	if (subscribed && subscribed === bus() && shared.pageConnected && await panelIsOpen()) {
-		toast(t('${1}: done; the result is in the Return Path panel.', title));
-		return;
-	}
-	eda.sys_Dialog.showInformationMessage(lines.join('\n'), title);
+	await autoOpenPanel();
+	toast(await panelIsOpen()
+		? t('${1}: done; the result is in the Return Path panel.', title)
+		: t('${1}: done; open the Return Path panel to see the result.', title));
 }

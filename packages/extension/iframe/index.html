@@ -110,7 +110,7 @@
 		</div>
 		<div class="row" style="margin-top: 6px">
 			<button id="rerun" title="Read the board again and repeat the last analysis, without the wizard">Rerun last</button>
-			<button id="cancel" title="Stop the running analysis">Cancel</button>
+			<button id="trace" title="The check that fits the selected track, via or pad: HF for a signal net, DC for a power rail. While an analysis runs, this button cancels it.">Selected trace</button>
 		</div>
 		<p id="lastRun" class="muted" style="margin: 6px 0 0"></p>
 
@@ -161,7 +161,7 @@
 					$('state').innerHTML = s.busy ? 'Running: <b></b>' : 'Overlay: <b></b>';
 					$('state').querySelector('b').textContent = s.busy || { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay];
 					['hf', 'dc', 'rerun', 'toggle', 'clear', 'log', 'runFolder'].forEach(function (id) { $(id).disabled = !!s.busy; });
-					$('cancel').disabled = !s.busy;
+					$('trace').textContent = s.busy ? 'Cancel' : 'Selected trace';
 					$('rerun').disabled = !!s.busy || !s.lastRun;
 					$('toggle').disabled = !!s.busy || s.overlay === 'none';
 					$('toggle').textContent = s.overlay === 'hidden' ? 'Show' : 'Hide';
@@ -250,9 +250,10 @@
 					send({ cmd: 'style', style: style });
 				}
 
-				['hf', 'dc', 'rerun', 'toggle', 'clear', 'cancel', 'log', 'runFolder'].forEach(function (id) {
+				['hf', 'dc', 'rerun', 'toggle', 'clear', 'log', 'runFolder'].forEach(function (id) {
 					$(id).onclick = function () { send({ cmd: id }); };
 				});
+				$('trace').onclick = function () { send({ cmd: last && last.busy ? 'cancel' : 'trace' }); };
 				$('reset').onclick = function () { send({ cmd: 'resetStyle' }); };
 
 				if (!api || !api.sys_MessageBus) {

@@ -10,9 +10,12 @@ const ring = (r: Path, origin: Pt = { x: 0, y: 0 }): unknown[] => {
 };
 const complex = (paths: Paths) => splitIslands(paths).map(island => island.map(r => ring(r)));
 
+/** What the currents page sends back when OK is pressed on its prefilled fields. */
+const currentsText = (designators: string[], values: string[]) => designators.map((d, i) => values[i] ? `${d}=${values[i]}` : '').filter(Boolean).join(', ');
+
 /** Pours on `planeLayers` are served like EasyEDA plane layers: poured copper without a pour ID, plus mode-2 fills carrying the net. */
 export interface DialogCall {
-	kind: 'select' | 'multi' | 'input' | 'confirm';
+	kind: 'select' | 'multi' | 'input' | 'confirm' | 'currents';
 	prompt: string;
 	title: string;
 	options: { value: string; displayContent: string }[];
@@ -42,7 +45,10 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const isPlane = (p: Board['pours'][number]) => planeLayers.includes(p.layer);
 
 	const markers: { shape: Record<string, unknown>; color: unknown; width?: number; zoom?: boolean }[] = [];
+	/** Information dialogs, and each new result shown in the panel (the result dialog it replaced). */
 	const messages: string[] = [];
+	let resultStamp: unknown;
+	const infoDialogs: string[] = [];
 	const logs: { message: string; type: string }[] = [];
 	const progress: { progress?: number; title?: string }[] = [];
 	const toasts: string[] = [];
@@ -68,7 +74,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			return;
 		wizardPages.push(q);
 		const options = q.options.map(o => ({ value: o.value, displayContent: o.label }));
-		const dflt = q.kind === 'select' ? q.value || undefined : q.kind === 'confirm' ? undefined : q.value;
+		const dflt = q.kind === 'select' ? q.value || undefined : q.kind === 'confirm' ? undefined : q.kind === 'currents' ? currentsText(q.options.map(o => o.value), q.value as string[]) : q.value;
 		dialogs.push({ kind: q.kind, prompt: q.prompt, options: options.map(o => o.value), dflt });
 		const v = answer({ kind: q.kind, prompt: q.prompt, title: q.title, options, dflt });
 		const reply = q.kind === 'confirm' ? { cmd: 'answer', id: q.id, value: !!v } : v === undefined ? { cmd: 'cancel', id: q.id } : { cmd: 'answer', id: q.id, value: v };
@@ -154,6 +160,11 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			},
 			publish: (topic: string, message: unknown) => {
 				published.push({ topic, message: JSON.parse(JSON.stringify(message ?? null)) });
+				const state = message as { result?: { lines: string[] }; stamps?: { result: unknown } } | null;
+				if (topic === 'returnpath.panel.state' && state?.result && state.stamps?.result !== resultStamp) {
+					resultStamp = state.stamps?.result;
+					messages.push(state.result.lines.join('\n'));
+				}
 				for (const fn of subscribers.get(topic) ?? []) fn(message);
 			},
 			push: (topic: string, message: unknown) => {
@@ -196,7 +207,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			closeIFrame: async (id: string) => iframes.delete(id),
 		},
 		sys_Dialog: {
-			showInformationMessage: (content: string) => void messages.push(content),
+			showInformationMessage: (content: string) => void (messages.push(content), infoDialogs.push(content)),
 			showConfirmationMessage: (content: string, title: string, _ok: string, _cancel: string, cb: (ok: boolean) => void) => {
 				dialogs.push({ kind: 'confirm', prompt: content, options: [], dflt: undefined });
 				cb(!!answer({ kind: 'confirm', prompt: content, title, options: [], dflt: undefined }));
@@ -288,5 +299,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, wizardPages, wizard };
+	return { eda, markers, messages, infoDialogs, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, wizardPages, wizard };
 }
