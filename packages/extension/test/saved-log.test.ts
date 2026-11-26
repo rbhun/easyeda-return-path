@@ -31,7 +31,8 @@ const boardModule = await import('../src/eda-board.ts');
 (await import('../src/panel.ts')).panelTimeouts.syncMs = 0;
 const { area, bbox } = await import('@returnpath/core');
 const { version: VERSION } = (await import('../extension.json', { with: { type: 'json' } })).default;
-runner.saveTimeouts.ms = 50;
+// Long enough that a storage write is not cut short on a busy CI runner (a dropped write loses the markers checked here).
+runner.saveTimeouts.ms = 1000;
 Object.assign(boardModule.apiTimeouts, { callMs: 200, stackupMs: 100, pinsMs: 100 });
 
 function install(host: MockHost, answer: (d: DialogCall) => unknown = d => d.dflt, board = demo, net = 'CLK') {
@@ -147,7 +148,13 @@ test('log writes that never answer are switched off and the run still finishes',
 	const mock = install({ fileSystem: 'allowed' });
 	mock.eda.sys_Storage.setExtensionUserConfig = never;
 	(mock.eda.sys_FileSystem as Record<string, unknown>).getEdaPath = never;
-	await ext.showReturnPath();
+	runner.saveTimeouts.ms = 50;
+	try {
+		await ext.showReturnPath();
+	}
+	finally {
+		runner.saveTimeouts.ms = 1000;
+	}
 	assert.equal(mock.messages.length, 1, 'results dialog');
 	const panel = mock.logs.map(l => l.message);
 	assert.ok(panel.some(m => /saved log disabled: sys_Storage.setExtensionUserConfig did not answer/.test(m)), panel.join('\n'));

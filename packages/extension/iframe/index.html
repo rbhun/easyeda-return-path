@@ -247,7 +247,7 @@
 						s.palette.forEach(function (name) {
 							var o = document.createElement('option');
 							o.value = name;
-							o.textContent = r.role === 'returnInner' && name === s.innerCycle[0] ? name + ' / ' + s.innerCycle.slice(1).join(' / ') + ' by layer' : name;
+							o.textContent = r.role === 'returnInner' && name === s.innerCycle[0] && s.innerCycle.length > 1 ? name + ' / ' + s.innerCycle.slice(1).join(' / ') + ' by layer' : name;
 							if (name === r.colour) o.selected = true;
 							sel.appendChild(o);
 						});

@@ -10,8 +10,9 @@ export interface DcDrawn {
 }
 
 /**
- * Streamlines and the bottleneck: the supply; the return in one style on the top copper layer and
- * another on the others, with a circle where it changes layer through a via.
+ * Streamlines and the bottleneck, coloured by the copper layer the current flows in: supply and return
+ * each in one style on the top copper layer and another on the others, with a circle where the return
+ * changes layer through a via.
  * Density contours are left to the CLI: as markers they crowd the view.
  */
 export async function drawDc(res: DcResult, streams: { supply: Streamline[]; ret: Streamline[] }): Promise<DcDrawn> {
@@ -21,7 +22,8 @@ export async function drawDc(res: DcResult, streams: { supply: Streamline[]; ret
 	const hops = streams.ret.flatMap(l => l.segments.slice(1).map(s => dot(s.pts[0], 0.35)));
 	const nets = [res.supply, res.ret].filter((n): n is DcNetResult => !!n && carriesCurrent(n));
 	const groups: MarkerGroup[] = [
-		{ role: 'supply', markers: lines(streams.supply, () => true) },
+		{ role: 'forwardTop', markers: lines(streams.supply, l => l === top) },
+		{ role: 'forwardOther', markers: lines(streams.supply, l => l !== top) },
 		{ role: 'returnTop', markers: lines(streams.ret, l => l === top) },
 		{ role: 'returnOther', markers: [...lines(streams.ret, l => l !== top), ...hops] },
 		{ role: 'gap', markers: nets.flatMap(n => n.bottleneck ? [dot(n.bottleneck.at, 1)] : []) },

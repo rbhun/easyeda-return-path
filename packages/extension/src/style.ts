@@ -19,29 +19,29 @@ export const PALETTE = {
 } satisfies Record<string, Rgba>;
 export type ColourName = keyof typeof PALETTE;
 
-export const ROLES = ['supply', 'signal', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'band'] as const;
+export const ROLES = ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'band'] as const;
 export type Role = typeof ROLES[number];
 
 export interface RoleStyle { colour: ColourName; width: number; visible: boolean }
 
 export const DEFAULT_STYLE: Record<Role, RoleStyle> = {
-	supply: { colour: 'yellow', width: 2, visible: true },
-	signal: { colour: 'yellow', width: 2, visible: true },
+	forwardTop: { colour: 'yellow', width: 2, visible: true },
+	forwardOther: { colour: 'green', width: 2, visible: true },
 	returnTop: { colour: 'magenta', width: 5, visible: true },
 	returnOther: { colour: 'cyan', width: 5, visible: true },
-	returnInner: { colour: 'green', width: 5, visible: true },
+	returnInner: { colour: 'blue', width: 5, visible: true },
 	hop: { colour: 'white', width: 2, visible: true },
 	gap: { colour: 'red', width: 3, visible: true },
 	band: { colour: 'white', width: 1, visible: false },
 };
 
-/** Inner layers take these in turn while returnInner keeps its default colour. */
-export const INNER_CYCLE: ColourName[] = ['green', 'blue'];
+/** Inner layers take these in turn while returnInner keeps its default colour; one, as the others mark the top and other layers. */
+export const INNER_CYCLE: ColourName[] = ['blue'];
 
 /** The analyses that draw each role; the panel lists only the roles of the last run's kind. */
 export const ROLE_USE: Record<Role, ('hf' | 'dc')[]> = {
-	supply: ['dc'],
-	signal: ['hf'],
+	forwardTop: ['hf', 'dc'],
+	forwardOther: ['hf', 'dc'],
 	returnTop: ['hf', 'dc'],
 	returnOther: ['hf', 'dc'],
 	returnInner: ['hf'],
@@ -51,11 +51,11 @@ export const ROLE_USE: Record<Role, ('hf' | 'dc')[]> = {
 };
 
 export const ROLE_LABELS: Record<Role, string> = {
-	supply: 'DC supply',
-	signal: 'Signal trace and its vias',
-	returnTop: 'Return, top layer',
-	returnOther: 'Return, other layers (bottom)',
-	returnInner: 'Return, inner layers',
+	forwardTop: 'Forward current, top layer (signal or supply, and vias)',
+	forwardOther: 'Forward current, other layers',
+	returnTop: 'Return current, top layer',
+	returnOther: 'Return current, other layers (bottom)',
+	returnInner: 'Return current, inner layers',
 	hop: 'Hops (via, decap, cap, pin)',
 	gap: 'Gaps and bottleneck',
 	band: '±3h band edges',
