@@ -3,6 +3,7 @@ import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
 import { DEFAULT_MAX_DETOUR_NODES, geodesicSteps, TOO_COMPLEX, type Detour } from './detour.js';
 import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, Polyline, strokePath, union } from './geom.js';
 import { allCopper, buildReferenceCopperSteps, vertexCount, type LayerCopper } from './refcopper.js';
+import { buildReturnPath, type ReturnPath } from './returnpath.js';
 import { EdgeGrid } from './spatial.js';
 import { MULTI_LAYER, type Board, type Component, type Path, type Paths, type Pt, type Track, type Via } from './types.js';
 
@@ -140,6 +141,7 @@ export interface Analysis {
   refCopper: Map<number, LayerCopper>;
   chains: ChainResult[];
   vias: ViaResult[];
+  returnPath: ReturnPath;
   findings: Finding[];
   stats: AnalysisStats;
 }
@@ -214,7 +216,8 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     yield { phase: 'vias', fraction: i / ownVias.length };
     vias.push(analyzeVia(ctx, via, tracks, findings));
   }
-  return { net, refCopper, chains: results, vias, findings, stats };
+  const returnPath = buildReturnPath(board, net, results, vias, (p, layer, exclude) => ctx.netAt(p, layer, exclude), findings);
+  return { net, refCopper, chains: results, vias, returnPath, findings, stats };
 }
 
 /** Per-analysis caches: spatial indexes of each layer's reference nets and merged copper. */

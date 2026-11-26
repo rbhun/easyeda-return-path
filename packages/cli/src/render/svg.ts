@@ -12,6 +12,7 @@ export interface ViewOptions {
 const SEV: Record<Severity, string> = { ok: '#22c55e', warn: '#f59e0b', error: '#ef4444' };
 const NET_COLORS = ['#3b82f6', '#f97316', '#a855f7', '#14b8a6', '#eab308'];
 const SIGNAL_COLORS = ['#fde047', '#38bdf8', '#f472b6', '#a3e635'];
+const RETURN_COLOR = '#e879f9';
 const PANEL_W = 560;
 const FONT = 'DejaVu Sans, Arial, sans-serif';
 
@@ -101,6 +102,17 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
       el(`<path d="${line(g.detour.path)}" fill="none" stroke="#fdba74" stroke-width="3" stroke-dasharray="8 4" stroke-linejoin="round"/>`);
     }
 
+  // Return path: under (or beside) the trace on its reference layer, dashed where it hops off the plane.
+  for (const t of an.returnPath.traces) {
+    if (view.refLayer !== undefined && t.layer !== view.refLayer) continue;
+    el(`<path d="${line(t.pts)}" fill="none" stroke="${RETURN_COLOR}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" opacity="0.95"/>`);
+  }
+  for (const j of an.returnPath.jumps) {
+    const [x1, y1] = P(j.from);
+    const [x2, y2] = P(j.to);
+    el(`<line x1="${f(x1)}" y1="${f(y1)}" x2="${f(x2)}" y2="${f(y2)}" stroke="${RETURN_COLOR}" stroke-width="2" stroke-dasharray="5 4"/>`);
+  }
+
   // Signal traces.
   for (const c of an.chains) {
     const dim = !chains.includes(c);
@@ -165,6 +177,8 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
     ['band', `${bandName} with reference copper${coplanar ? '' : ' (≈80% of return current)'}`],
     ['hatch', `${bandName} without reference copper`],
     ['gap', 'trace over a gap / split (no copper under centreline)'],
+    ['return', 'return current centreline on the reference layer'],
+    ['hop', 'return hop: via, decap, bridging cap or IC pin'],
     ['detour', 'geodesic return detour + added loop area'],
     ['ok', 'return via / decap within limit'],
     ['warn', 'return via / decap farther than recommended'],
@@ -175,6 +189,8 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
     if (k === 'band') el(`<rect x="${x0}" y="${py - 10}" width="22" height="12" fill="#22c55e" fill-opacity="0.35"/>`);
     else if (k === 'hatch') el(`<rect x="${x0}" y="${py - 10}" width="22" height="12" fill="url(#hatch)"/>`);
     else if (k === 'gap') el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="#ef4444" stroke-width="6"/>`);
+    else if (k === 'return') el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="${RETURN_COLOR}" stroke-width="2.5"/>`);
+    else if (k === 'hop') el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="${RETURN_COLOR}" stroke-width="2" stroke-dasharray="5 4"/>`);
     else if (k === 'detour') el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="#fb923c" stroke-width="2.5" stroke-dasharray="6 3"/>`);
     else el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="${SEV[k as Severity]}" stroke-width="2.5"/>`);
     el(`<text x="${x0 + 30}" y="${py}" fill="#cbd5e1" font-size="12">${esc(txt)}</text>`);

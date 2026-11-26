@@ -94,9 +94,12 @@ async function hfFor(net: string, ask: Ask): Promise<void> {
 	log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias`);
 	const analysis = await runSteps(analyzeNetSteps(board, net), { title, timeBudgetMs: HF_BUDGET_MS, percent: hfPercent() });
 	log(`${net}: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${+Number(v).toFixed(3)}`).join(' ')}`);
-	const drawn = await timed('draw markers', () => drawAnalysis(analysis), n => `${n} markers`);
+	const drawn = await timed('draw markers', () => drawAnalysis(analysis, board), d => `${d.markers} markers`);
 	const lines = [
-		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn)),
+		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
+		drawn.returnLayers.length
+			? t('Return path (thick) on ${1}. Dashed orange: hop through a via, decap, bridging cap or IC pin. Red: trace over a gap, or band without copper. Thin grey: ±3h band edges.', drawn.returnLayers.join(', '))
+			: t('No return path drawn: the trace has no reference copper.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
 		...board.warnings.map(w => `warning: ${w}`),
 	];
