@@ -39,7 +39,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.equal(mock.messages.length, 1);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
 	assert.match(mock.messages[0], /^CLK: 8 finding\(s\)/);
-	assert.match(mock.messages[0], /Return current on Inner1: green, Inner2: blue, drawn on the reference copper right under the trace .*Dashed yellow: hop between layers or into a part .*red over the trace: it crosses a gap, or has too little reference copper\./);
+	assert.match(mock.messages[0], /Return current on Inner1: green, Inner2: blue, drawn on the reference copper right under the trace .*Dashed yellow: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
 	assert.match(mock.messages[0], /^CLK: clock at 16 MHz\. Edges ≈ 2\.0 ns .* it acts as a transmission line/m);
 	const pick = mock.wizardPages.find(p => /^Net to check and its speed/.test(p.prompt))!;
 	assert.equal(pick.kind, 'nets', 'net and speed on one page');

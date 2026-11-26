@@ -4,7 +4,7 @@
 import type { ChainResult, Finding, Severity, ViaResult } from './analyze.js';
 import { isGroundNet } from './dc/rails.js';
 import { driverLoop, isPassive, type DriverLoop } from './driver.js';
-import { add, dist, distToPaths, dot, len, mul, Polyline, sub } from './geom.js';
+import { add, dist, distPointSeg, distToPaths, len, mul, Polyline, sub } from './geom.js';
 import { MULTI_LAYER, type Board, type Pad, type Path, type Pt } from './types.js';
 
 export interface ReturnTrace {
@@ -50,20 +50,15 @@ const unitNormal = (a: Pt, b: Pt): Pt => {
   return { x: -d.y / l, y: d.x / l };
 };
 
-/** Polyline shifted sideways by d (left of the direction of travel for d > 0), mitred at the corners. */
-export function offsetPolyline(path: Path, d: number): Path {
-  const pts = path.filter((p, i) => i === 0 || dist(p, path[i - 1]) > 1e-9);
-  if (pts.length < 2) return pts;
-  return pts.map((p, i) => {
-    const n1 = i > 0 ? unitNormal(pts[i - 1], p) : null;
-    const n2 = i < pts.length - 1 ? unitNormal(p, pts[i + 1]) : null;
-    if (!n1 || !n2) return add(p, mul((n1 ?? n2)!, d));
-    const m = add(n1, n2);
-    const l = len(m);
-    if (l < 1e-6) return add(p, mul(n1, d));
-    const u = mul(m, 1 / l);
-    return add(p, mul(u, d / Math.max(0.2, dot(u, n1))));
-  });
+/** Drops points that lie on the straight line through their neighbours. */
+function straighten(path: Path): Path {
+  const out: Path = [path[0]];
+  for (let i = 1; i < path.length - 1; i++) {
+    const [a, b, c] = [out[out.length - 1], path[i], path[i + 1]];
+    if (Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > 1e-4 * dist(a, c)) out.push(b);
+  }
+  out.push(path[path.length - 1]);
+  return out;
 }
 
 function padAt(board: Board, p: Pt, net: string, layer: number): Pad | undefined {
@@ -96,13 +91,41 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
         traces.push({ layer: ref.layer, pts: centre });
         return;
       }
-      // Coplanar return crowds the pour edges on either side of the trace, where there is pour.
+      // Coplanar return crowds the pour edges on either side of the trace, along the stretches with pour
+      // on that side within the band (a meander's pour clearance is wider than the gap elsewhere). The
+      // edge is sampled rather than offset as a polyline, which would fold back inside tight bends.
       const o = halfWidth + ref.h;
-      const probe = halfWidth + 1.5 * ref.h + 0.05;
-      const mid = line.at((s0 + s1) / 2);
-      const n = unitNormal({ x: 0, y: 0 }, line.dirAt((s0 + s1) / 2));
-      for (const side of [1, -1])
-        if (netAt(add(mid, mul(n, side * probe)), ref.layer, exclude)) traces.push({ layer: ref.layer, pts: offsetPolyline(centre, side * o) });
+      const reach = halfWidth + 4.25 * ref.h + 0.05;
+      const k = Math.max(1, Math.ceil((s1 - s0) / 0.1));
+      for (const side of [1, -1]) {
+        let run: Path = [];
+        const flush = () => {
+          if (run.length > 1 && dist(run[0], run[run.length - 1]) > 0.3) traces.push({ layer: ref.layer, pts: straighten(run) });
+          run = [];
+        };
+        for (let i = 0; i <= k; i++) {
+          const at = s0 + ((s1 - s0) * i) / k;
+          const p = line.at(at);
+          const n = unitNormal({ x: 0, y: 0 }, line.dirAt(at));
+          // Other legs of the same trace nearby: the edge point must stay clear of them, and they block the pour behind them.
+          const near: [Pt, Pt][] = [];
+          for (let j = 1; j < line.pts.length; j++)
+            if (line.cum[j] > at - 2 * reach && line.cum[j - 1] < at + 2 * reach && (line.cum[j] < at - 1e-9 || line.cum[j - 1] > at + 1e-9)) near.push([line.pts[j - 1], line.pts[j]]);
+          const q = add(p, mul(n, side * o));
+          let ok = near.every(([a, b]) => distPointSeg(q, a, b) >= 0.9 * o);
+          if (ok) {
+            ok = false;
+            for (let d = halfWidth + 0.05; d <= reach && !ok; d += 0.05) {
+              const r = add(p, mul(n, side * d));
+              if (d > 2 * halfWidth && near.some(([a, b]) => distPointSeg(r, a, b) < halfWidth)) break;
+              ok = !!netAt(r, ref.layer, exclude);
+            }
+          }
+          if (ok) run.push(q);
+          else flush();
+        }
+        flush();
+      }
     };
     let s = 0;
     for (const g of breaks) {

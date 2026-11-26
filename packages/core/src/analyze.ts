@@ -272,7 +272,7 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
   const vias: ViaResult[] = [];
   for (const [i, via] of ownVias.entries()) {
     yield { phase: 'vias', fraction: i / ownVias.length };
-    vias.push(analyzeVia(ctx, via, tracks, findings));
+    vias.push(analyzeVia(ctx, via, tracks, results, findings));
   }
   const returnPath = buildReturnPath(board, net, results, vias, (p, layer, exclude) => ctx.netAt(p, layer, exclude), findings, opts);
   return { net, refCopper, chains: results, vias, returnPath, findings, stats };
@@ -441,6 +441,9 @@ function splitByReference(ctx: Context, chain: Chain): Chain[] {
   // The return changes layer only through a via of the pour's net near the split; elsewhere the
   // shorter side takes the reference of the longer one (a coplanar gap then shows as a slot).
   const reach = Math.max(2, 2 * adjacent.h);
+  // Between two stretches with a pour beside them, the return stays in that pour rather than dropping to
+  // the plane and coming back up within a few via reaches (a meander's pour clearance, for instance).
+  merge((r, i) => !r.coplanar && r.s1 - r.s0 < 2 * reach && i > 0 && i < runs.length - 1);
   const viaAt = (i: number): Via | undefined => {
     const s = runs[i].s1;
     const co = runs[i].coplanar ? runs[i] : runs[i + 1];
@@ -692,8 +695,10 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
     });
     low = [];
   };
+  // Beside a coplanar piece shorter than the trace keepout, the keepout of the neighbouring pieces fills the band.
+  const minPiece = ref.coplanar ? Math.max(0.1, inner) : 0.1;
   for (const c of coverage) {
-    if (dist(c.a, c.b) < 0.1) continue;
+    if (dist(c.a, c.b) < minPiece) continue;
     const onSeg = (p: Pt) => distPointSeg(p, c.a, c.b) < 1e-6;
     if (c.ratio >= opts.minBandCoverage || [...gaps, ...minorGaps].some((g) => g.kind !== 'via-antipad' && (onSeg(g.a) || onSeg(g.b)))) {
       flush();
@@ -786,7 +791,7 @@ export function nearestBridge(board: Board, p: Pt, netA: string, netB: string, o
   return best;
 }
 
-function analyzeVia(ctx: Context, via: Via, netTracks: Track[], findings: Finding[]): ViaResult {
+function analyzeVia(ctx: Context, via: Via, netTracks: Track[], chains: ChainResult[], findings: Finding[]): ViaResult {
   const { board, refCopper, opts } = ctx;
   const stack = board.stackup.copper;
   const idx = (id: number) => stack.findIndex((l) => l.id === id);
@@ -796,12 +801,15 @@ function analyzeVia(ctx: Context, via: Via, netTracks: Track[], findings: Findin
     ...new Set(netTracks.filter((t) => dist(t.a, via.at) <= r || dist(t.b, via.at) <= r).map((t) => t.layer)),
   ].sort((a, b) => idx(a) - idx(b));
 
+  // The reference the chain through the via found (a coplanar pour beside it, say), else the adjacent plane.
+  const chainRef = (layer: number) =>
+    chains.find((c) => c.ref && c.chain.layer === layer && c.chain.pts.slice(1).some((p, k) => distPointSeg(via.at, c.chain.pts[k], p) <= r))?.ref ?? null;
   const transitions: ViaTransition[] = [];
   for (let i = 1; i < layers.length; i++) {
     const fromLayer = layers[i - 1];
     const toLayer = layers[i];
-    const fromRef = viaReference(ctx, fromLayer, via.net);
-    const toRef = viaReference(ctx, toLayer, via.net);
+    const fromRef = chainRef(fromLayer) ?? viaReference(ctx, fromLayer, via.net);
+    const toRef = chainRef(toLayer) ?? viaReference(ctx, toLayer, via.net);
     const look = (ref: Reference | null) =>
       ref ? nearestRefNet(refCopper.get(ref.layer)!, via.at, via.diameter / 2 + opts.clearance + (ref.coplanar ? 1 : 3 * ref.h), ref.coplanar ? via.net : undefined) : null;
     const fromNet = look(fromRef);
