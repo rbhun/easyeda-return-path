@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.70] - 2026-11-27
+
+From Balazs: the 3V3 check on 0.1.68 drew only the forward current. The ground solve did no work, and the loads were reported as not reached from the source.
+
+- **A via hole between two cell centres no longer splits the pour.** 0.1.67 refused the join whenever the line of centres crossed a hole. On a ground pour that is one hole per via, that cut nearly every cell off from its neighbours, so the return had nowhere to flow and no return line was drawn. The join is kept when copper still crosses the boundary between the two cells. A trace that covers that whole boundary still cuts the pour.
+
 ## [0.1.68] - 2026-11-26
 
 From Balazs: sink pins are also named IOVSS, DVSS and AVSS.

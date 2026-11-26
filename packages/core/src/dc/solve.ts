@@ -250,8 +250,9 @@ function* solveNetField(
     eb.push(b);
     eg.push(gv);
   };
-  // A cell stands for the copper at its centre. A trace narrower than the cell can pass between two
-  // centres and leave both inside the pour; joining those cells would short across the trace.
+  // A cell stands for the copper at its centre. A trace that covers the boundary between two cells
+  // leaves both centres inside the pour; joining them would short across the trace. A hole that
+  // only sits between the centres, with copper still crossing that boundary, does not.
   const gapX = weights.map(() => new Uint8Array(NC));
   const gapY = weights.map(() => new Uint8Array(NC));
   const gridsOf = (layerId: number): EdgeGrid[] => {
@@ -265,15 +266,20 @@ function* solveNetField(
     return out;
   };
   const copperGrids: EdgeGrid[][] = [];
-  /** Both centres lie in one net's copper, and the copper between them is cut. */
-  const gapBetween = (grids: EdgeGrid[], a: Pt, b: Pt) => {
-    let cut = false;
-    for (const grid of grids) {
-      if (!grid.contains(a) || !grid.contains(b)) continue;
-      if (!grid.crosses(a, b)) return false;
-      cut = true;
+  const inCopper = (grids: EdgeGrid[], p: Pt) => grids.some((grid) => grid.contains(p));
+  /**
+   * Both centres lie in the copper, and the copper does not meet their shared edge. Samples along
+   * that edge, not the line of centres: a via hole between the centres still leaves copper above
+   * and below it, and that copper has to conduct.
+   */
+  const gapBetween = (grids: EdgeGrid[], ca: Pt, cb: Pt, ea: Pt, eb: Pt) => {
+    if (!grids.length || !inCopper(grids, ca) || !inCopper(grids, cb)) return false;
+    const n = 8;
+    for (let s = 0; s <= n; s++) {
+      const t = s / n;
+      if (inCopper(grids, { x: ea.x + (eb.x - ea.x) * t, y: ea.y + (eb.y - ea.y) * t })) return false;
     }
-    return cut;
+    return true;
   };
   for (let li = 0; li < L; li++) {
     const w = weights[li];
@@ -285,11 +291,15 @@ function* solveNetField(
         if (!(w[c] > 0)) continue;
         const here = cellCentre(g, i, j);
         if (i + 1 < g.nx && w[c + 1] > 0) {
-          if (w[c] >= 1 && w[c + 1] >= 1 && gapBetween(grids, here, cellCentre(g, i + 1, j))) gapX[li][c] = 1;
+          const x = g.x0 + (i + 1) * g.cell;
+          const y = g.y0 + j * g.cell;
+          if (w[c] >= 1 && w[c + 1] >= 1 && gapBetween(grids, here, cellCentre(g, i + 1, j), { x, y }, { x, y: y + g.cell })) gapX[li][c] = 1;
           else edge(nodeOf[li][c], nodeOf[li][c + 1], (sheet * 2 * w[c] * w[c + 1]) / (w[c] + w[c + 1]));
         }
         if (j + 1 < g.ny && w[c + g.nx] > 0) {
-          if (w[c] >= 1 && w[c + g.nx] >= 1 && gapBetween(grids, here, cellCentre(g, i, j + 1))) gapY[li][c] = 1;
+          const y = g.y0 + (j + 1) * g.cell;
+          const x = g.x0 + i * g.cell;
+          if (w[c] >= 1 && w[c + g.nx] >= 1 && gapBetween(grids, here, cellCentre(g, i, j + 1), { x, y }, { x: x + g.cell, y })) gapY[li][c] = 1;
           else edge(nodeOf[li][c], nodeOf[li][c + g.nx], (sheet * 2 * w[c] * w[c + g.nx]) / (w[c] + w[c + g.nx]));
         }
       }

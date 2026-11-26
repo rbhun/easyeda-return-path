@@ -108,6 +108,20 @@ test('a trace narrower than a cell still cuts the pour: the line goes round it',
   }
 });
 
+test('via holes between cell centres do not split the pour when copper still crosses the cell boundary', () => {
+  const cell = 1;
+  // One hole on every line of centres, each too short to cover the shared edge. Cutting the line
+  // of centres would separate the two sides; the copper above and below each hole must still conduct.
+  const holes = Array.from({ length: 15 }, (_, k) => rect(0.5, k - 1, 0.4, 0.3));
+  const src = pad('a', 'P', 1, -2, 6, 0.4, 0.4);
+  const load = pad('b', 'P', 1, 3, 6, 0.4, 0.4);
+  const b = board(1, { pours: [pour('P', 1, difference([rect(7.5, 6, 25, 16)], holes))], pads: [src, load] });
+  const res = solveDc(b, terminalSetup(src, load, 'P'), { cell });
+  assert.deepEqual(res.supply.unconnected, []);
+  assert.ok(res.supply.iterations > 0);
+  assert.ok(res.supply.drop < 0.01, `drop ${res.supply.drop}`);
+});
+
 test('drawn lines do not join across a trace that separates them', () => {
   const cell = 0.5;
   // One cell wide, so the pour is gone there, and the two paths run within a join of each other.
