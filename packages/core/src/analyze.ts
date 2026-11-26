@@ -3,6 +3,7 @@ import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
 import { DEFAULT_MAX_DETOUR_NODES, geodesicSteps, TOO_COMPLEX, type Detour } from './detour.js';
 import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, Polyline, strokePath, union } from './geom.js';
 import { allCopper, buildReferenceCopperSteps, vertexCount, type LayerCopper } from './refcopper.js';
+import { isPassive } from './driver.js';
 import { buildReturnPath, type ReturnPath } from './returnpath.js';
 import { EdgeGrid } from './spatial.js';
 import { MULTI_LAYER, type Board, type Component, type Path, type Paths, type Pt, type Track, type Via } from './types.js';
@@ -32,6 +33,8 @@ export interface AnalyzeOptions {
   driverDecap: { good: number; warn: number };
   /** Parts that drive the net (designators); see guessDrivers. */
   drivers?: string[];
+  /** Extra return length round a gap, mm: below `ignore` the gap is not reported, below `warn` it is a warning. */
+  slotDetour: { ignore: number; warn: number };
 }
 
 export const defaultOptions: AnalyzeOptions = {
@@ -48,6 +51,7 @@ export const defaultOptions: AnalyzeOptions = {
   coplanarRatio: 0.5,
   maxCoplanarGap: 1.0,
   driverDecap: { good: 4, warn: 10 },
+  slotDetour: { ignore: 1, warn: 5 },
 };
 
 export type Severity = 'error' | 'warn' | 'ok';
@@ -64,7 +68,14 @@ export interface Chain {
   net: string;
   layer: number;
   pts: Path;
+  /** trackIds[i] is the track under pts[i] → pts[i + 1]. */
   trackIds: string[];
+  /** Set where the chain was split because the return changes between a coplanar pour and the adjacent plane. */
+  refMode?: 'coplanar' | 'plane';
+  /** Start / end of the chain is such a split, not an end of the trace. */
+  cut?: [boolean, boolean];
+  /** At a split at the start: the via that takes the return between the pour and the plane. */
+  cutVia?: Via;
 }
 
 export type GapKind = 'slot' | 'split' | 'off-reference' | 'via-antipad';
@@ -153,7 +164,7 @@ export interface Analysis {
 
 export interface HfScope {
   ok: boolean;
-  kind?: 'ground' | 'power' | 'plane';
+  kind?: 'ground' | 'power' | 'plane' | 'bias';
   message?: string;
 }
 
@@ -177,6 +188,21 @@ export function hfApplicability(board: Pick<Board, 'pours'> & Partial<Pick<Board
   const inductor = (board.components ?? []).find((c) => onNet.has(c.id) && INDUCTOR_DES.test(c.designator));
   if (inductor)
     return { ok: false, kind: 'power', message: `${net} connects to ${inductor.designator}, an inductor or ferrite bead: a supply or switching node, not a signal. ${dc}` };
+  // One active part whose only company on the net is resistors or capacitors to a rail: a bias pin
+  // (current reference, charge-pump or VCOM capacitor), not a signal travelling between parts.
+  const parts = (board.components ?? []).filter((c) => onNet.has(c.id));
+  const active = parts.filter((c) => !isPassive(c));
+  const passives = parts.filter((c) => isPassive(c));
+  const rcOnly = passives.every((c) => /^(?:R|RN|C)\d/i.test(c.designator));
+  const railOf = (c: Component) => (board.pads ?? []).filter((p) => p.componentId === c.id && p.net !== net).map((p) => p.net);
+  if (active.length === 1 && passives.length && rcOnly && passives.every((c) => railOf(c).length && railOf(c).every((n) => !!n && (isGroundNet(n) || looksLikePowerNet(n))))) {
+    const rails = [...new Set(passives.flatMap(railOf))].join(', ');
+    return {
+      ok: false,
+      kind: 'bias',
+      message: `${net} joins only ${active[0].designator} to ${passives.map((c) => c.designator).join(', ')}, tied to ${rails}: a bias or reference pin, not a signal travelling between parts, so it has no high-frequency return path to follow.`,
+    };
+  }
   const widths = (board.tracks ?? []).filter((t) => t.net === net).map((t) => t.width).sort((x, y) => x - y);
   const median = widths[Math.floor(widths.length / 2)];
   if (median >= POWER_TRACK_MM)
@@ -197,7 +223,18 @@ export function analyzeNetAsync(board: Board, net: string, options: Partial<Anal
 export function* analyzeNetSteps(board: Board, net: string, options: Partial<AnalyzeOptions> = {}): Steps<Analysis> {
   const opts = { ...defaultOptions, ...options };
   const tracks = board.tracks.filter((t) => t.net === net);
-  if (!tracks.length) throw new Error(`net "${net}" has no tracks`);
+  if (!tracks.length) {
+    const pad = board.pads.find((p) => p.net === net);
+    return {
+      net,
+      refCopper: new Map(),
+      chains: [],
+      vias: [],
+      returnPath: { traces: [], jumps: [], drivers: [] },
+      findings: [{ severity: 'warn', kind: 'no-tracks', message: `${net} has no tracks: it is not routed, or its pads are joined only by pours or touching copper, so there is no trace whose return could be followed`, at: pad?.at ?? { x: 0, y: 0 } }],
+      stats: { segments: 0, chains: 0, vias: 0, pours: board.pours.length, refVertices: 0, samples: 0, sampleStep: opts.sampleStep, coplanarChains: 0, detours: 0, detourNodes: 0, detoursTooComplex: 0 },
+    };
+  }
   if (tracks.length > opts.maxSegments)
     throw new AnalysisAborted('complexity', `Net ${net} has ${tracks.length} track segments (limit ${opts.maxSegments}). That is a power or plane-sized net, not a signal trace.`, 'start');
   yield { phase: 'reference copper', fraction: 0 };
@@ -207,11 +244,11 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     throw new AnalysisAborted('complexity', `Reference copper has ${refVertices} polygon vertices (limit ${opts.maxRefVertices}).`, 'reference copper');
   const ownVias = board.vias.filter((v) => v.net === net);
   const findings: Finding[] = [];
-  const chains = buildChains(tracks);
-  const totalLength = chains.reduce((s, c) => s + new Polyline(c.pts).length, 0);
+  const chains0 = buildChains(tracks);
+  const totalLength = chains0.reduce((s, c) => s + new Polyline(c.pts).length, 0);
   const stats: AnalysisStats = {
     segments: tracks.length,
-    chains: chains.length,
+    chains: chains0.length,
     vias: ownVias.length,
     pours: board.pours.length,
     refVertices,
@@ -223,6 +260,8 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     detoursTooComplex: 0,
   };
   const ctx = new Context(board, refCopper, opts, stats);
+  const chains = chains0.flatMap((c) => splitByReference(ctx, c));
+  stats.chains = chains.length;
   const results: ChainResult[] = [];
   for (const [i, chain] of chains.entries()) {
     yield { phase: 'chains', fraction: i / chains.length, steps: chains.length };
@@ -352,15 +391,115 @@ function coplanarGap(ctx: Context, chain: Chain, line: Polyline, halfWidth: numb
   return gaps[gaps.length >> 1];
 }
 
+/**
+ * Splits a chain where its return changes between a pour beside it (coplanar) and the plane on the
+ * adjacent layer: coplanar where same-layer copper of another net lies within coplanarRatio·h of the
+ * trace edge, the plane elsewhere. Without an adjacent plane the chain stays whole.
+ */
+function splitByReference(ctx: Context, chain: Chain): Chain[] {
+  const { board, opts } = ctx;
+  const adjacent = referenceFor(board, chain.layer, ctx.refCopper);
+  if (!adjacent || !ctx.index(chain.layer).some(([n]) => n !== chain.net)) return [chain];
+  const limit = Math.min(opts.maxCoplanarGap, opts.coplanarRatio * adjacent.h);
+  const halfWidth = (board.tracks.find((t) => t.id === chain.trackIds[0])?.width ?? 0.2) / 2;
+  const line = new Polyline(chain.pts);
+  const L = line.length;
+  const n = Math.max(1, Math.ceil(L / 0.25));
+  const besideAt = (s: number) => {
+    const p = line.at(s);
+    const nv = normal(line.dirAt(s));
+    for (let d = 0.025; d <= limit + 1e-9; d += 0.025) {
+      const o = halfWidth + d;
+      if (ctx.netAt(add(p, mul(nv, o)), chain.layer, chain.net) || ctx.netAt(add(p, mul(nv, -o)), chain.layer, chain.net)) return true;
+    }
+    return false;
+  };
+  const runs: { s0: number; s1: number; coplanar: boolean }[] = [];
+  for (let i = 0; i < n; i++) {
+    const s0 = (L * i) / n;
+    const s1 = (L * (i + 1)) / n;
+    const c = besideAt((s0 + s1) / 2);
+    if (runs.length && runs[runs.length - 1].coplanar === c) runs[runs.length - 1].s1 = s1;
+    else runs.push({ s0, s1, coplanar: c });
+  }
+  // A probe that lands in a pad clearance is not a change of reference; a short stretch of pour is not one either.
+  const merge = (short: (r: (typeof runs)[number], i: number) => boolean) => {
+    for (let i = 0; i < runs.length; i++) {
+      if (runs.length < 2 || !short(runs[i], i)) continue;
+      const into = i > 0 ? i - 1 : i + 1;
+      runs[into] = { s0: Math.min(runs[into].s0, runs[i].s0), s1: Math.max(runs[into].s1, runs[i].s1), coplanar: runs[into].coplanar };
+      runs.splice(i, 1);
+      for (let j = Math.max(0, into - 1); j < runs.length - 1; j++)
+        if (runs[j].coplanar === runs[j + 1].coplanar) runs.splice(j, 2, { s0: runs[j].s0, s1: runs[j + 1].s1, coplanar: runs[j].coplanar });
+      i = -1;
+    }
+  };
+  merge((r, i) => !r.coplanar && r.s1 - r.s0 < 0.6 && i > 0 && i < runs.length - 1);
+  merge((r) => r.coplanar && r.s1 - r.s0 < 1.0);
+  // The return changes layer only through a via of the pour's net near the split; elsewhere the
+  // shorter side takes the reference of the longer one (a coplanar gap then shows as a slot).
+  const reach = Math.max(2, 2 * adjacent.h);
+  const viaAt = (i: number): Via | undefined => {
+    const s = runs[i].s1;
+    const co = runs[i].coplanar ? runs[i] : runs[i + 1];
+    const probeS = Math.min(Math.max(s, co.s0 + 0.1), co.s1 - 0.1);
+    const p = line.at(probeS);
+    const nv = normal(line.dirAt(probeS));
+    let pourNet: string | null = null;
+    for (let d = 0.025; d <= limit + 1e-9 && !pourNet; d += 0.025)
+      pourNet = ctx.netAt(add(p, mul(nv, halfWidth + d)), chain.layer, chain.net) ?? ctx.netAt(add(p, mul(nv, -halfWidth - d)), chain.layer, chain.net);
+    const at = line.at(s);
+    return board.vias.filter((v) => v.net === pourNet && dist(v.at, at) <= reach).sort((a, b) => dist(a.at, at) - dist(b.at, at))[0];
+  };
+  const vias: (Via | undefined)[] = [];
+  for (let changed = true; changed; ) {
+    changed = false;
+    vias.length = 0;
+    for (let i = 0; i < runs.length - 1; i++) {
+      const v = viaAt(i);
+      vias.push(v);
+      if (v) continue;
+      const [a, b] = [runs[i], runs[i + 1]];
+      const keep = a.s1 - a.s0 >= b.s1 - b.s0 ? a : b;
+      runs.splice(i, 2, { s0: a.s0, s1: b.s1, coplanar: keep.coplanar });
+      for (let j = Math.max(0, i - 1); j < runs.length - 1; j++)
+        if (runs[j].coplanar === runs[j + 1].coplanar) runs.splice(j, 2, { s0: runs[j].s0, s1: runs[j + 1].s1, coplanar: runs[j].coplanar });
+      changed = true;
+      break;
+    }
+  }
+  if (runs.length === 1) return [{ ...chain, refMode: runs[0].coplanar ? 'coplanar' : 'plane' }];
+  return runs.map((r, i) => ({
+    ...sliceChain(chain, line, r.s0, r.s1),
+    refMode: r.coplanar ? 'coplanar' : 'plane',
+    cut: [i > 0, i < runs.length - 1],
+    cutVia: i > 0 ? vias[i - 1] : undefined,
+  }));
+}
+
+/** The part of a chain between arc lengths s0 and s1, keeping each piece's track id. */
+function sliceChain(chain: Chain, line: Polyline, s0: number, s1: number): Chain {
+  const pts: Path = [line.at(s0)];
+  const trackIds: string[] = [];
+  for (let i = 0; i < chain.trackIds.length; i++) {
+    const a = Math.max(s0, line.cum[i]);
+    const b = Math.min(s1, line.cum[i + 1]);
+    if (b - a <= 1e-9) continue;
+    pts.push(line.at(b));
+    trackIds.push(chain.trackIds[i]);
+  }
+  return { net: chain.net, layer: chain.layer, pts, trackIds };
+}
+
 function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Finding[]): Steps<ChainResult> {
   const { board, opts, stats } = ctx;
   const line = new Polyline(chain.pts);
   const trackById = new Map(board.tracks.map((t) => [t.id, t]));
   const halfWidth = (trackById.get(chain.trackIds[0])?.width ?? 0.2) / 2;
   const adjacent = referenceFor(board, chain.layer, ctx.refCopper);
-  const gap = coplanarGap(ctx, chain, line, halfWidth);
+  const gap = chain.refMode === 'plane' && adjacent ? null : coplanarGap(ctx, chain, line, halfWidth);
   let ref = adjacent;
-  if (gap !== null && (!adjacent || gap <= opts.coplanarRatio * adjacent.h)) ref = { layer: chain.layer, h: gap, coplanar: true };
+  if (gap !== null && (!adjacent || chain.refMode === 'coplanar' || gap <= opts.coplanarRatio * adjacent.h)) ref = { layer: chain.layer, h: gap, coplanar: true };
   const layerName = (id: number) => ctx.layerName(id);
   if (!ref) {
     findings.push({
@@ -393,10 +532,8 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
   const coverage: ChainResult['coverage'] = [];
   for (const [i, id] of chain.trackIds.entries()) {
     yield { phase: 'band coverage', fraction: i / chain.trackIds.length };
-    const t = trackById.get(id)!;
-    const segBand = difference(difference(strokePath([t.a, t.b], 2 * halfBand, true), antipads), keepout);
-    const total = area(segBand);
-    coverage.push({ trackId: id, a: t.a, b: t.b, ratio: total > 0 ? area(intersect(segBand, bandCopper)) / total : 1 });
+    const [a, b] = [chain.pts[i], chain.pts[i + 1]];
+    coverage.push({ trackId: id, a, b, ratio: ref.coplanar ? coplanarCoverage(a, b, halfBand, antipads, keepout, bandCopper) : planeCoverage(a, b, ref.h, antipads, bandCopper) });
   }
 
   // Classify the centreline by the reference net underneath (coplanar: beside it), then refine run boundaries.
@@ -438,6 +575,8 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
   }
 
   const gaps: Gap[] = [];
+  // Gaps whose detour adds next to nothing: not reported, but their segments get no coverage warning either.
+  const minorGaps: Gap[] = [];
   const where = ref.coplanar ? `${layerName(chain.layer)} (coplanar return)` : `${layerName(chain.layer)} over ${layerName(ref.layer)}`;
   for (const [i, r] of runs.entries()) {
     if (r.net !== null) continue;
@@ -447,6 +586,8 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
     const a = line.at(r.s0);
     const b = line.at(r.s1);
     const atEnd = r.s0 <= 1e-9 || r.s1 >= L - 1e-9;
+    // The neighbouring piece of the chain, on the other reference, covers a gap at a split.
+    if ((r.s0 <= 1e-9 && chain.cut?.[0]) || (r.s1 >= L - 1e-9 && chain.cut?.[1])) continue;
     const endPt = r.s0 <= 1e-9 ? chain.pts[0] : chain.pts[chain.pts.length - 1];
     let kind: GapKind;
     // Coplanar pours keep their clearance around the trace's own pads too, so the trace leaves the pour where it ends on a pad.
@@ -487,15 +628,31 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
         const loop = [...direct, ...[...det.path].reverse()];
         // A coplanar detour starts beside the trace and can come out shorter than the centreline.
         gap.detour = { ...det, directLength, extraLength: Math.max(0, det.length - directLength), loopArea: enclosedArea(loop), loop };
+        if (gap.detour.extraLength < opts.slotDetour.ignore) {
+          minorGaps.push(gap);
+          continue;
+        }
         findings.push({
-          severity: 'error',
+          severity: gap.detour.extraLength < opts.slotDetour.warn ? 'warn' : 'error',
           kind: 'slot-crossing',
           message: `${where}: crosses a ${(r.s1 - r.s0).toFixed(2)} mm gap in ${before}; return detours +${gap.detour.extraLength.toFixed(1)} mm, adds ${gap.detour.loopArea.toFixed(1)} mm² loop area`,
           at: mid,
         });
       } else {
         gap.bridge = nearestBridge(board, mid, before!, before!, opts);
-        findings.push({ severity: 'error', kind: 'isolated-copper', message: `${where}: crosses between unconnected ${before} islands; no in-plane return path`, at: mid });
+        // Coplanar pieces that do not join on this layer still meet the plane below through their vias.
+        // Pieces that do not join on the reference layer still meet the other layer's copper of the same net
+        // through their vias: the return changes layer there, which costs loop area but is not an open loop.
+        const below = ref.coplanar && adjacent && ctx.netAt(mid, adjacent.layer) === before;
+        const ownPour = ctx.refCopper.get(chain.layer)?.byNet.get(before!);
+        const beside = !ref.coplanar && !!ownPour && distToPaths(mid, ownPour) <= 3 * ref.h;
+        findings.push(
+          below
+            ? { severity: 'warn', kind: 'isolated-copper', message: `${where}: the ${before} pour beside the trace is in separate pieces here; the return has to go down to ${before} on ${layerName(adjacent!.layer)} through the vias that join them`, at: mid }
+            : beside
+              ? { severity: 'warn', kind: 'isolated-copper', message: `${where}: the ${before} copper on ${layerName(ref.layer)} is in separate pieces here; the return has to move to the ${before} pour beside the trace on ${layerName(chain.layer)} through the vias that join them`, at: mid }
+              : { severity: 'error', kind: 'isolated-copper', message: `${where}: crosses between unconnected ${before} islands; no in-plane return path`, at: mid },
+        );
       }
     } else if (kind === 'split') {
       gap.bridge = nearestBridge(board, mid, before!, after!, opts);
@@ -510,21 +667,76 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
     gaps.push(gap);
   }
 
-  for (const c of coverage) {
-    if (c.ratio >= opts.minBandCoverage || dist(c.a, c.b) < 0.1) continue;
-    const onSeg = (p: Pt) => distPointSeg(p, c.a, c.b) < 1e-6;
-    if (gaps.some((g) => g.kind !== 'via-antipad' && (onSeg(g.a) || onSeg(g.b)))) continue;
-    const bandText = ref.coplanar ? `coplanar band (${(halfBand - inner).toFixed(2)} mm beside the trace clearance)` : `±3h band (±${halfBand.toFixed(2)} mm)`;
+  // Consecutive thin segments make one finding, placed on the worst of them.
+  let low: typeof coverage = [];
+  const flush = () => {
+    if (!low.length) return;
+    const worst = low.reduce((w, c) => (c.ratio < w.ratio ? c : w));
+    const length = low.reduce((s, c) => s + dist(c.a, c.b), 0);
+    const [a, b] = [low[0].a, low[low.length - 1].b];
+    const pct = `${(worst.ratio * 100).toFixed(0)}%`;
+    const what = ref.coplanar
+      ? `the pour beside it covers as little as ${pct} of the coplanar band on its better side (${(halfBand - inner).toFixed(2)} mm beyond the trace clearance)`
+      : `copper under it carries as little as ${pct} of the return current's spread (±3h = ±${halfBand.toFixed(2)} mm, weighted towards the trace)`;
+    const span = low.length > 1 ? `${low.length} segments, ${length.toFixed(1)} mm` : `${length.toFixed(1)} mm`;
     findings.push({
       severity: 'warn',
       kind: 'band-coverage',
-      message: `${layerName(chain.layer)} segment (${c.a.x.toFixed(1)}, ${c.a.y.toFixed(1)})→(${c.b.x.toFixed(1)}, ${c.b.y.toFixed(1)}): only ${(c.ratio * 100).toFixed(0)}% of the ${bandText} has reference copper`,
-      at: { x: (c.a.x + c.b.x) / 2, y: (c.a.y + c.b.y) / 2 },
+      message: `${layerName(chain.layer)} (${a.x.toFixed(1)}, ${a.y.toFixed(1)})→(${b.x.toFixed(1)}, ${b.y.toFixed(1)}), ${span}: ${what}`,
+      at: { x: (worst.a.x + worst.b.x) / 2, y: (worst.a.y + worst.b.y) / 2 },
     });
+    low = [];
+  };
+  for (const c of coverage) {
+    if (dist(c.a, c.b) < 0.1) continue;
+    const onSeg = (p: Pt) => distPointSeg(p, c.a, c.b) < 1e-6;
+    if (c.ratio >= opts.minBandCoverage || [...gaps, ...minorGaps].some((g) => g.kind !== 'via-antipad' && (onSeg(g.a) || onSeg(g.b)))) {
+      flush();
+      continue;
+    }
+    low.push(c);
   }
+  flush();
 
   const refNets = [...new Set(runs.map((r) => r.net).filter((x): x is string => !!x))];
   return { chain, ref, refNets, band, bandUncovered, coverage, gaps };
+}
+
+/**
+ * Share of the return current that finds copper beside a segment over a plane. Under a trace at
+ * height h the current density falls as 1/(1 + (x/h)²), so the bands ±0.5h, 0.5–1h and 1–3h carry
+ * shares in proportion to atan(x/h); a gap at the band edge matters less than one under the trace.
+ */
+function planeCoverage(a: Pt, b: Pt, h: number, antipads: Paths, bandCopper: Paths): number {
+  let prev = { total: 0, covered: 0, x: 0 };
+  let sum = 0;
+  let weights = 0;
+  for (const x of [0.5, 1, 3]) {
+    const band = difference(strokePath([a, b], 2 * x * h, true), antipads);
+    const cur = { total: area(band), covered: area(intersect(band, bandCopper)), x };
+    const w = Math.atan(x) - Math.atan(prev.x);
+    const ring = cur.total - prev.total;
+    sum += w * (ring > 1e-9 ? (cur.covered - prev.covered) / ring : 1);
+    weights += w;
+    prev = cur;
+  }
+  return Math.max(0, Math.min(1, sum / weights));
+}
+
+/** Coplanar return: the better side of the trace (one side of pour carries it). */
+function coplanarCoverage(a: Pt, b: Pt, halfBand: number, antipads: Paths, keepout: Paths, bandCopper: Paths): number {
+  const band = difference(difference(strokePath([a, b], 2 * halfBand, true), antipads), keepout);
+  const len = dist(a, b);
+  if (len < 1e-9) return 1;
+  const n = { x: -(b.y - a.y) / len, y: (b.x - a.x) / len };
+  let best = 0;
+  for (const k of [1, -1]) {
+    const o = mul(n, k * (halfBand + 0.01));
+    const side = intersect(band, [[a, b, add(b, o), add(a, o)]]);
+    const total = Math.abs(area(side));
+    if (total > 1e-9) best = Math.max(best, Math.abs(area(intersect(side, bandCopper))) / total);
+  }
+  return best;
 }
 
 /** Reference for a via transition: adjacent plane, else coplanar pour on the layer itself. */
@@ -603,12 +815,15 @@ function analyzeVia(ctx: Context, via: Via, netTracks: Track[], findings: Findin
         for (const v of board.vias) {
           if (v.net !== fromNet || v.id === via.id) continue;
           const d = dist(v.at, via.at);
-          if (!best || d < best.d) best = { id: v.id, label: `${fromNet} via ${v.id}`, at: v.at, d };
+          if (!best || d < best.d) best = { id: v.id, label: `${fromNet} via at (${v.at.x.toFixed(1)}, ${v.at.y.toFixed(1)})`, at: v.at, d };
         }
         for (const p of board.pads) {
           if (p.net !== fromNet || p.layer !== MULTI_LAYER) continue;
           const d = dist(p.at, via.at);
-          if (!best || d < best.d) best = { id: p.id, label: `${fromNet} THT pad`, at: p.at, d };
+          if (!best || d < best.d) {
+            const part = board.components.find((c) => c.id === p.componentId)?.designator;
+            best = { id: p.id, label: part ? `${fromNet} pad ${part}.${p.number}` : `${fromNet} THT pad at (${p.at.x.toFixed(1)}, ${p.at.y.toFixed(1)})`, at: p.at, d };
+          }
         }
         if (best) {
           Object.assign(t, {
@@ -621,7 +836,7 @@ function analyzeVia(ctx: Context, via: Via, netTracks: Track[], findings: Findin
           findings.push({
             severity: t.severity,
             kind: 'via-return',
-            message: `${label}: reference ${fromNet}→${toNet}, nearest ${best.label.replace(/ e\d+$/, '')} at ${best.d.toFixed(2)} mm (vertical loop ≈ ${(best.d * dz).toFixed(2)} mm²)`,
+            message: `${label}: reference ${fromNet}→${toNet}, nearest ${best.label}, ${best.d.toFixed(2)} mm away (vertical loop ≈ ${(best.d * dz).toFixed(2)} mm²)`,
             at: via.at,
           });
         } else {
