@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.63] - 2026-11-26
+
+From Balazs: show the voltage drop, and check whether a trace or a choke is too narrow.
+
+- **Voltage drop was already calculated.** The result line still gives the largest drop on the rail and on the ground. With more than one load it now also lists the drop to each load, in the same units (mV, or mV/A when no currents were given).
+- **A trace, a pour neck or a via that is too narrow is named.** The current in a track is its width times the sheet density along it. A pour neck is the copper across the bottleneck. A via is the plating of its drill. Each is compared with IPC-2221 for a 10°C rise (outer copper k = 0.048, inner k = 0.024). A 0.15 mm track carrying 1 A is named; a 2 mm pour carrying 1 A is not. A via only a little over the chart is left, because the plating thickness is assumed.
+
 ## [0.1.62] - 2026-11-26
 
 HF check: the return enters a part only through its ground pad, and stays in copper the whole way.

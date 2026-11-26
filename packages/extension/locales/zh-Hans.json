@@ -63,6 +63,7 @@
 	"${1} overlay marker(s).": "${1} 个叠加标记。",
 	"${1} was not guessed as a rail: pick its source.": "${1} 未被识别为电源轨：请选择其源。",
 	"${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.": "${1}：压降 ${2} ${3}，瓶颈 ${4} ${5}，位于 ${6}。",
+	"Drop to each load, ${1}: ${2}.": "各负载压降，${1}：${2}。",
 	"(The usual speed of this kind of line; HF check asks for the speed.)": "（此类线路的常用速率；HF 检查会询问速率。）",
 	"Back": "上一步",
 	"Each analysis now writes its .log and .results.json to: ${1}": "每次分析的 .log 和 .results.json 现在写入：${1}",

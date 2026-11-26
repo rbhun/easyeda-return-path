@@ -443,3 +443,34 @@ test('drawn streamline: from a via into a plane to a via out of it, the line tak
   assert.ok(plane.len < 1.1 * plane.chord, `through the plane: ${plane.len.toFixed(2)} mm for ${plane.chord.toFixed(2)} mm between the vias`);
   assert.ok(plane.pts.every((p) => Math.abs(p.y - 8) < 0.25), `off the straight line by ${Math.max(...plane.pts.map((p) => Math.abs(p.y - 8))).toFixed(2)} mm`);
 });
+
+test('voltage drop is reported at each load, and a track, a pour neck or a via too narrow for its current is named', () => {
+  const src = pad('a', 'P', 1, 0, 0, 0.4, 0.4);
+  const load = pad('b', 'P', 1, 20, 0, 0.4, 0.4);
+  const thin = board(1, { tracks: [{ id: 't', net: 'P', layer: 1, a: { x: 0, y: 0 }, b: { x: 20, y: 0 }, width: 0.15 }], pads: [src, load] });
+  const thinRes = solveDc(thin, terminalSetup(src, load, 'P'), { cell: 0.25 });
+  assert.equal(thinRes.supply.loadDrops.length, 1);
+  assert.ok(Math.abs(thinRes.supply.drop - thinRes.supply.loadDrops[0].drop) < 1e-6, 'the net drop is the drop at the load');
+  assert.ok(thinRes.warnings.some((w) => /0\.15 mm track on L1 carries/.test(w) && /IPC-2221/.test(w) && /10°C/.test(w)), thinRes.warnings.join('\n'));
+  assert.ok(!thinRes.warnings.some((w) => /choke/.test(w)), 'the track is the choke; it is not reported twice');
+
+  const wide = board(1, { pours: [pour('P', 1, [rect(10, 0, 20, 2)])], pads: [src, load] });
+  const wideRes = solveDc(wide, terminalSetup(src, load, 'P'), { cell: 0.2 });
+  assert.ok(!wideRes.warnings.some((w) => /IPC-2221/.test(w)), wideRes.warnings.join('\n'));
+
+  const neckSrc = pad('ns', 'P', 1, 1, 0, 0.6, 0.6);
+  const neckLoad = pad('nl', 'P', 1, 19, 0, 0.6, 0.6);
+  const neck = board(1, { pours: [pour('P', 1, [rect(10, 0, 20, 0.25)])], pads: [neckSrc, neckLoad] });
+  const neckRes = solveDc(neck, terminalSetup(neckSrc, neckLoad, 'P'), { cell: 0.1 });
+  assert.ok(neckRes.warnings.some((w) => /choke at /.test(w) && /IPC-2221/.test(w)), neckRes.warnings.join('\n'));
+
+  const viaBoard = (drill: number) => board(2, {
+    pours: [pour('P', 1, [rect(5, 1, 10, 2)]), pour('P', 2, [rect(15, 1, 10, 2)])],
+    vias: [{ id: 'v', net: 'P', at: { x: 10, y: 1 }, drill, diameter: drill * 2, stitching: false }],
+    pads: [pad('a', 'P', 1, 0.5, 1, 0.4, 0.4), pad('b', 'P', 2, 19.5, 1, 0.4, 0.4)],
+  });
+  const small = solveDc(viaBoard(0.12), terminalSetup(pad('a', 'P', 1, 0.5, 1, 0.4, 0.4), pad('b', 'P', 2, 19.5, 1, 0.4, 0.4), 'P'), { cell: 0.2 });
+  assert.ok(small.warnings.some((w) => /via at \(10\.0, 1\.0\) mm/.test(w) && /0\.12 mm drill/.test(w)), small.warnings.join('\n'));
+  const ordinary = solveDc(viaBoard(0.3), terminalSetup(pad('a', 'P', 1, 0.5, 1, 0.4, 0.4), pad('b', 'P', 2, 19.5, 1, 0.4, 0.4), 'P'), { cell: 0.2 });
+  assert.ok(!ordinary.warnings.some((w) => /via at/.test(w)), ordinary.warnings.join('\n'));
+});

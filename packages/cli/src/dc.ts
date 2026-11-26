@@ -77,6 +77,7 @@ export function dcReport(board: Board, run: DcRun) {
       net: n.net,
       role: n.role,
       dropMv: r3(n.drop * 1000),
+      loadDrops: n.loadDrops.map((d) => ({ designator: d.designator, dropMv: r3(d.drop * 1000) })),
       bottleneck: n.bottleneck && { layer: layerName(n.bottleneck.layer), at: { x: r3(n.bottleneck.at.x), y: r3(n.bottleneck.at.y) }, aPerMm: r3(n.bottleneck.j) },
       layers: n.layers.filter((l) => l.flow > 0).map((l) => ({ layer: layerName(l.layer), flow: r3(l.flow), peakAPerMm: r3(l.peak?.j ?? 0) })),
       vias: n.vias.filter((v) => v.current > 1e-6).map((v) => ({ id: v.id, at: { x: r3(v.at.x), y: r3(v.at.y) }, currentA: r3(v.current) })),

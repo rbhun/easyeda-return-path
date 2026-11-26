@@ -49,6 +49,7 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.match(msg, /^3V3 \/ GND: source U1, loads U2, U3, J2\./);
 	assert.match(msg, /3V3: drop \d+\.\d+ mV,/);
 	assert.match(msg, /GND: drop \d+\.\d+ mV,/);
+	assert.match(msg, /Drop to each load, mV: (U2|U3|J2) \d+\.\d+, (U2|U3|J2) \d+\.\d+, (U2|U3|J2) \d+\.\d+\./);
 	assert.doesNotMatch(msg, /Contours drawn/);
 	assert.match(msg, /Streamlines, in the colour of the copper layer the current flows in: 3V3 supply yellow on Top Layer and green on other layers; GND return magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));

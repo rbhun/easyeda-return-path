@@ -7,6 +7,7 @@ import { bbox } from '../geom.js';
 import { runAsync, runSync, type RunOptions, type Steps } from '../budget.js';
 import { buildReferenceCopperSteps, type LayerCopper } from '../refcopper.js';
 import { MULTI_LAYER, type Board, type Pad, type Pt } from '../types.js';
+import { narrowWarnings } from './ampacity.js';
 import { cellCentre, cellOf, inGrid, padCells, rasterNet, type Grid } from './raster.js';
 import type { DcBridge, DcSetup } from './rails.js';
 
@@ -83,6 +84,8 @@ export interface DcNetResult {
    * load at once, and a line on it bends towards the others.
    */
   loadCells: { designator: string; current: number; cells: Map<number, number[]>; own?: { layers: DcLayerField[]; vias: ViaFlow[]; fullScale: number } }[];
+  /** Voltage at each load's pads relative to the source, V. The net's `drop` is the largest of these. */
+  loadDrops: { designator: string; drop: number }[];
   /** Highest density away from pads and vias: the bottleneck, and the 100 % of the colour bins. */
   bottleneck?: { layer: number; at: Pt; j: number };
   fullScale: number;
@@ -181,6 +184,8 @@ export function* solveDcSteps(board: Board, setup: DcSetup, options: Partial<DcO
     if (!r) continue;
     for (const u of r.unconnected) warnings.push(`${u} has no copper path to ${setup.source.designator} on ${r.net}; left out.`);
     if (r.residual > 1e-6) warnings.push(`${r.net}: solver stopped at relative residual ${r.residual.toExponential(1)} after ${r.iterations} iterations.`);
+    const nets = r.role === 'supply' ? (setup.railNets ?? [setup.rail]) : [setup.ground];
+    warnings.push(...narrowWarnings(board, grid, r, nets, thickness, opts.platingMm, setup.normalised));
   }
   return { setup, grid, supply, ret, warnings, thickness };
 }
@@ -573,6 +578,18 @@ function* solveNetField(
     bottleneck: built.bottleneck,
     fullScale: built.fullScale,
     drop: built.drop,
+    loadDrops: loadCells.map((lc) => {
+      let drop = 0;
+      for (const [layer, cells] of lc.cells) {
+        const f = built.layers.find((l) => l.layer === layer);
+        if (!f) continue;
+        for (const c of cells) {
+          const v = f.v[c];
+          if (Number.isFinite(v)) drop = Math.max(drop, Math.abs(v));
+        }
+      }
+      return { designator: lc.designator, drop };
+    }).filter((d) => d.drop > 0),
     unconnected,
     bridges,
     nodes: N,
