@@ -58,7 +58,7 @@ Versioning: every change raises the patch number above main's version and adds a
 
 The extension can write a `.log` and a `.results.json` for every analysis (see the extension README). `npm run sync` (`scripts/agent-sync.mjs`) runs on the machine with EasyEDA and connects these files to a cloud agent. It needs Node ≥ 20 and push access to `origin`.
 
-1. In EasyEDA Pro (desktop), allow **External Interaction** for the extension. Then use **Return Path → Set Run Folder...** and pick `agent-runs/` in this clone. Git ignores that folder.
+1. In EasyEDA Pro (desktop), allow **External Interaction** for the extension. Then open **Return Path → Open Panel...**, press **Run folder…** and pick `agent-runs/` in this clone. Git ignores that folder.
 2. Run `npm run sync` in this clone, or `npm run sync -- --branch <pull request branch>` to test an agent's change.
 
 Every 30 s (`--interval`), the worker does three things:

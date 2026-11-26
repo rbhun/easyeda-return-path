@@ -41,7 +41,7 @@ if (opts.help) {
   --runs-branch <name>   branch that receives run files (default agent-runs)
   --inbox <dir>          folder to collect run files from; repeatable
                          (default: <repo>/agent-runs, the folder to pick with
-                         Return Path > Set Run Folder...)
+                         Run folder… in the Return Path panel)
   --remote <name>        git remote (default origin)
   --no-pull              do not pull or rebuild code
   --no-build             pull but do not rebuild the extension

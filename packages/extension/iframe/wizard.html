@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<title>Return Path</title>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<style>
+			:root {
+				color-scheme: dark;
+				--bg: #1e1f22;
+				--panel: #2b2d31;
+				--line: #3c3f45;
+				--text: #e3e5e8;
+				--muted: #9aa0a6;
+				--accent: #4f8cff;
+			}
+			* { box-sizing: border-box; }
+			html, body { height: 100%; }
+			body {
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+				margin: 0;
+				padding: 12px;
+				background: var(--bg);
+				color: var(--text);
+				font: 12px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+			}
+			header { display: flex; align-items: center; gap: 8px; min-height: 20px; }
+			#step {
+				padding: 1px 8px;
+				border-radius: 10px;
+				background: var(--accent);
+				color: #fff;
+				font-size: 11px;
+				font-weight: 600;
+				white-space: nowrap;
+			}
+			#step:empty { display: none; }
+			#title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+			#prompt { margin: 0; white-space: pre-wrap; word-break: break-word; }
+			#body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+			.all {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				padding: 2px 8px;
+			}
+			ul {
+				flex: 1 1 auto;
+				min-height: 0;
+				margin: 0;
+				padding: 4px 0;
+				overflow: auto;
+				list-style: none;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+			}
+			label { display: flex; align-items: center; gap: 8px; padding: 3px 8px; cursor: pointer; }
+			ul label:hover { background: #33363b; }
+			input[type="checkbox"], input[type="radio"] { margin: 0; accent-color: var(--accent); }
+			input[type="text"] {
+				width: 100%;
+				padding: 6px 8px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+				color: var(--text);
+				font: inherit;
+			}
+			.muted { color: var(--muted); }
+			footer { display: flex; justify-content: flex-end; gap: 6px; flex: 0 0 auto; }
+			button {
+				min-width: 84px;
+				padding: 6px 12px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+				color: var(--text);
+				font: inherit;
+				cursor: pointer;
+			}
+			button:hover:not(:disabled) { border-color: var(--accent); }
+			button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+			button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+			button:disabled { opacity: 0.45; cursor: default; }
+		</style>
+	</head>
+	<body>
+		<header><span id="step"></span><span id="title"></span></header>
+		<p id="prompt" class="muted">Connecting to the extension…</p>
+		<div id="body"></div>
+		<footer>
+			<button id="cancel">Cancel</button>
+			<button id="ok" class="primary" disabled>OK</button>
+		</footer>
+
+		<script>
+			(function () {
+				var api = window.eda || (window.parent && window.parent.eda);
+				var ASK = 'returnpath.wizard.ask';
+				var REPLY = 'returnpath.wizard.reply';
+				var $ = function (id) { return document.getElementById(id); };
+				var q = null;
+				var answered = false;
+				var read = function () { return undefined; };
+				var valid = function () { return true; };
+
+				function send(message) {
+					if (api && api.sys_MessageBus) api.sys_MessageBus.publish(REPLY, message);
+				}
+
+				function el(tag, props, children) {
+					var e = document.createElement(tag);
+					Object.keys(props || {}).forEach(function (k) { e[k] = props[k]; });
+					(children || []).forEach(function (c) { e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+					return e;
+				}
+
+				function refresh() {
+					$('ok').disabled = answered || !valid();
+					$('cancel').disabled = answered;
+				}
+
+				function list(type, selected) {
+					var boxes = [];
+					var ul = el('ul', { role: type === 'radio' ? 'radiogroup' : 'group' });
+					q.options.forEach(function (o) {
+						var box = el('input', { type: type, name: 'opt', value: o.value, checked: selected.indexOf(o.value) >= 0 });
+						box.addEventListener('change', function () { update(); });
+						if (type === 'radio') box.addEventListener('dblclick', function () { $('ok').click(); });
+						boxes.push(box);
+						ul.appendChild(el('li', {}, [el('label', {}, [box, o.label])]));
+					});
+					var update = function () {};
+					return { ul: ul, boxes: boxes, onUpdate: function (fn) { update = fn; } };
+				}
+
+				function show(question) {
+					if (q && q.id === question.id) return;
+					q = question;
+					answered = false;
+					var m = /^Step (\d+)\/(\d+):\s*/.exec(q.prompt);
+					$('step').textContent = m ? q.labels.step.replace('${1}', m[1]).replace('${2}', m[2]) : '';
+					$('title').textContent = q.title;
+					var text = m ? q.prompt.slice(m[0].length) : q.prompt;
+					$('prompt').textContent = text.charAt(0).toUpperCase() + text.slice(1);
+					$('prompt').classList.remove('muted');
+					$('ok').textContent = q.ok;
+					$('cancel').textContent = q.labels.cancel;
+					var body = $('body');
+					body.textContent = '';
+					var focus = $('ok');
+					if (q.kind === 'multi') {
+						var l = list('checkbox', q.value);
+						var all = el('input', { type: 'checkbox', id: 'all' });
+						var count = el('span', { className: 'muted' });
+						var update = function () {
+							var n = l.boxes.filter(function (b) { return b.checked; }).length;
+							all.checked = n === l.boxes.length && n > 0;
+							all.indeterminate = n > 0 && n < l.boxes.length;
+							count.textContent = q.labels.count.replace('${1}', n).replace('${2}', l.boxes.length);
+							refresh();
+						};
+						all.addEventListener('change', function () {
+							l.boxes.forEach(function (b) { b.checked = all.checked; });
+							update();
+						});
+						l.onUpdate(update);
+						body.appendChild(el('div', { className: 'all' }, [el('label', { style: 'padding:0' }, [all, q.labels.all]), count]));
+						body.appendChild(l.ul);
+						read = function () { return l.boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; }); };
+						valid = function () { return read().length > 0; };
+						update();
+					} else if (q.kind === 'select') {
+						var r = list('radio', [q.value]);
+						r.onUpdate(refresh);
+						body.appendChild(r.ul);
+						read = function () { var b = r.boxes.filter(function (x) { return x.checked; })[0]; return b ? b.value : ''; };
+						valid = function () { return !!read(); };
+						var checked = r.boxes.filter(function (x) { return x.checked; })[0];
+						if (checked) { focus = checked; setTimeout(function () { checked.scrollIntoView({ block: 'nearest' }); }); }
+					} else if (q.kind === 'input') {
+						var input = el('input', { type: 'text', value: q.value, spellcheck: false });
+						body.appendChild(input);
+						read = function () { return input.value; };
+						valid = function () { return true; };
+						focus = input;
+					} else {
+						read = function () { return true; };
+						valid = function () { return true; };
+					}
+					refresh();
+					focus.focus();
+				}
+
+				$('ok').onclick = function () {
+					if (!q || answered || !valid()) return;
+					answered = true;
+					refresh();
+					$('prompt').classList.add('muted');
+					send({ cmd: 'answer', id: q.id, value: read() });
+				};
+				$('cancel').onclick = function () {
+					if (!q || answered) return;
+					answered = true;
+					refresh();
+					send({ cmd: 'cancel', id: q.id });
+				};
+				document.addEventListener('keydown', function (e) {
+					if (e.key === 'Escape') $('cancel').click();
+					if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') $('ok').click();
+				});
+
+				if (!api || !api.sys_MessageBus) {
+					$('prompt').textContent = 'This window cannot reach the EasyEDA API; close it to use the system dialogs.';
+					return;
+				}
+				api.sys_MessageBus.subscribe(ASK, show);
+				send({ cmd: 'hello' });
+			})();
+		</script>
+	</body>
+</html>

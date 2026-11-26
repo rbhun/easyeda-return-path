@@ -1,8 +1,9 @@
 // Wizard step 1 (design decisions D3, D7): confirm the power rails, pair each with its ground,
 // pick the rail to solve, confirm its single active source (the other candidates are left out) and
-// its loads, and optionally give load currents. Built on the system dialogs, so it needs no iframe.
-import { pickMany } from './picker';
+// its loads, and optionally give load currents. The questions are asked in the wizard window, or in
+// the system dialogs when that window cannot be used.
 import { checkpoint, log } from './runner';
+import { askInWindow, closeWizardWindow } from './wizard-window';
 import { componentsOnNet, guessRails, loadsFor, parseCurrents, type Board, type DcSetupInput, type RailGuess } from '@returnpath/core';
 
 export interface Option {
@@ -15,6 +16,10 @@ export interface Ask {
 	select: (title: string, prompt: string, options: Option[], dflt?: string) => Promise<string | undefined>;
 	multi: (title: string, prompt: string, options: Option[], dflt: string[]) => Promise<string[] | undefined>;
 	input: (title: string, prompt: string, value: string) => Promise<string | undefined>;
+	/** True when the user accepts with the `ok` button. */
+	confirm: (title: string, prompt: string, ok: string) => Promise<boolean>;
+	/** Ends the questions: closes the wizard window, if one is open. */
+	close: () => Promise<void>;
 }
 
 /** Logs and saves every question and answer, so a hang between dialogs shows in the saved log. */
@@ -31,6 +36,8 @@ export function loggedAsk(ask: Ask): Ask {
 		select: (title, prompt, options, dflt) => around(`${prompt} (${options.length} options)`, () => ask.select(title, prompt, options, dflt)),
 		multi: (title, prompt, options, dflt) => around(`${prompt} (${options.length} options)`, () => ask.multi(title, prompt, options, dflt)),
 		input: (title, prompt, value) => around(prompt, () => ask.input(title, prompt, value)),
+		confirm: (title, prompt, ok) => around(prompt, () => ask.confirm(title, prompt, ok)),
+		close: () => ask.close(),
 	};
 }
 
@@ -40,27 +47,46 @@ const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, 
 const ALL = '__returnpath_all__';
 
 /**
- * Ask implemented with eda.sys_Dialog, except multi-choice questions, which use the picker window
- * when it connects. The dialogs report a choice through a callback only.
+ * Ask in the wizard window, falling back to eda.sys_Dialog (which reports a choice through a
+ * callback only) when the window cannot be used.
  */
 export function dialogAsk(): Ask {
 	const toApi = (o: Option[]) => o.map(x => ({ value: x.value, displayContent: x.label }));
 	return {
-		select: (title, prompt, options, dflt) => new Promise((resolve) => {
-			eda.sys_Dialog.showSelectDialog(toApi(options), prompt, undefined, title, dflt, false, v => resolve(v || undefined));
-		}),
+		select: async (title, prompt, options, dflt) => {
+			const v = await askInWindow('select', title, prompt, options, dflt ?? '');
+			if (v !== null)
+				return typeof v === 'string' && v ? v : undefined;
+			return new Promise((resolve) => {
+				eda.sys_Dialog.showSelectDialog(toApi(options), prompt, undefined, title, dflt, false, v => resolve(v || undefined));
+			});
+		},
 		multi: async (title, prompt, options, dflt) => {
-			const picked = await pickMany(title, prompt, options, dflt);
-			if (picked !== null)
-				return picked;
+			const v = await askInWindow('multi', title, prompt, options, dflt);
+			if (v !== null)
+				return Array.isArray(v) ? v.filter(x => options.some(o => o.value === x)) : undefined;
 			const all = [{ value: ALL, label: t('Select all') }, ...options];
 			return new Promise((resolve) => {
 				eda.sys_Dialog.showSelectDialog(toApi(all), prompt, undefined, title, dflt, true, v => resolve(v?.includes(ALL) ? options.map(o => o.value) : v));
 			});
 		},
-		input: (title, prompt, value) => new Promise((resolve) => {
-			eda.sys_Dialog.showInputDialog(prompt, undefined, title, 'text', value, undefined, v => resolve(v == null ? undefined : String(v)));
-		}),
+		input: async (title, prompt, value) => {
+			const v = await askInWindow('input', title, prompt, [], value);
+			if (v !== null)
+				return typeof v === 'string' ? v : undefined;
+			return new Promise((resolve) => {
+				eda.sys_Dialog.showInputDialog(prompt, undefined, title, 'text', value, undefined, v => resolve(v == null ? undefined : String(v)));
+			});
+		},
+		confirm: async (title, prompt, ok) => {
+			const v = await askInWindow('confirm', title, prompt, [], '', ok);
+			if (v !== null)
+				return v === true;
+			return new Promise((resolve) => {
+				eda.sys_Dialog.showConfirmationMessage(prompt, title, ok, t('Cancel'), clicked => resolve(!!clicked));
+			});
+		},
+		close: closeWizardWindow,
 	};
 }
 

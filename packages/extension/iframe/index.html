@@ -105,8 +105,8 @@
 
 		<h2>Analyse</h2>
 		<div class="row">
-			<button id="hf" class="primary" title="High-frequency return path of the selected signal net">Selected net</button>
-			<button id="dc" class="primary" title="DC return current of a power rail, with the wizard">DC current…</button>
+			<button id="hf" class="primary" title="High-frequency return path of the selected signal net: select a track, via or pad first; the driver question opens in the wizard window">HF check</button>
+			<button id="dc" class="primary" title="DC return current of a power rail, with the wizard">DC check…</button>
 		</div>
 		<div class="row" style="margin-top: 6px">
 			<button id="rerun" title="Read the board again and repeat the last analysis, without the wizard">Rerun last</button>
@@ -119,6 +119,7 @@
 			<button id="toggle">Hide</button>
 			<button id="clear">Clear</button>
 			<button id="log" title="Show the saved log">Log…</button>
+			<button id="runFolder" title="Folder for each analysis's .log and .results.json">Run folder…</button>
 		</div>
 
 		<h2>Result</h2>
@@ -159,7 +160,7 @@
 					$('version').textContent = 'v' + s.version;
 					$('state').innerHTML = s.busy ? 'Running: <b></b>' : 'Overlay: <b></b>';
 					$('state').querySelector('b').textContent = s.busy || { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay];
-					['hf', 'dc', 'rerun', 'toggle', 'clear', 'log'].forEach(function (id) { $(id).disabled = !!s.busy; });
+					['hf', 'dc', 'rerun', 'toggle', 'clear', 'log', 'runFolder'].forEach(function (id) { $(id).disabled = !!s.busy; });
 					$('cancel').disabled = !s.busy;
 					$('rerun').disabled = !!s.busy || !s.lastRun;
 					$('toggle').disabled = !!s.busy || s.overlay === 'none';
@@ -249,13 +250,13 @@
 					send({ cmd: 'style', style: style });
 				}
 
-				['hf', 'dc', 'rerun', 'toggle', 'clear', 'cancel', 'log'].forEach(function (id) {
+				['hf', 'dc', 'rerun', 'toggle', 'clear', 'cancel', 'log', 'runFolder'].forEach(function (id) {
 					$(id).onclick = function () { send({ cmd: id }); };
 				});
 				$('reset').onclick = function () { send({ cmd: 'resetStyle' }); };
 
 				if (!api || !api.sys_MessageBus) {
-					$('state').textContent = 'This window cannot reach the EasyEDA API; use the Return Path menu.';
+					$('state').textContent = 'This window cannot reach the EasyEDA API. Send the saved log (Return Path > Show Saved Log...).';
 					return;
 				}
 				api.sys_MessageBus.subscribe(STATE, render);
@@ -272,7 +273,7 @@
 					})();
 				}
 				setTimeout(function () {
-					if (!last) $('state').textContent = 'No answer from the extension yet. Reopen the panel from the Return Path menu.';
+					if (!last) $('state').textContent = 'No answer from the extension yet. Reopen the panel with Return Path > Open Panel...';
 				}, 3000);
 			})();
 		</script>

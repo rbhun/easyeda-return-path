@@ -77,6 +77,13 @@ test('Set Run Folder stores the folder and later runs write there', async () => 
 	await ext.showReturnPath();
 	assert.equal(runs(restarted.files, dir).length, 1);
 	assert.equal(runs(restarted.files, DEFAULT_DIR).length, 0);
+
+	const fromPanel = install({ fileSystem: 'allowed', storage: new Map() }, d => (d.kind === 'input' ? dir : d.dflt));
+	await ext.showPanel();
+	fromPanel.panelSend({ cmd: 'hello' });
+	fromPanel.panelSend({ cmd: 'runFolder' });
+	await new Promise(r => setTimeout(r, 50));
+	assert.match(fromPanel.messages.at(-1)!, /agent-runs/, 'the panel\'s Run folder button does the same');
 });
 
 test('a DC run records rail, source, loads, drops and warnings', async () => {

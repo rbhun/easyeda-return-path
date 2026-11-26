@@ -26,7 +26,7 @@ export const TOPIC_MAILBOX = 'returnpath.panel.mailbox';
 /** What the mailbox carries: the shared fields that outlive an instance, and the overlay drawing. */
 export interface Snapshot { from: string; fields: Stamped; overlay?: { groups: MarkerGroup[]; visible: boolean } }
 
-type RunCmd = 'hf' | 'dc' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log';
+type RunCmd = 'hf' | 'dc' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder';
 export type PanelCommand = { to?: string } & (
 	| { cmd: 'hello' }
 	| { cmd: RunCmd }
@@ -37,9 +37,9 @@ export type PanelCommand = { to?: string } & (
 );
 
 export interface PanelHost {
-	/** Runs a menu action by command name. */
+	/** Runs a panel action by command name. */
 	run: (cmd: RunCmd) => Promise<void>;
-	/** "DC 9V / GND, source J1" or "Show for Selected Net: CLK"; undefined when nothing ran yet. */
+	/** "DC 9V / GND, source J1" or "HF check: CLK"; undefined when nothing ran yet. */
 	lastRunLabel: () => string | undefined;
 }
 
@@ -273,7 +273,7 @@ async function onCommand(m: PanelCommand): Promise<void> {
 		toast(t('Busy: ${1}', shared.busy));
 		return;
 	}
-	const labels: Record<string, string> = { hf: 'Show for Selected Net', dc: 'DC Return Current', rerun: 'Rerun', toggle: '', clear: '', cancel: '', log: '' };
+	const labels: Record<string, string> = { hf: 'HF check', dc: 'DC check', rerun: 'Rerun', toggle: '', clear: '', cancel: '', log: '', runFolder: '' };
 	const busy = labels[m.cmd] || undefined;
 	if (busy)
 		share({ busy, busyOwner: me });

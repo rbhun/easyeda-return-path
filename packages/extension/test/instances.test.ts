@@ -72,7 +72,7 @@ test('two instances: a menu run in one shows in the panel opened by the other, a
 	await settle(() => states().at(-1).overlay === 'shown');
 	assert.equal(mock.markers.length, drawn);
 
-	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 1 });
+	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 255 });
 	mock.panelSend({ cmd: 'style', style: { supply: { visible: false } } });
 	await settle(() => !mock.markers.some(m => JSON.stringify(m.color) === yellow));
 	assert.ok(mock.markers.length > 0 && !mock.markers.some(m => JSON.stringify(m.color) === yellow), 'the supply hidden, the return still drawn');
