@@ -2,6 +2,16 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.44] - 2026-11-26
+
+From Balazs: the point is a visually accurate picture of where the return current flows, so the designer can see where it takes big turns or passes through choke points; lines that pass through other traces, or are otherwise unreal, are unacceptable.
+
+An audit of every drawn return line on the two real boards against the reference copper found that, on the rack display, 1201 of 2895 mm of coplanar return lay outside copper and 439 mm on other nets' traces (the SCL/SDA bus runs side by side), and 184 of 650 mm of plane return lay over no copper. Now all of it lies in copper (detours around slots run along the copper edge).
+
+- **A coplanar return is drawn at the pour edge, just inside the pour**, on each side where the pour comes before any other conductor, instead of at a fixed distance from the trace whenever pour was anywhere within 6 mm. Each drawn point and the line to the next one are checked to lie in reference copper; the line breaks where they do not.
+- **A pour behind a neighbouring trace is no coplanar reference.** The analysis used to find pour beyond the neighbour and take it; now any track, pad or via of a net without a pour on that layer stops the search, so such stretches return in the plane under them.
+- **The plane return keeps to the copper.** It is drawn under the trace where there is copper there; across a hole (an antipad, another trace's clearance) it moves aside to the nearest copper, within the trace half-width plus h, keeping to one side, and breaks where there is none. It no longer folds back at the inside of a bend.
+
 ## [0.1.43] - 2026-11-26
 
 Numbered above 0.1.42, main's version.

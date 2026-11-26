@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { analyzeNet, circle, difference, rect, strokePath, union, type Board, type Track } from '../src/index.js';
+import { analyzeNet, circle, difference, distPointSeg, pointInPaths, rect, strokePath, union, type Board, type Track } from '../src/index.js';
 
 // 2-layer, 40 × 20 mm. SIG runs on Bottom through a GND pour with 0.3 mm clearance, except around a
 // meander (x 15–16.5), where the pour keeps 0.85 mm or more away; a Top GND pour (x < 29.5) lies under the meander,
@@ -75,3 +75,46 @@ function tracksDist(p: { x: number; y: number }): number {
       }),
   );
 }
+
+/** Every drawn return point lies in reference copper of its layer and on no track of another net there. */
+function assertInCopper(board: Board, net: string) {
+  const an = analyzeNet(board, net);
+  assert.ok(an.returnPath.traces.length > 0, 'a return is drawn');
+  for (const t of an.returnPath.traces) {
+    const copper = [...an.refCopper.get(t.layer)!.byNet.values()];
+    for (const [i, b] of t.pts.entries()) {
+      const a = t.pts[Math.max(0, i - 1)];
+      for (const f of [0.25, 0.5, 0.75, 1]) {
+        const p = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+        assert.ok(copper.some((c) => pointInPaths(p, c)), `return point (${p.x.toFixed(2)}, ${p.y.toFixed(2)}) on layer ${t.layer} is outside reference copper`);
+        const on = board.tracks.find((tr) => tr.layer === t.layer && tr.net !== 'GND' && distPointSeg(p, tr.a, tr.b) <= tr.width / 2);
+        assert.ok(!on, `return point (${p.x.toFixed(2)}, ${p.y.toFixed(2)}) lies on ${on?.net}`);
+      }
+    }
+  }
+  return an;
+}
+
+test('the drawn return stays in reference copper and off other traces', () => {
+  assertInCopper(meanderBoard(), 'SIG');
+});
+
+test('a pour beyond a neighbouring trace is not a coplanar reference: the return stays in the plane under the trace', () => {
+  // SIG on Bottom at y = 10 with NEIGH 0.35 mm beside it; the Bottom GND pour starts past NEIGH, within
+  // the coplanar distance of SIG but behind NEIGH. A Top GND plane covers the board.
+  const board = meanderBoard();
+  board.tracks = [
+    { id: 's', net: 'SIG', layer: 2, a: { x: 2, y: 10 }, b: { x: 38, y: 10 }, width: 0.2 },
+    { id: 'n', net: 'NEIGH', layer: 2, a: { x: 1, y: 10.35 }, b: { x: 39, y: 10.35 }, width: 0.2 },
+  ];
+  board.vias = [];
+  board.nets = ['SIG', 'NEIGH', 'GND'];
+  const pour = rect(20, 15.3, 39.4, 9.4);
+  board.pours = [
+    { id: 'pb', net: 'GND', layer: 2, name: 'Bottom GND', priority: 1, outline: [pour], poured: [pour] },
+    { id: 'pt', net: 'GND', layer: 1, name: 'Top GND', priority: 1, outline: [rect(20, 10, 39.4, 19.4)], poured: [rect(20, 10, 39.4, 19.4)] },
+  ];
+  const an = assertInCopper(board, 'SIG');
+  assert.deepEqual(an.chains.map((c) => [c.ref?.layer, !!c.ref?.coplanar]), [[1, false]]);
+  assert.ok(an.returnPath.traces.every((t) => t.layer === 1 && t.pts.every((p) => Math.abs(p.y - 10) < 1e-6)), 'drawn under the trace');
+});
