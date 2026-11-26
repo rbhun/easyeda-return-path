@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.38] - 2026-11-26
+
+From Balazs, with a screenshot of the HF check speed page showing `${1} (edges ≈ ${2} ns)`: put the speed selector on the "Net to check" page after each net's length, prefilled with the usual speed for that kind of line, and give the wizard a Back button.
+
+- **Net and speed on one page:** the HF check lists each net as `net · kind · length` followed by a speed selector. It is prefilled with the usual speed of that kind (a clock 16 MHz, I²C 400 kHz, …) and offers the kind's other usual speeds with their edge times, plus **Other speed…** with a field for a typed speed (`400k`, `12 MHz`, `115200`); OK stays disabled until the typed speed reads as one. The separate speed page is gone. Without the wizard window, the net and its speed are still asked in two system dialogs.
+- **Back** in the wizard window, beside OK and Cancel, from the second question on: it returns to the previous question with the earlier answer preselected (HF check: from the driver question back to the net page; DC check: from the loads back to the source, from the currents back to the loads).
+- **Placeholders filled in:** texts with `${1}`, `${2}` that had no entry in the locale files were shown with the placeholders left in. Every translated text now goes through one helper that fills them in either way, every missing text was added to `en.json` and `zh-Hans.json`, and a test checks that each text the extension translates has an entry in both.
+- Pin names are read once per board read, not again for each question.
+
 ## [0.1.37] - 2026-11-26
 
 Numbered above 0.1.36, main's version.

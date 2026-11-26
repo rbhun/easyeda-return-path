@@ -1,21 +1,26 @@
 // The wizard window (iframe/wizard.html): every wizard question (pick one, pick several, type a value,
-// confirm) on the same page layout, with a step badge, a list that scrolls on its own, and OK/Cancel
+// confirm, give load currents, pick a net and its speed) on the same page layout, with a step badge, a list that scrolls on its own, and OK/Cancel
 // below it. It stays open from the first question of an analysis until close(). When its page does
 // not connect, the questions go to the system dialogs instead.
 import { log } from './runner';
 import type { Option } from './wizard';
+import { t } from './i18n';
 
 export const WIZARD_ID = 'returnPathWizard';
 export const WIZARD_HTML = '/iframe/wizard.html';
 export const TOPIC_WIZARD_ASK = 'returnpath.wizard.ask';
 export const TOPIC_WIZARD_REPLY = 'returnpath.wizard.reply';
 
-export type WizardKind = 'select' | 'multi' | 'input' | 'confirm' | 'currents';
+export type WizardKind = 'select' | 'multi' | 'input' | 'confirm' | 'currents' | 'nets';
+
+/** What askInWindow resolves when the user pressed Back. */
+export const BACK = Symbol('back');
 
 export type WizardReply =
 	| { cmd: 'hello' }
 	| { cmd: 'answer'; id: string; value: string | string[] | boolean }
-	| { cmd: 'cancel'; id: string };
+	| { cmd: 'cancel'; id: string }
+	| { cmd: 'back'; id: string };
 
 export interface WizardQuestion {
 	/** Unique across extension instances, which all hear the page's replies. */
@@ -24,17 +29,17 @@ export interface WizardQuestion {
 	title: string;
 	prompt: string;
 	options: Option[];
-	/** Chosen value(s) of select and multi, the text of input, one current per option for currents. */
+	/** Chosen value(s) of select and multi, the text of input, one current per option for currents, the net for nets. */
 	value: string | string[];
 	/** Label of the OK button. */
 	ok: string;
-	labels: { all: string; cancel: string; count: string; step: string; total: string; equal: string; equalTitle: string };
+	/** Whether the page shows Back: there is an earlier question to return to. */
+	back: boolean;
+	labels: { all: string; cancel: string; back: string; count: string; step: string; total: string; equal: string; equalTitle: string; other: string; speed: string };
 }
 
 /** How long the page has to say hello before the system dialogs are used instead. */
 export const wizardTimeouts = { helloMs: 4000 };
-
-const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 
 const me = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 let nextId = 1;
@@ -84,7 +89,7 @@ function openWindow(b: NonNullable<ReturnType<typeof bus>>): Promise<'ready' | '
 		const show = async () => {
 			if (await eda.sys_IFrame.isIFrameAlreadyExist?.(WIZARD_ID))
 				await eda.sys_IFrame.closeIFrame(WIZARD_ID);
-			return eda.sys_IFrame.openIFrame(WIZARD_HTML, 460, 440, WIZARD_ID, {
+			return eda.sys_IFrame.openIFrame(WIZARD_HTML, 560, 460, WIZARD_ID, {
 				title: t('Return Path'),
 				minimizeButton: false,
 				maximizeButton: false,
@@ -111,7 +116,7 @@ function openWindow(b: NonNullable<ReturnType<typeof bus>>): Promise<'ready' | '
  * Asks in the wizard window, opening it for the first question. Resolves the answer, undefined when
  * the user cancels or closes the window, or null when the window could not be used.
  */
-export async function askInWindow(kind: WizardKind, title: string, prompt: string, options: Option[], value: string | string[], ok?: string): Promise<string | string[] | boolean | undefined | null> {
+export async function askInWindow(kind: WizardKind, title: string, prompt: string, options: Option[], value: string | string[], ok?: string, back = false): Promise<string | string[] | boolean | typeof BACK | undefined | null> {
 	const b = bus();
 	if (!b || failedOn === b || !eda.sys_IFrame?.openIFrame)
 		return null;
@@ -139,10 +144,11 @@ export async function askInWindow(kind: WizardKind, title: string, prompt: strin
 		options,
 		value,
 		ok: ok ?? t('OK'),
-		labels: { all: t('Select all'), cancel: t('Cancel'), count: t('${1} of ${2} selected'), step: t('Step ${1} of ${2}'), total: t('Total current'), equal: t('Equal'), equalTitle: t('Share the total equally between the loads') },
+		back,
+		labels: { all: t('Select all'), cancel: t('Cancel'), back: t('Back'), other: t('Other speed…'), speed: t('Speed'), count: t('${1} of ${2} selected'), step: t('Step ${1} of ${2}'), total: t('Total current'), equal: t('Equal'), equalTitle: t('Share the total equally between the loads') },
 	};
 	return new Promise((resolve) => {
-		const finish = (v: string | string[] | boolean | undefined) => {
+		const finish = (v: string | string[] | boolean | typeof BACK | undefined) => {
 			onReply = undefined;
 			abandon = undefined;
 			resolve(v);
@@ -151,7 +157,7 @@ export async function askInWindow(kind: WizardKind, title: string, prompt: strin
 		onReply = (m) => {
 			if (!m || typeof m !== 'object' || m.cmd === 'hello' || m.id !== q.id)
 				return;
-			finish(m.cmd === 'answer' ? m.value : undefined);
+			finish(m.cmd === 'answer' ? m.value : m.cmd === 'back' ? BACK : undefined);
 		};
 		b.publish(TOPIC_WIZARD_ASK, q);
 	});

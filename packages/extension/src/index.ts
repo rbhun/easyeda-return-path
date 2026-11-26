@@ -3,7 +3,7 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, classifySignal, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, parseHz, solveDcSteps, summariseSignal, traceStreamlines, DRAWN_STREAMS, type Board, type DcSetupInput, type Pad, type SignalKind, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, classifySignal, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, solveDcSteps, summariseSignal, traceStreamlines, DRAWN_STREAMS, type Board, type DcSetupInput, type Pad, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
@@ -11,9 +11,8 @@ import { clearOverlay, drawAnalysis, toggleOverlay } from './overlay';
 import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, report, shareLastRun, sharedLastRun } from './panel';
 import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
 import { roleColour } from './style';
-import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
-
-const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
+import { dialogAsk, loggedAsk, runDcWizard, withBack, type Ask } from './wizard';
+import { t } from './i18n';
 
 const HF_BUDGET_MS = 60_000;
 const DC_BUDGET_MS = 120_000;
@@ -126,16 +125,19 @@ export async function runReturnPath(ask: Ask, fromSelection = false): Promise<vo
 			await hfFor(selected, ask, { board });
 			return;
 		}
-		const picked = await chooseNet(board, selected, loggedAsk(ask));
+		const picked = await withBack(loggedAsk(ask), async (a) => {
+			const chosen = await chooseNet(board, selected, a);
+			return chosen && { ...chosen, drivers: await chooseDrivers(board, chosen.net, a) };
+		});
 		if (!picked) {
 			recordResult('outcome', 'no net chosen');
 			return;
 		}
-		await hfFor(picked.net, ask, { board, hz: picked.hz });
+		await hfFor(picked.net, ask, { board, hz: picked.hz, drivers: picked.drivers });
 	}).finally(ask.close);
 }
 
-/** Lists the signal nets, recognised data lines first, and asks for the net and its speed. */
+/** Lists the signal nets, recognised data lines first, each with its speeds, the usual one for its kind preselected. */
 async function chooseNet(board: Board, selected: string | undefined, ask: Ask): Promise<{ net: string; hz: number } | undefined> {
 	const title = t('HF check');
 	const cands = hfCandidates(board);
@@ -144,34 +146,17 @@ async function chooseNet(board: Board, selected: string | undefined, ask: Ask): 
 		eda.sys_Dialog.showInformationMessage(t('No routed signal nets on this board: only ground, supply, plane and bias nets have tracks.'), title);
 		return undefined;
 	}
-	const options = cands.map(c => ({ value: c.net, label: `${c.net} · ${c.kind ? c.kind.label : t('other signal')} · ${c.lengthMm.toFixed(0)} mm` }));
-	const dflt = cands.some(c => c.net === selected) ? selected : cands[0].net;
-	const net = await ask.select(title, t('Net to check. Recognised data lines come first, with their kind; the selected net is ticked.'), options, dflt);
-	if (!net)
-		return undefined;
-	const hz = await chooseSpeed(net, cands.find(c => c.net === net)?.kind ?? GENERIC, ask);
-	return hz ? { net, hz } : undefined;
-}
-
-async function chooseSpeed(net: string, kind: SignalKind, ask: Ask): Promise<number | undefined> {
-	const OTHER = 'other';
-	const options = [
-		...kind.speeds.map(s => ({ value: String(s.hz), label: t('${1} (edges ≈ ${2} ns)', s.label, String(s.riseNs)) })),
-		{ value: OTHER, label: t('Other speed...') },
-	];
-	const what = kind.type === GENERIC.type ? t('signal') : kind.label;
-	const v = await ask.select(t('HF check'), t('Speed of ${1} (${2}): the bit rate or clock frequency. It sets the edge time, which decides whether the trace acts as a transmission line.', net, what), options, String(kind.speeds[kind.dflt].hz));
-	if (v !== OTHER)
-		return v ? Number(v) : undefined;
-	for (let text = ''; ;) {
-		const typed = await ask.input(t('HF check'), t('Speed of ${1}, for example 400k, 12 MHz or 115200.', net), text);
-		if (typed === undefined)
-			return undefined;
-		const hz = parseHz(typed);
-		if (hz)
-			return hz;
-		text = typed;
-	}
+	const options = cands.map((c) => {
+		const kind = c.kind ?? GENERIC;
+		return {
+			value: c.net,
+			label: `${c.net} · ${c.kind ? c.kind.label : t('other signal')} · ${c.lengthMm.toFixed(0)} mm`,
+			speeds: kind.speeds.map(s => ({ value: String(s.hz), label: t('${1} (edges ≈ ${2} ns)', s.label, String(s.riseNs)) })),
+			speed: String(kind.speeds[kind.dflt].hz),
+		};
+	});
+	const dflt = cands.some(c => c.net === selected) ? selected! : cands[0].net;
+	return ask.netSpeed(title, t('Net to check and its speed (bit rate or clock frequency), prefilled with the usual speed of its kind. The speed sets the edge time, which decides whether the trace acts as a transmission line. Recognised data lines come first; the selected net is ticked.'), options, dflt);
 }
 
 async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: number; board?: Board; dcWithoutAsking?: boolean } = {}): Promise<void> {
@@ -267,7 +252,7 @@ export async function runDcReturn(ask: Ask, preferredRail?: string, railGiven = 
 		await addPinNames(board);
 		recordResult('board', boardSizes(board));
 		const last = lastRun();
-		const wiz = await runDcWizard(board, loggedAsk(ask), rail, railGiven, last?.kind === 'dc' ? last.input : undefined);
+		const wiz = await withBack(loggedAsk(ask), a => runDcWizard(board, a, rail, railGiven, last?.kind === 'dc' ? last.input : undefined));
 		await ask.close();
 		if (!wiz) {
 			recordResult('outcome', 'wizard closed');

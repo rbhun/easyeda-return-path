@@ -5,7 +5,7 @@ import { analyzeNet } from '@returnpath/core';
 import { parseEasyEdaPcb } from '@returnpath/cli/parse';
 import { buildEpro } from '@returnpath/cli/synth';
 import { strFromU8, unzipSync } from 'fflate';
-import { createMockEda } from './mock-eda.ts';
+import { BACK_ANSWER, createMockEda } from './mock-eda.ts';
 
 function demoBoard() {
 	const files = unzipSync(buildEpro('demo', 'object'));
@@ -41,12 +41,15 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.match(mock.messages[0], /^CLK: 8 finding\(s\)/);
 	assert.match(mock.messages[0], /Return current on Inner1: green, Inner2: blue, drawn on the reference copper right under the trace .*Dashed yellow: hop between layers or into a part .*red over the trace: it crosses a gap, or has too little reference copper\./);
 	assert.match(mock.messages[0], /^CLK: clock at 16 MHz\. Edges ≈ 2\.0 ns .* it acts as a transmission line/m);
-	const pick = mock.wizardPages.find(p => /^Net to check/.test(p.prompt))!;
+	const pick = mock.wizardPages.find(p => /^Net to check and its speed/.test(p.prompt))!;
+	assert.equal(pick.kind, 'nets', 'net and speed on one page');
 	assert.deepEqual(pick.options.map(o => o.label), ['CLK · clock · 65 mm'], 'the selected net is offered with its kind and length');
 	assert.equal(pick.value, 'CLK');
-	const speed = mock.wizardPages.find(p => /^Speed of CLK/.test(p.prompt))!;
-	assert.equal(speed.value, String(16e6), 'the usual speed of a clock is ticked');
-	assert.match(speed.options.at(-1)!.label, /Other speed/);
+	const clk = pick.options[0] as unknown as { speed: string; speeds: { value: string; label: string }[] };
+	assert.equal(clk.speed, String(16e6), 'prefilled with the usual speed of a clock');
+	assert.ok(clk.speeds.every(s => /^\S.* \(edges ≈ [\d.]+ ns\)$/.test(s.label) && !s.label.includes('${')), 'speed labels are filled in');
+	assert.equal(pick.back, false, 'nothing to go back to on the first page');
+	assert.equal(mock.wizardPages.find(p => /Which part drives CLK/.test(p.prompt))?.back, true, 'Back on the driver page');
 	const q = mock.dialogs.find(d => /Which part drives CLK/.test(d.prompt))!;
 	assert.deepEqual(q.options, ['U1', 'U2', '*', '-'], 'no pin names on this board: both ICs offered, plus both and none');
 	assert.match(mock.messages[0], /Driver: U1\./);
@@ -64,6 +67,54 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.equal(mock.markers.length, count, 'redraw replaces the previous markers');
 	await ext.clearReturnPath();
 	assert.equal(mock.markers.length, 0);
+});
+
+test('net and speed on one page: a listed speed or a typed one sets the edge time', async () => {
+	for (const [speed, shown] of [['400000', '400 kHz'], ['2.5 MHz', '2.5 MHz']]) {
+		const mock = createMockEda(board, 'CLK', [], d => (d.kind === 'nets' ? ['CLK', speed] : d.dflt));
+		(globalThis as Record<string, unknown>).eda = mock.eda;
+		await ext.showReturnPath();
+		assert.ok(!mock.dialogs.some(d => /^Speed of/.test(d.prompt)), 'no separate speed page');
+		assert.match(mock.messages[0], new RegExp(`^CLK: clock at ${shown.replace('.', '\\.')}\\.`, 'm'));
+	}
+});
+
+test('Back on the driver page returns to the net page with the earlier net and speed kept', async () => {
+	let driverPages = 0;
+	const mock = createMockEda(board, 'CLK', [], (d) => {
+		if (d.kind === 'nets')
+			return mock.wizardPages.filter(p => p.kind === 'nets').length === 1 ? ['CLK', '4000000'] : d.dflt;
+		if (/Which part drives/.test(d.prompt))
+			return ++driverPages === 1 ? BACK_ANSWER : 'U2';
+		return d.dflt;
+	});
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showReturnPath();
+	const nets = mock.wizardPages.filter(p => p.kind === 'nets');
+	assert.equal(nets.length, 2, 'the net page is shown again');
+	assert.equal(nets[1].value, 'CLK');
+	assert.equal(nets[1].options[0].speed, '4000000', 'with the speed given before');
+	assert.equal(mock.wizard.opens, 1, 'in the same window');
+	assert.match(mock.messages[0], /^CLK: clock at 4 MHz\./m);
+	assert.match(mock.messages[0], /Driver: U2\./);
+	assert.ok(mock.logs.some(l => /wizard: back/.test(l.message)));
+});
+
+test('without the wizard window the net and its speed are asked in two system dialogs, with a typed speed', async () => {
+	const { wizardTimeouts } = await import('../src/wizard-window.ts');
+	const saved = wizardTimeouts.helloMs;
+	wizardTimeouts.helloMs = 20;
+	try {
+		const mock = createMockEda(board, 'CLK', [], d => (/^Speed of CLK:/.test(d.prompt) ? 'other' : d.kind === 'input' ? '25 MHz' : d.dflt), { wizardWindow: 'refused' });
+		(globalThis as Record<string, unknown>).eda = mock.eda;
+		await ext.showReturnPath();
+		const speed = mock.dialogs.find(d => /^Speed of CLK:/.test(d.prompt))!;
+		assert.equal(speed.dflt, String(16e6), 'the usual speed of a clock is preselected');
+		assert.match(mock.messages[0], /^CLK: clock at 25 MHz\./m);
+	}
+	finally {
+		wizardTimeouts.helloMs = saved;
+	}
 });
 
 test('plane-layer copper takes its net from the mode-2 fill around it', async () => {
@@ -130,4 +181,19 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	assert.ok(cyan.every(m => m.width === 3));
 	mock.panelSend({ cmd: 'resetStyle' });
 	await new Promise(r => setTimeout(r, 50));
+});
+
+test('every text the extension translates has an entry in each locale, so EasyEDA fills its ${n} placeholders', async () => {
+	const { readFileSync, readdirSync } = await import('node:fs');
+	const dir = new URL('../src/', import.meta.url);
+	const keys = new Set<string>();
+	for (const f of readdirSync(dir).filter(f => f.endsWith('.ts'))) {
+		for (const m of readFileSync(new URL(f, dir), 'utf8').matchAll(/\bt\((['`])((?:\\.|(?!\1).)*)\1/g))
+			keys.add(m[2].replace(/\\(.)/g, (_, c: string) => (c === 'n' ? '\n' : c)));
+	}
+	assert.ok(keys.size > 50);
+	for (const locale of ['en', 'zh-Hans']) {
+		const entries = JSON.parse(readFileSync(new URL(`../locales/${locale}.json`, import.meta.url), 'utf8')) as Record<string, string>;
+		assert.deepEqual([...keys].filter(k => !(k in entries)), [], `missing in ${locale}.json`);
+	}
 });

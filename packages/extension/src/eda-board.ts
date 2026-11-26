@@ -233,11 +233,17 @@ async function projectFilePinNames(): Promise<Map<string, Map<string, string>> |
 	return names;
 }
 
+/** Boards already given their pin names; a wizard that goes back asks again without reading them again. */
+const named = new WeakSet<Board>();
+
 /**
  * Fills Pad.pinName from the board's netlist, or from the project file when the netlist gives none,
  * so DC loads return only through their ground pins and the driver question shows pin names.
  */
 export async function addPinNames(board: Board): Promise<number> {
+	if (named.has(board))
+		return board.pads.filter(p => p.pinName).length;
+	named.add(board);
 	const fromNetlist = await netlistPinNames();
 	const names = fromNetlist ?? await projectFilePinNames();
 	if (!names) {

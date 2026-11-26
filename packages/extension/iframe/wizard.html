@@ -78,6 +78,16 @@
 			.current input[type="range"] { flex: 0 0 110px; width: 110px; margin: 0; accent-color: var(--accent); }
 			.current small { flex: 0 0 34px; text-align: right; }
 			.current.total span { font-weight: 600; }
+			#back { margin-right: auto; }
+			.net { display: flex; align-items: center; gap: 8px; padding: 2px 8px; }
+			.net label { flex: 1 1 auto; min-width: 0; padding: 1px 0; }
+			.net label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.net select, .net input[type="text"] { flex: 0 0 auto; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+			.net select { width: 250px; }
+			.net.other select { width: 150px; }
+			.net input[type="text"] { width: 90px; }
+			.net input.bad { border-color: #e5484d; }
+			.net.on { background: #33363b; }
 			footer { display: flex; justify-content: flex-end; gap: 6px; flex: 0 0 auto; }
 			button {
 				min-width: 84px;
@@ -100,6 +110,7 @@
 		<p id="prompt" class="muted">Connecting to the extension…</p>
 		<div id="body"></div>
 		<footer>
+			<button id="back" hidden>Back</button>
 			<button id="cancel">Cancel</button>
 			<button id="ok" class="primary" disabled>OK</button>
 		</footer>
@@ -129,6 +140,7 @@
 				function refresh() {
 					$('ok').disabled = answered || !valid();
 					$('cancel').disabled = answered;
+					$('back').disabled = answered;
 				}
 
 				function list(type, selected) {
@@ -157,6 +169,8 @@
 					$('prompt').classList.remove('muted');
 					$('ok').textContent = q.ok;
 					$('cancel').textContent = q.labels.cancel;
+					$('back').textContent = q.labels.back;
+					$('back').hidden = !q.back;
 					var body = $('body');
 					body.textContent = '';
 					var focus = $('ok');
@@ -271,6 +285,52 @@
 						};
 						focus = total;
 						draw();
+					} else if (q.kind === 'nets') {
+						// One row per net: pick it, and its speed (the usual one for its kind is preselected).
+						var hzOk = /^(\d+(?:[.,]\d+)?)\s*([kKmMgG]?)(?:hz|Hz|HZ|b\/s|bps|baud)?$/;
+						var OTHER = '__other__';
+						var nets = [];
+						var nl = el('ul', { role: 'radiogroup' });
+						var mark = function () { nets.forEach(function (n) { n.li.classList.toggle('on', n.radio.checked); }); refresh(); };
+						q.options.forEach(function (o) {
+							var radio = el('input', { type: 'radio', name: 'net', value: o.value, checked: o.value === q.value });
+							var sel = el('select', {});
+							sel.setAttribute('aria-label', q.labels.speed + ' ' + o.value);
+							(o.speeds || []).forEach(function (sp) { sel.appendChild(el('option', { value: sp.value, textContent: sp.label, selected: sp.value === o.speed })); });
+							sel.appendChild(el('option', { value: OTHER, textContent: q.labels.other }));
+							var listed = (o.speeds || []).some(function (sp) { return sp.value === o.speed; });
+							var custom = el('input', { type: 'text', spellcheck: false, placeholder: '400k', hidden: listed, value: listed ? '' : (o.speed || '') });
+							if (!listed) sel.value = OTHER;
+							var shown = function () { li.classList.toggle('other', sel.value === OTHER); sel.title = sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : ''; };
+							var li = el('li', { className: 'net' }, [el('label', {}, [radio, el('span', { textContent: o.label, title: o.label })]), sel, custom]);
+							var n = { o: o, radio: radio, sel: sel, custom: custom, li: li };
+							shown();
+							var pick = function () { radio.checked = true; mark(); };
+							radio.addEventListener('change', mark);
+							radio.addEventListener('dblclick', function () { $('ok').click(); });
+							sel.addEventListener('change', function () {
+								custom.hidden = sel.value !== OTHER;
+								shown();
+								if (!custom.hidden) custom.focus();
+								pick();
+							});
+							custom.addEventListener('input', function () { custom.classList.toggle('bad', !hzOk.test(custom.value.trim())); pick(); });
+							nets.push(n);
+							nl.appendChild(li);
+						});
+						body.appendChild(nl);
+						var chosen = function () { return nets.filter(function (n) { return n.radio.checked; })[0]; };
+						read = function () {
+							var n = chosen();
+							return n ? [n.o.value, n.sel.value === OTHER ? n.custom.value.trim() : n.sel.value] : [];
+						};
+						valid = function () {
+							var n = chosen();
+							return !!n && (n.sel.value !== OTHER || hzOk.test(n.custom.value.trim()));
+						};
+						var c0 = chosen();
+						if (c0) { focus = c0.radio; setTimeout(function () { c0.li.scrollIntoView({ block: 'nearest' }); }); }
+						mark();
 					} else if (q.kind === 'input') {
 						var input = el('input', { type: 'text', value: q.value, spellcheck: false });
 						body.appendChild(input);
@@ -291,6 +351,12 @@
 					refresh();
 					$('prompt').classList.add('muted');
 					send({ cmd: 'answer', id: q.id, value: read() });
+				};
+				$('back').onclick = function () {
+					if (!q || answered || !q.back) return;
+					answered = true;
+					refresh();
+					send({ cmd: 'back', id: q.id });
 				};
 				$('cancel').onclick = function () {
 					if (!q || answered) return;

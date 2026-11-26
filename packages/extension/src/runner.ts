@@ -7,8 +7,7 @@
 // checkpoint() waits for both writes; call it before any step that could block.
 import { AnalysisAborted, runAsync, type Board, type Steps, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
-
-const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
+import { t } from './i18n';
 
 const PREFIX = '[ReturnPath]';
 const PROGRESS_LISTENER = 'returnpath-progress';
