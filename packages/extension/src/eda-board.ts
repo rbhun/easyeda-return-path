@@ -33,6 +33,7 @@ import {
 	type Via,
 } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
+import { canvasOrigin } from './overlay';
 import { checkpoint, log, readStored, TimedOut, withTimeout, writeStored, yieldToEditor } from './runner';
 
 const VERSION = extensionConfig.version;
@@ -922,5 +923,7 @@ export async function readBoard(): Promise<Board> {
 	const outline = await readOutline(outlineSegments, warnings);
 	const keepouts = await readKeepouts(copperIds);
 	await step(`board outline ${outline.length ? `${outline.length} ring(s)` : 'missing'}, ${keepouts.length} pour keepouts`);
+	// The PCB is open now; the overlay drawn after a long solve may find no canvas to convert on.
+	await canvasOrigin();
 	return { outline, stackup, nets, tracks, vias, pads, components, pours, keepouts, warnings };
 }

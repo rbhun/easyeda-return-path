@@ -64,6 +64,24 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.equal(mock.markers.length, 0);
 });
 
+test('the overlay is drawn when the editor cannot convert the canvas origin any more after the solve', async () => {
+	const at = { x: 1000, y: -500 };
+	const drawWith = async (host: Parameters<typeof createMockEda>[4]) => {
+		const mock = createMockEda(board, '3V3', [], undefined, host);
+		(globalThis as Record<string, unknown>).eda = mock.eda;
+		await ext.showDcReturn();
+		return mock;
+	};
+	const fine = await drawWith({ canvasOrigin: at });
+	const lost = await drawWith({ canvasOrigin: at, originWorksFor: 1 });
+	assert.ok(!lost.infoDialogs.some(m => /Error/.test(m)), 'no error dialog');
+	assert.equal(lost.messages.length, 1, 'the result is shown');
+	assert.ok(lost.logs.some(l => /canvas origin unavailable \(convertDataOriginToCanvasOrigin failed: Cannot read properties of null.*current document null; using the one read earlier \(1000, -500\)/.test(l.message)));
+	assert.deepEqual(lost.markers, fine.markers, 'drawn where the origin read with the board puts them');
+	const never = await drawWith({ canvasOrigin: at, originWorksFor: 0 });
+	assert.ok(never.markers.length > 0 && never.logs.some(l => /drawing without an origin offset/.test(l.message)));
+});
+
 test('wizard: user picks another source and gives currents', async () => {
 	const j2 = board.components.find(c => c.designator === 'J2')!.id;
 	const mock = await run('', (d) => {

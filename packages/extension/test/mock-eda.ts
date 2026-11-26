@@ -40,6 +40,10 @@ export interface MockHost {
 	project?: { uuid: string; friendlyName: string } | null;
 	/** The file the open-file dialog returns; omitted: the user closes the dialog. */
 	openFile?: { name: string; text: string };
+	/** Canvas position of the data origin (mil); default 0, 0. */
+	canvasOrigin?: Pt;
+	/** How many data-to-canvas conversions work; after that both conversions throw from inside, as with no PCB canvas. */
+	originWorksFor?: number;
 }
 
 /** Answers every dialog with its default unless `answer` says otherwise. */
@@ -60,6 +64,8 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const progress: { progress?: number; title?: string }[] = [];
 	const toasts: string[] = [];
 	const storage = host.storage ?? new Map<string, unknown>();
+	let originCalls = 0;
+	let noCanvas = false;
 	const files = new Map<string, string>();
 	const downloads: { name?: string; text: string }[] = [];
 	const counts = { boardReads: 0 };
@@ -241,6 +247,7 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 				cb(answer({ kind: 'input', prompt: before, title, options: [], dflt: value }));
 			},
 		},
+		dmt_SelectControl: { getCurrentDocumentInfo: async () => (noCanvas ? undefined : { documentType: 3, uuid: 'demo-pcb', tabId: 'demo-pcb' }) },
 		dmt_Project: {
 			getCurrentProjectInfo: async () => (host.project === null ? undefined : host.project ?? { uuid: 'demo-project', friendlyName: 'Demo board' }),
 		},
@@ -254,7 +261,19 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 				return true;
 			},
 		},
-		pcb_Document: { convertDataOriginToCanvasOrigin: async (x: number, y: number) => ({ x, y }) },
+		pcb_Document: {
+			convertDataOriginToCanvasOrigin: async (x: number, y: number) => {
+				noCanvas = ++originCalls > (host.originWorksFor ?? Infinity);
+				if (noCanvas)
+					return (null as unknown as Pt).x as never;
+				return { x: x + (host.canvasOrigin?.x ?? 0), y: y + (host.canvasOrigin?.y ?? 0) };
+			},
+			convertCanvasOriginToDataOrigin: async (x: number, y: number) => {
+				if (noCanvas)
+					return (null as unknown as Pt).x as never;
+				return { x: x - (host.canvasOrigin?.x ?? 0), y: y - (host.canvasOrigin?.y ?? 0) };
+			},
+		},
 		pcb_SelectControl: {
 			getAllSelectedPrimitives: async () => selection
 				? selection.map(i => ({ getState_PrimitiveType: () => i.type, getState_PrimitiveId: () => i.id, getState_Net: () => board.pads.find(p => p.id === i.id)?.net }))

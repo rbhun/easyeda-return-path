@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.57] - 2026-11-26
+
+From Balazs: a DC check stopped with "Cannot read properties of null (reading 'x')" thrown inside `convertDataOriginToCanvasOrigin` (pro-api 0.3.59). The solve had finished; only the drawing failed.
+
+- **The overlay no longer depends on the editor converting the canvas origin at drawing time.** The conversion throws inside EasyEDA when it has no PCB canvas to work on, for example when another tab or window has the focus after the solve. The origin is now also read while the board is read, when the PCB is surely open. If the conversion fails later, the overlay tries the inverse conversion, then that earlier origin, and as a last resort no offset. It no longer stops the run. The log records which conversion failed and which document was active (one warning line), and the same applies to the HF overlay.
+
 ## [0.1.56] - 2026-11-26
 
 From Balazs: on the R-Com dongle, the +12V return looped through the ground vias of U19 and C115 instead of going straight back from U5 and C23.
