@@ -4,6 +4,7 @@ import { DEFAULT_MAX_DETOUR_NODES, geodesic, geodesicSteps, TOO_COMPLEX, type De
 import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, pointInPaths, Polyline, strokePath, union } from './geom.js';
 import { allCopper, buildReferenceCopperSteps, vertexCount, type LayerCopper } from './refcopper.js';
 import { isPassive } from './driver.js';
+import { pathInductance, viaInductance } from './inductance.js';
 import { buildReturnPath, type ReturnPath } from './returnpath.js';
 import { EdgeGrid } from './spatial.js';
 import { MULTI_LAYER, type Board, type Component, type Path, type Paths, type Pt, type Track, type Via } from './types.js';
@@ -98,7 +99,7 @@ export interface Gap {
   detour?: Detour & { directLength: number; extraLength: number; loopArea: number; loop: Path };
   /** For splits between nets, or slots without an in-plane path. */
   bridge?: Bridge | null;
-  /** Taken instead of a detour on the reference layer when it is shorter, or when there is none. */
+  /** Taken instead of a detour on the reference layer when its loop inductance is lower, or when there is none. */
   viaRoute?: ViaRoute;
   /** The detour as drawn: around every hole of the copper, also the small ones its length ignores. */
   drawn?: Path;
@@ -124,6 +125,25 @@ export interface ViaRoute {
   /** Reference layer to the first via, the other layer between the vias, reference layer from the second. */
   legs: { layer: number; path: Path }[];
   length: number;
+  /** Loop inductance the route adds against the trace, vias included, nH. */
+  inductance: number;
+}
+
+/** How a return route is weighed: against this trace, at these heights from its layer (mm). */
+interface RouteCost {
+  signal: Polyline;
+  halfWidth: number;
+  /** Height of the reference layer and of the other layer from the trace's layer, mm. */
+  hRef: number;
+  hOther: number;
+}
+
+/** A return the drawing takes between two points of its reference copper. */
+export interface ReturnRoute {
+  legs: { layer: number; path: Path }[];
+  /** Vias the route passes through, from one layer to the other. */
+  vias: Pt[];
+  inductance: number;
 }
 
 export interface ViaTransition {
@@ -288,7 +308,7 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     yield { phase: 'vias', fraction: i / ownVias.length };
     vias.push(analyzeVia(ctx, via, tracks, results, findings));
   }
-  const returnPath = buildReturnPath(board, net, results, vias, ctx, findings, opts);
+  const returnPath = yield* buildReturnPath(board, net, results, vias, ctx, findings, opts);
   return { net, refCopper, chains: results, vias, returnPath, findings, stats };
 }
 
@@ -378,6 +398,24 @@ class Context {
     return null;
   }
 
+  /**
+   * The return of a chain from a to b, both in `net` copper on the chain's reference layer: round
+   * through that copper, or down a via, along the other layer and back up, whichever adds less loop
+   * inductance. Null when neither way exists.
+   */
+  returnRoute(c: ChainResult, net: string, a: Pt, b: Pt): ReturnRoute | null {
+    const ref = c.ref;
+    const region = ref && this.refCopper.get(ref.layer)?.byNet.get(net);
+    if (!ref || !region) return null;
+    const cost = routeCost(this, c.chain, ref);
+    const round = drawnGeodesic(region, a, b, this.opts.maxDetourNodes);
+    const inPlane = round ? pathInductance(round.path, cost.signal, cost.halfWidth, cost.hRef) : Infinity;
+    const other = ref.coplanar ? referenceFor(this.board, c.chain.layer, this.refCopper)?.layer : c.chain.layer;
+    const via = other === undefined ? null : viaRoute(this, net, ref.layer, other, a, b, cost, inPlane);
+    if (via) return { legs: via.legs, vias: via.vias, inductance: via.inductance };
+    return round ? { legs: [{ layer: ref.layer, path: round.path }], vias: [], inductance: inPlane } : null;
+  }
+
   copper(layer: number, exclude?: string): Paths {
     const k = `${layer}|${exclude ?? ''}`;
     let c = this.merged.get(k);
@@ -388,6 +426,17 @@ class Context {
     }
     return c;
   }
+}
+
+function routeCost(ctx: Context, chain: Chain, ref: Reference): RouteCost {
+  const track = ctx.board.tracks.find((t) => t.id === chain.trackIds[0]);
+  const adjacent = ref.coplanar ? referenceFor(ctx.board, chain.layer, ctx.refCopper) : null;
+  return {
+    signal: new Polyline(chain.pts),
+    halfWidth: (track?.width ?? 0.2) / 2,
+    hRef: ref.coplanar ? 0 : ref.h,
+    hOther: ref.coplanar ? (adjacent?.h ?? 0) : 0,
+  };
 }
 
 /** Nearest copper layer above/below that has reference copper. */
@@ -557,38 +606,50 @@ function sliceChain(chain: Chain, line: Polyline, s0: number, s1: number): Chain
 }
 
 /**
- * Shortest return from a to b on `refLayer` that crosses through `otherLayer`: to a via (or
- * through-hole pad) of the net near a, in that net's copper on the other layer to one near b, and
- * on to b. Null when no such path is shorter than maxLength.
+ * Return from a to b on `refLayer` that crosses through `otherLayer`: to a via (or through-hole pad)
+ * of the net near a, in that net's copper on the other layer to one near b, and on to b. The one
+ * with the least loop inductance, vias included; null when none is below maxInductance.
  */
-function viaRoute(ctx: Context, net: string, refLayer: number, otherLayer: number, a: Pt, b: Pt, maxLength: number): ViaRoute | null {
+function viaRoute(ctx: Context, net: string, refLayer: number, otherLayer: number, a: Pt, b: Pt, cost: RouteCost, maxInductance: number): ViaRoute | null {
   const { board, opts } = ctx;
   const here = ctx.refCopper.get(refLayer)?.byNet.get(net);
   const there = ctx.refCopper.get(otherLayer)?.byNet.get(net);
   if (!here || !there) return null;
-  const stops = [...board.vias.filter((v) => v.net === net).map((v) => v.at), ...board.pads.filter((p) => p.net === net && p.layer === MULTI_LAYER).map((p) => p.at)];
-  const go = (region: Paths, p: Pt, q: Pt) => drawnGeodesic(region, p, q, opts.maxDetourNodes);
+  const stops = [
+    ...board.vias.filter((v) => v.net === net).map((v) => ({ at: v.at, drill: v.drill })),
+    ...board.pads.filter((p) => p.net === net && p.layer === MULTI_LAYER).map((p) => ({ at: p.at, drill: p.holeDiameter })),
+  ];
+  const barrel = (drill: number) => viaInductance(Math.abs(cost.hRef - cost.hOther), drill);
+  const go = (region: Paths, p: Pt, q: Pt, h: number) => {
+    const d = drawnGeodesic(region, p, q, opts.maxDetourNodes);
+    return d ? { ...d, inductance: pathInductance(d.path, cost.signal, cost.halfWidth, h) } : null;
+  };
   const near = (p: Pt) =>
     stops
-      .filter((s) => dist(s, p) <= VIA_ROUTE_REACH)
-      .sort((u, v) => dist(u, p) - dist(v, p))
+      .filter((s) => dist(s.at, p) <= VIA_ROUTE_REACH)
+      .sort((u, v) => dist(u.at, p) - dist(v.at, p))
       .slice(0, 3);
   const fromA = near(a).flatMap((v) => {
-    const d = go(here, a, v);
+    const d = go(here, a, v.at, cost.hRef);
     return d ? [{ v, d }] : [];
   });
   const toB = near(b).flatMap((v) => {
-    const d = go(here, v, b);
+    const d = go(here, v.at, b, cost.hRef);
     return d ? [{ v, d }] : [];
   });
   let best: ViaRoute | null = null;
   for (const s of fromA)
     for (const e of toB) {
-      if (dist(s.v, e.v) < 1e-6 || s.d.length + dist(s.v, e.v) + e.d.length >= (best?.length ?? maxLength)) continue;
-      const m = go(there, s.v, e.v);
-      const length = m ? s.d.length + m.length + e.d.length : Infinity;
-      if (m && length < (best?.length ?? maxLength))
-        best = { vias: [s.v, e.v], length, legs: [{ layer: refLayer, path: s.d.path }, { layer: otherLayer, path: m.path }, { layer: refLayer, path: e.d.path }] };
+      const ends = s.d.inductance + e.d.inductance + barrel(s.v.drill) + barrel(e.v.drill);
+      if (dist(s.v.at, e.v.at) < 1e-6 || ends >= (best?.inductance ?? maxInductance)) continue;
+      const m = go(there, s.v.at, e.v.at, cost.hOther);
+      if (!m || ends + m.inductance >= (best?.inductance ?? maxInductance)) continue;
+      best = {
+        vias: [s.v.at, e.v.at],
+        length: s.d.length + m.length + e.d.length,
+        inductance: ends + m.inductance,
+        legs: [{ layer: refLayer, path: s.d.path }, { layer: otherLayer, path: m.path }, { layer: refLayer, path: e.d.path }],
+      };
     }
   return best;
 }
@@ -763,7 +824,10 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
       // Through the other layer: down a via of the reference net on one side of the gap, back up on the other.
       yield { phase: 'gaps' };
       const other = ref.coplanar ? adjacent?.layer : chain.layer;
-      const route = other === undefined ? null : viaRoute(ctx, before!, ref.layer, other, pa, pb, gap.detour?.length ?? Infinity);
+      const cost = routeCost(ctx, chain, ref);
+      const round = gap.detour ? pathInductance(gap.drawn ?? gap.detour.path, cost.signal, cost.halfWidth, cost.hRef) : Infinity;
+      const route = other === undefined ? null : viaRoute(ctx, before!, ref.layer, other, pa, pb, cost, round);
+      const nH = (x: number) => `${x.toFixed(1)} nH`;
       if (route) {
         gap.detour = undefined;
         gap.viaRoute = route;
@@ -772,14 +836,15 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
         findings.push({
           severity: extra < opts.slotDetour.warn ? 'warn' : 'error',
           kind: 'slot-crossing',
-          message: `${where}: crosses a ${(r.s1 - r.s0).toFixed(2)} mm gap in ${before}; the return goes through the ${before} vias at ${at(route.vias[0])} and ${at(route.vias[1])} and the ${before} copper on ${layerName(other!)}, +${extra.toFixed(1)} mm`,
+          message: `${where}: crosses a ${(r.s1 - r.s0).toFixed(2)} mm gap in ${before}; the return goes through the ${before} vias at ${at(route.vias[0])} and ${at(route.vias[1])} and the ${before} copper on ${layerName(other!)}, +${extra.toFixed(1)} mm, ${nH(route.inductance)}${gap.detour ? ` (round the gap in ${layerName(ref.layer)} copper: ${nH(round)})` : ''}`,
           at: mid,
         });
       } else if (gap.detour) {
+        const via = other === undefined ? '' : `; no way through ${before} vias adds less inductance`;
         findings.push({
           severity: gap.detour.extraLength < opts.slotDetour.warn ? 'warn' : 'error',
           kind: 'slot-crossing',
-          message: `${where}: crosses a ${(r.s1 - r.s0).toFixed(2)} mm gap in ${before}; return detours +${gap.detour.extraLength.toFixed(1)} mm, adds ${gap.detour.loopArea.toFixed(1)} mm² loop area`,
+          message: `${where}: crosses a ${(r.s1 - r.s0).toFixed(2)} mm gap in ${before}; return detours +${gap.detour.extraLength.toFixed(1)} mm, adds ${gap.detour.loopArea.toFixed(1)} mm² loop area, ${nH(round)}${via}`,
           at: mid,
         });
       } else {

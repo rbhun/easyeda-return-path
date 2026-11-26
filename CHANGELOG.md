@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.53] - 2026-11-26
+
+HF check: each return is one unbroken line, where the current actually flows.
+
+- **Least loop inductance**: the drawn return is the path of least loop inductance through the reference copper, found on a 0.05 mm grid round the trace (each step costs (μ0/2π)·ln(1 + (s² + h²)/r²) nH per mm at distance s beside the trace and h below it). Over a plane it runs under the trace and round holes; beside a coplanar trace it takes the nearest pour edge that carries on.
+- **One line, no dead ends**: a coplanar return is drawn on one side only, not on both. A strip of pour that ends (such as the outside of the bend at OLED1 on SD0) gets no line, and the line no longer stops or breaks where the copper beside the trace thins out. It breaks only where the current leaves the copper: at a split, where the trace has no reference copper, and at the pins and vias at the ends.
+- **Follows the trace**: the line keeps to the course of the stretch it mirrors and does not cut across to another (such as the next leg of a meander). Under a meander far finer than its height above the plane it follows the meander's course, within 0.25 mm.
+- **Round a gap or through vias, by inductance**: where a gap leaves the return both ways, round it in the copper or through GND vias and the other layer, the one with less loop inductance is taken (each via ≈ 1.3 nH through a 1.6 mm board), not the shorter one. The finding gives both in nH.
+- The return path is built in time slices like the rest of the analysis (new phase "return path").
+- Every-net run time in Node: rack display 53 → 72 s, dongle 73 → 85 s. Audit on both test boards, every signal net: no drawn return outside its reference copper, on another net's copper or crossing it.
+
 ## [0.1.52] - 2026-11-26
 
 HF check: no drawn return line leaves its reference copper.

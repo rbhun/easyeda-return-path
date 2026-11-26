@@ -6,6 +6,8 @@ export * from './refcopper.js';
 export * from './detour.js';
 export * from './analyze.js';
 export * from './returnpath.js';
+export * from './returnflow.js';
+export * from './inductance.js';
 export * from './driver.js';
 export * from './easyeda-polygon.js';
 export * from './dc/index.js';

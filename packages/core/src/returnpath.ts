@@ -1,10 +1,12 @@
 // The high-frequency return path as drawable geometry (D7): where the image current runs on each
 // reference layer, and the hops it makes off the plane (bridging caps, return vias, decaps, and the
 // IC ground pins that close the loop at the ends of the net).
-import type { ChainResult, Finding, Severity, ViaResult } from './analyze.js';
+import type { ChainResult, Finding, ReturnRoute, Severity, ViaResult } from './analyze.js';
 import { isGroundNet } from './dc/rails.js';
 import { driverLoop, isPassive, type DriverLoop } from './driver.js';
 import { add, dist, distPointSeg, distToPaths, len, mul, Polyline, sub } from './geom.js';
+import type { Steps } from './budget.js';
+import { leastInductancePath } from './returnflow.js';
 import { MULTI_LAYER, type Board, type Pad, type Path, type Pt } from './types.js';
 
 export interface ReturnTrace {
@@ -53,11 +55,21 @@ export interface CopperProbe {
   blockedAt(p: Pt, layer: number): boolean;
   /** Gap from the trace edge to the first pour copper of another net along n, unless another conductor comes first. */
   pourBeside(p: Pt, n: Pt, halfWidth: number, layer: number, net: string, maxGap: number, ownBlocks?: boolean): { d: number; net: string } | null;
+  /** The chain's return from a to b in `net` copper: round through it or through vias, whichever adds less loop inductance. */
+  returnRoute(c: ChainResult, net: string, a: Pt, b: Pt): ReturnRoute | null;
 }
 
 /** Sampling step of the drawn return, and how far inside the pour edge a coplanar return is drawn, mm. */
 const STEP = 0.05;
 const INSET = 0.1;
+/** Pieces of a return shorter than this are left out; the line joins across them, mm. */
+const MIN_RUN = 0.3;
+/** Stretch the other side of a coplanar trace must carry alone before the return is drawn there, mm. */
+const TAKE_OVER = 3;
+/** How much further than the trace's half width (plus the widest coplanar gap) the return is looked for, mm. */
+const FLOW_MARGIN = 1;
+/** Most joins routed through the copper per net; past it the line breaks. */
+const MAX_ROUTED_JOINS = 60;
 
 const dot = (a: Pt, b: Pt) => a.x * b.x + a.y * b.y;
 
@@ -87,57 +99,87 @@ function padAt(board: Board, p: Pt, net: string, layer: number): Pad | undefined
  * the pin where the return leaves the reference copper (or saying the part has none), and one per
  * driver for the edge that has to cross to the other supply net through a decap.
  */
-export function buildReturnPath(board: Board, net: string, chains: ChainResult[], vias: ViaResult[], probe: CopperProbe, findings: Finding[], opts: DriverOptions): ReturnPath {
+export function* buildReturnPath(board: Board, net: string, chains: ChainResult[], vias: ViaResult[], probe: CopperProbe, findings: Finding[], opts: DriverOptions): Steps<ReturnPath> {
   const traces: ReturnTrace[] = [];
   const jumps: ReturnJump[] = [];
   const trackById = new Map(board.tracks.map((t) => [t.id, t]));
   const ownVias = board.vias.filter((v) => v.net === net);
 
-  for (const c of chains) {
+  let routedJoins = 0;
+  for (const [ci, c] of chains.entries()) {
+    yield { phase: 'return path', fraction: ci / chains.length };
     const ref = c.ref;
     if (!ref) continue;
     const line = new Polyline(c.chain.pts);
     const L = line.length;
     const halfWidth = (trackById.get(c.chain.trackIds[0])?.width ?? 0.2) / 2;
-    const breaks = [...c.gaps.filter((g) => g.kind !== 'via-antipad'), ...c.quietGaps].sort((a, b) => a.s0 - b.s0);
+    // Gaps whose way round adds next to nothing lie within the corridor of the least-inductance path.
+    const breaks = c.gaps.filter((g) => g.kind !== 'via-antipad').sort((a, b) => a.s0 - b.s0);
     const exclude = ref.coplanar ? net : undefined;
-    const aside = halfWidth;
     const maxGap = opts.maxCoplanarGap;
-    const push = (s0: number, s1: number) => {
+    const inCopper = (q: Pt) => !!probe.netAt(q, ref.layer, exclude) && !probe.blockedAt(q, ref.layer);
+    const joins = (a: Pt, b: Pt) => {
+      const n = Math.max(2, Math.ceil(dist(a, b) / STEP));
+      for (let i = 1; i < n; i++) if (!inCopper(add(a, mul(sub(b, a), i / n)))) return false;
+      return true;
+    };
+    const draw = (layer: number, pts: Path, detour?: boolean) => traces.push({ layer, signalLayer: c.chain.layer, pts, ...(detour ? { detour } : {}) });
+
+    // The return is one line: each piece starts where the last one ended. A short step through the
+    // copper joins them straight; anything else takes the way that adds least loop inductance.
+    let end: Pt | null = null;
+    const link = (next: Pt) => {
+      const a = end;
+      end = null;
+      if (!a || dist(a, next) < 0.02) return;
+      if (dist(a, next) <= 0.6 && joins(a, next)) return draw(ref.layer, [a, next]);
+      const refNet = probe.netAt(a, ref.layer, exclude);
+      if (!refNet || refNet !== probe.netAt(next, ref.layer, exclude) || routedJoins >= MAX_ROUTED_JOINS) return;
+      routedJoins++;
+      const route = probe.returnRoute(c, refNet, a, next);
+      if (!route) return;
+      for (const leg of route.legs) if (leg.path.length > 1) draw(leg.layer, leg.path, true);
+      for (const v of route.vias) jumps.push({ kind: 'via', from: v, to: v, label: `${refNet} via`, distance: 0, severity: 'ok' });
+    };
+    const lay = (layer: number, pts: Path, detour?: boolean) => {
+      link(pts[0]);
+      draw(layer, pts, detour);
+      end = pts[pts.length - 1];
+    };
+
+    // Where the return can run between s0 and s1: under the trace on a plane; beside it on either side
+    // in a coplanar pour. Each candidate side gives runs of points joined through copper.
+    const piece = function* (s0: number, s1: number, to: Pt | null): Steps<void> {
       if (s1 - s0 < 1e-6) return;
+      const flow = yield* leastInductancePath({
+        inCopper,
+        line,
+        s0,
+        s1,
+        halfWidth,
+        h: ref.coplanar ? 0 : ref.h,
+        corridor: halfWidth + (ref.coplanar ? maxGap : 0) + FLOW_MARGIN,
+        from: end,
+        to,
+      });
+      if (flow && flow.length > 1) {
+        end = null;
+        draw(ref.layer, straighten(flow));
+        end = flow[flow.length - 1];
+        return;
+      }
       const k = Math.max(1, Math.ceil((s1 - s0) / STEP));
-      // Each drawn point lies in reference copper, and so does the line to the next one; where no such
-      // point exists the line breaks rather than crossing clearance or another conductor.
-      const inCopper = (q: Pt) => !!probe.netAt(q, ref.layer, exclude) && !probe.blockedAt(q, ref.layer);
-      const joins = (a: Pt, b: Pt) => [0.25, 0.5, 0.75].every((f) => inCopper(add(a, mul(sub(b, a), f))));
-      const trace = (pointAt: (at: number) => Pt | null) => {
-        let run: Path = [];
-        let last: Pt | undefined;
-        const flush = () => {
-          if (run.length > 1 && dist(run[0], run[run.length - 1]) > 0.3) traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: straighten(run) });
-          run = [];
-        };
-        for (let i = 0; i <= k; i++) {
-          const at = s0 + ((s1 - s0) * i) / k;
-          const q = pointAt(at);
-          // Offset points fold back inside a bend; the return does not run backwards there.
-          if (q && last && dot(sub(q, last), line.dirAt(at)) < 0) continue;
-          if (q && run.length && !joins(run[run.length - 1], q)) flush();
-          if (q) run.push((last = q));
-          else flush();
-        }
-        flush();
-      };
+      const sides: ((at: number) => Pt | null)[] = [];
       if (!ref.coplanar) {
-        // Under the trace on the plane; where the plane has no copper there, the gap's detour or via route carries it.
-        // It keeps to the side it took unless the other is clearly nearer, so it does not zigzag or fold back at corners.
+        // Under the trace; where the plane has a hole there, beside it within the trace's footprint,
+        // keeping to the side it took unless the other is clearly nearer.
         let lastSide = 1;
-        trace((at) => {
+        sides.push((at) => {
           const p = line.at(at);
           if (inCopper(p)) return p;
           const n = unitNormal({ x: 0, y: 0 }, line.dirAt(at));
           const nearest = (side: number) => {
-            for (let d = STEP; d <= aside + 1e-9; d += STEP) if (inCopper(add(p, mul(n, side * d)))) return d;
+            for (let d = STEP; d <= halfWidth + 1e-9; d += STEP) if (inCopper(add(p, mul(n, side * d)))) return d;
             return Infinity;
           };
           const [same, other] = [nearest(lastSide), nearest(-lastSide)];
@@ -149,38 +191,89 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
           }
           return add(p, mul(n, lastSide * d));
         });
-        return;
+      } else
+        for (const side of [1, -1])
+          sides.push((at) => {
+            // Along the pour edge, just inside it.
+            const p = line.at(at);
+            const n = mul(unitNormal({ x: 0, y: 0 }, line.dirAt(at)), side);
+            const edge = probe.pourBeside(p, n, halfWidth, ref.layer, net, maxGap, true);
+            if (!edge) return null;
+            for (const inset of [INSET, INSET / 2, 0.025]) {
+              const q = add(p, mul(n, halfWidth + edge.d + inset));
+              if (inCopper(q)) return q;
+            }
+            return null;
+          });
+      type Run = { i0: number; i1: number; pts: Path; idx: number[]; side: number; off: number };
+      const runs: Run[] = [];
+      for (const [side, pointAt] of sides.entries()) {
+        let run: Run | null = null;
+        let last: Pt | undefined;
+        const close = () => {
+          if (run && run.pts.length > 1) runs.push(run);
+          run = null;
+        };
+        for (let i = 0; i <= k; i++) {
+          const at = s0 + ((s1 - s0) * i) / k;
+          const q = pointAt(at);
+          // Offset points fold back inside a bend; the return does not run backwards there.
+          if (q && last && dot(sub(q, last), line.dirAt(at)) < 0) continue;
+          if (!q || (run && !joins(run.pts[run.pts.length - 1], q))) close();
+          if (!q) continue;
+          run ??= { i0: i, i1: i, pts: [], idx: [], side, off: 0 };
+          run.pts.push((last = q));
+          run.idx.push(i);
+          run.i1 = i;
+          run.off += dist(q, line.at(at));
+        }
+        close();
       }
-      // Coplanar: along the pour edge on each side that has pour before any other conductor, just inside it.
-      for (const side of [1, -1])
-        trace((at) => {
-          const p = line.at(at);
-          const n = mul(unitNormal({ x: 0, y: 0 }, line.dirAt(at)), side);
-          const edge = probe.pourBeside(p, n, halfWidth, ref.layer, net, maxGap, true);
-          if (!edge) return null;
-          for (const inset of [INSET, INSET / 2, 0.025]) {
-            const q = add(p, mul(n, halfWidth + edge.d + inset));
-            if (inCopper(q)) return q;
-          }
-          return null;
-        });
+      // One line, on one side: the side with the most copper beside the trace (on a tie the nearer one).
+      // Holes in it are joined across; the other side takes over only for a long stretch before or after it.
+      const share = (side: number) => runs.filter((r) => r.side === side).reduce((t, r) => [t[0] + r.pts.length, t[1] + r.off], [0, 0]);
+      const main = [...new Set(runs.map((r) => r.side))].sort((x, y) => {
+        const [sx, sy] = [share(x), share(y)];
+        return sy[0] - sx[0] || sx[1] / sx[0] - sy[1] / sy[0];
+      })[0];
+      if (main === undefined) return;
+      const own = runs.filter((r) => r.side === main).sort((x, y) => x.i0 - y.i0);
+      const [first, last] = [own[0].i0, own[own.length - 1].i1];
+      const longest = (from: number, to: number) => {
+        const parts = runs
+          .filter((r) => r.side !== main)
+          .map((r) => r.pts.filter((_, j) => r.idx[j] >= from && r.idx[j] <= to))
+          .filter((pts) => pts.length > 1 && dist(pts[0], pts[pts.length - 1]) >= TAKE_OVER);
+        return parts.sort((x, y) => y.length - x.length)[0];
+      };
+      const head = longest(0, first - 1);
+      const tail = longest(last + 1, k);
+      for (const pts of [head, ...own.map((r) => r.pts), tail]) if (pts && pts.length > 1 && dist(pts[0], pts[pts.length - 1]) >= MIN_RUN) lay(ref.layer, straighten(pts));
     };
+
     let s = 0;
     for (const g of breaks) {
-      push(s, g.s0);
+      yield* piece(s, g.s0, g.viaRoute?.legs.find((leg) => leg.path.length > 1)?.path[0] ?? (g.detour ? (g.drawn ?? g.detour.path)[0] : null));
       s = g.s1;
       if (g.viaRoute) {
-        for (const leg of g.viaRoute.legs) if (leg.path.length > 1) traces.push({ layer: leg.layer, signalLayer: c.chain.layer, pts: leg.path, detour: true });
+        const legs = g.viaRoute.legs.filter((leg) => leg.path.length > 1);
+        if (legs.length) link(legs[0].path[0]);
+        for (const leg of legs) draw(leg.layer, leg.path, true);
         for (const v of g.viaRoute.vias) jumps.push({ kind: 'via', from: v, to: v, label: `${g.netBefore} via`, distance: 0, severity: 'ok' });
-      } else if (g.detour) traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: g.drawn ?? g.detour.path, detour: true });
-      else if (g.bridge) {
-        const b = g.bridge;
-        const label = b.component.designator;
-        jumps.push({ kind: 'bridge', from: g.a, to: b.at, label, distance: b.distance, severity: b.severity });
-        jumps.push({ kind: 'bridge', from: b.at, to: g.b, label, distance: dist(b.at, g.b), severity: b.severity });
+        end = legs.length ? legs[legs.length - 1].path[legs[legs.length - 1].path.length - 1] : null;
+      } else if (g.detour) lay(ref.layer, g.drawn ?? g.detour.path, true);
+      else {
+        // Across a split or a stretch without reference copper the current leaves the copper (bridging cap, pins): no line joins it.
+        end = null;
+        if (g.bridge) {
+          const b = g.bridge;
+          const label = b.component.designator;
+          jumps.push({ kind: 'bridge', from: g.a, to: b.at, label, distance: b.distance, severity: b.severity });
+          jumps.push({ kind: 'bridge', from: b.at, to: g.b, label, distance: dist(b.at, g.b), severity: b.severity });
+        }
       }
     }
-    push(s, L);
+    yield* piece(s, L, null);
   }
 
   // Where the return moves between a pour beside the trace and the plane below, it goes through a via.
