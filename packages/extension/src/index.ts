@@ -25,7 +25,7 @@ export function activate(status?: 'onStartupFinished', arg?: string): void {
 }
 
 export function about(): void {
-	eda.sys_Dialog.showInformationMessage(`${t('Return-path overlay v${1}', extensionConfig.version)}\n\n${t('If the editor froze, reopen it and use Return Path > Show Saved Log...')}`, t('About'));
+	eda.sys_Dialog.showInformationMessage(`${t('Return-path overlay v${1}', extensionConfig.version)}\n\n${t('Analyses, the overlay and its colours are in the panel: Return Path > Open Panel. If the editor froze, reopen it and use Return Path > Show Saved Log.')}`, t('About'));
 }
 
 function confirm(content: string, title: string, ok: string): Promise<boolean> {
@@ -87,7 +87,7 @@ export async function runReturnPath(ask: Ask): Promise<void> {
 			return;
 		}
 		await hfFor(net, ask);
-	});
+	}).finally(ask.close);
 }
 
 async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<void> {
@@ -107,13 +107,14 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<v
 			eda.sys_Dialog.showInformationMessage(scope.message!, title);
 			return;
 		}
-		if (await confirm(scope.message!, title, t('Open DC view')))
+		if (await loggedAsk(ask).confirm(title, scope.message!, t('Open DC view')))
 			await runDcReturn(ask, scope.kind === 'power' ? net : undefined, scope.kind === 'power');
 		return;
 	}
 	if (!board)
 		return;
 	const drivers = storedDrivers ?? await chooseDrivers(board, net, loggedAsk(ask));
+	await ask.close();
 	await remember({ kind: 'hf', net, drivers });
 	const ownTracks = board.tracks.filter(tr => tr.net === net).length;
 	log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias, driver ${drivers.join(', ') || 'none'}`);
@@ -174,13 +175,14 @@ export async function runDcReturn(ask: Ask, preferredRail?: string, railGiven = 
 		await addPinNames(board);
 		recordResult('board', boardSizes(board));
 		const wiz = await runDcWizard(board, loggedAsk(ask), rail, railGiven);
+		await ask.close();
 		if (!wiz) {
 			recordResult('outcome', 'wizard closed');
 			return;
 		}
 		await remember({ kind: 'dc', input: wiz.input });
 		await dcFor(board, wiz.input);
-	});
+	}).finally(ask.close);
 }
 
 async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
@@ -280,14 +282,15 @@ export async function rerunAnalysis(): Promise<void> {
 	await panelReady();
 	const run = lastRun();
 	if (!run) {
-		eda.sys_Dialog.showInformationMessage(t('No analysis to rerun yet: run Show for Selected Net or DC Return Current first.'), t('Rerun last analysis'));
+		eda.sys_Dialog.showInformationMessage(t('No analysis to rerun yet: run HF check or DC check in the panel first.'), t('Rerun last analysis'));
 		return;
 	}
 	if (run.kind === 'hf') {
+		const ask = dialogAsk();
 		await recorded('Rerun Last Analysis', t('Return path'), async () => {
 			await showPanelForRun();
-			await hfFor(run.net, dialogAsk(), run.drivers);
-		});
+			await hfFor(run.net, ask, run.drivers);
+		}).finally(ask.close);
 		return;
 	}
 	await recorded('Rerun Last Analysis', t('DC return current'), async () => {
@@ -307,7 +310,7 @@ export async function toggleReturnPath(): Promise<void> {
 		return;
 	await guarded(t('Return path'), async () => {
 		const visible = await toggleOverlay();
-		toast(visible === undefined ? t('No overlay to show: run an analysis first.') : visible ? t('Overlay shown.') : t('Overlay hidden. Use Hide/Show Overlay again to show it.'));
+		toast(visible === undefined ? t('No overlay to show: run an analysis first.') : visible ? t('Overlay shown.') : t('Overlay hidden. Use Show in the panel to show it again.'));
 	});
 	publishState();
 }
@@ -339,13 +342,13 @@ export async function showPanel(): Promise<void> {
 	initPanel(panelHost);
 	await guarded(t('Return Path'), async () => {
 		if (!await openPanel())
-			eda.sys_Dialog.showInformationMessage(t('This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.'), t('Return Path'));
+			eda.sys_Dialog.showInformationMessage(t('This EasyEDA version did not open the panel window, and the analyses run from the panel. The saved log (Return Path > Show Saved Log) has the details.'), t('Return Path'));
 	});
 }
 
 const panelHost = {
-	run: async (cmd: 'hf' | 'dc' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log') => {
-		const actions = { hf: showReturnPath, dc: showDcReturn, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis(), log: showSavedLog };
+	run: async (cmd: 'hf' | 'dc' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder') => {
+		const actions = { hf: showReturnPath, dc: showDcReturn, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis(), log: showSavedLog, runFolder: setRunFolder };
 		await actions[cmd]();
 	},
 	lastRunLabel: () => {
@@ -353,7 +356,7 @@ const panelHost = {
 		if (!run)
 			return undefined;
 		return run.kind === 'hf'
-			? (run.drivers?.length ? t('Show for Selected Net: ${1}, driver ${2}', run.net, run.drivers.join(', ')) : t('Show for Selected Net: ${1}', run.net))
+			? (run.drivers?.length ? t('HF check: ${1}, driver ${2}', run.net, run.drivers.join(', ')) : t('HF check: ${1}', run.net))
 			: t('DC ${1} / ${2}, source ${3}, loads ${4}', run.input.rail, run.input.ground, run.input.source, (run.input.loads ?? []).join(', ') || '-');
 	},
 };

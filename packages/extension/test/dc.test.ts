@@ -224,15 +224,15 @@ test('panel: opens without blocking, runs DC from a button, shows the result the
 	for (let i = 0; i < 400 && !(states().at(-1)?.result && !states().at(-1).busy); i++)
 		await new Promise(r => setTimeout(r, 25));
 	const done = states().at(-1);
-	assert.ok(states().some(s => s.busy === 'DC Return Current'), 'busy while running');
+	assert.ok(states().some(s => s.busy === 'DC check'), 'busy while running');
 	assert.match(done.result.lines[0], /^3V3 \/ GND: source U1/);
 	assert.equal(done.overlay, 'shown');
 	assert.match(done.lastRun, /^DC 3V3 \/ GND, source U1/);
 	assert.equal(mock.messages.length, 0, 'no modal result dialog while the panel is open');
 	assert.match(mock.toasts.at(-1)!, /result is in the Return Path panel/);
 
-	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 1 });
-	const white = JSON.stringify({ r: 255, g: 255, b: 255, alpha: 1 });
+	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 255 });
+	const white = JSON.stringify({ r: 255, g: 255, b: 255, alpha: 255 });
 	const supplyCount = mock.markers.filter(m => JSON.stringify(m.color) === yellow).length;
 	mock.panelSend({ cmd: 'style', style: { supply: { colour: 'white', width: 4 } } });
 	for (let i = 0; i < 40 && mock.markers.filter(m => JSON.stringify(m.color) === white).length < supplyCount; i++)
@@ -271,12 +271,14 @@ test('a ground with no copper path from any load is reported in words and gets n
 	assert.ok(mock.logs.some(l => /GND: .* not reached from U1; source pads .*; pours on GND: none/.test(l.message)));
 });
 
-test('loads are picked in the picker window: every load listed, select-all, cancel stops the wizard', async () => {
+test('every wizard question is asked in one wizard window: one page layout, select-all for loads, cancel stops the wizard', async () => {
 	const mock = await run('3V3');
-	const q = mock.pickers.find(p => /Step 5\/5/.test(p.prompt))!;
-	assert.ok(q, 'the loads question went to the picker window, not the system dialog');
+	assert.deepEqual(mock.wizardPages.map(p => p.kind), ['select', 'multi', 'input'], 'source, loads and currents all in the window');
+	assert.equal(mock.wizard.opens, 1, 'the window stays open from the first question to the last');
+	assert.ok(!mock.iframes.has('returnPathWizard'), 'and closes before the analysis runs');
+	const q = mock.wizardPages.find(p => /Step 5\/5/.test(p.prompt))!;
 	assert.equal(q.labels.all, 'Select all');
-	assert.ok(!mock.iframes.has('returnPathPicker'), 'the picker closes after the answer');
+	assert.equal(q.labels.step, 'Step ${1} of ${2}');
 	const u1 = board.components.find(c => c.designator === 'U1')!.id;
 	assert.ok(!q.options.some(o => o.value === u1), 'the source is not offered as a load');
 
@@ -285,33 +287,46 @@ test('loads are picked in the picker window: every load listed, select-all, canc
 	assert.match(all.messages[0], new RegExp(`loads ${allLoads.join(', ')}\\.`), 'select-all takes every listed part');
 
 	const cancelled = await run('3V3', d => /Step 5\/5/.test(d.prompt) ? undefined : d.dflt);
-	assert.equal(cancelled.dialogs.at(-1)!.kind, 'multi', 'nothing is asked after a cancelled picker');
+	assert.equal(cancelled.dialogs.at(-1)!.kind, 'multi', 'nothing is asked after a cancelled question');
 	assert.equal(cancelled.markers.length, 0);
+	assert.ok(!cancelled.iframes.has('returnPathWizard'), 'cancelling closes the window');
 });
 
-test('picker falls back to the system dialog, with a select-all entry, when its page does not connect', async () => {
-	const { pickerTimeouts } = await import('../src/picker.ts');
-	const saved = pickerTimeouts.helloMs;
-	pickerTimeouts.helloMs = 20;
+test('the wizard falls back to the system dialogs, with a select-all entry, when its window does not connect', async () => {
+	const { wizardTimeouts } = await import('../src/wizard-window.ts');
+	const saved = wizardTimeouts.helloMs;
+	wizardTimeouts.helloMs = 20;
 	try {
-		for (const picker of ['silent', 'refused'] as const) {
-			const mock = createMockEda(board, '3V3', [], d => d.kind === 'multi' ? ['__returnpath_all__'] : d.dflt, { picker });
+		for (const wizardWindow of ['silent', 'refused'] as const) {
+			const mock = createMockEda(board, '3V3', [], d => d.kind === 'multi' ? ['__returnpath_all__'] : d.dflt, { wizardWindow });
 			(globalThis as Record<string, unknown>).eda = mock.eda;
 			await ext.showDcReturn();
+			assert.deepEqual(mock.dialogs.map(d => d.kind), ['select', 'multi', 'input']);
 			const q = mock.dialogs.find(d => d.kind === 'multi')!;
-			assert.equal(q.options[0], '__returnpath_all__', `${picker}: select-all is the first entry`);
-			assert.equal(mock.pickers.length, 0);
+			assert.equal(q.options[0], '__returnpath_all__', `${wizardWindow}: select-all is the first entry`);
+			assert.equal(mock.wizardPages.length, 0);
 			const des = q.options.slice(1).map(id => board.components.find(c => c.id === id)!.designator);
-			assert.match(mock.messages[0], new RegExp(`loads ${des.join(', ')}\\.`), `${picker}: select-all takes every listed part`);
-			assert.ok(mock.logs.some(l => /picker: .*system dialog/.test(l.message)));
+			assert.match(mock.messages[0], new RegExp(`loads ${des.join(', ')}\\.`), `${wizardWindow}: select-all takes every listed part`);
+			assert.ok(mock.logs.some(l => /wizard window: .*system dialogs/.test(l.message)));
 			mock.logs.length = 0;
 			await ext.showDcReturn();
-			assert.ok(!mock.logs.some(l => /picker: /.test(l.message)), `${picker}: no second try on the same editor`);
+			assert.ok(!mock.logs.some(l => /wizard window: /.test(l.message)), `${wizardWindow}: no second try on the same editor`);
 		}
 	}
 	finally {
-		pickerTimeouts.helloMs = saved;
+		wizardTimeouts.helloMs = saved;
 	}
+});
+
+test('the menu has only Open Panel, Show Saved Log and About; everything else runs from the panel', async () => {
+	const config = (await import('../extension.json', { with: { type: 'json' } })).default;
+	const items = config.headerMenus.pcb[0].menuItems;
+	assert.deepEqual(items.map(i => i.registerFn), ['showPanel', 'showSavedLog', 'about']);
+	for (const i of items)
+		assert.equal(typeof (ext as Record<string, unknown>)[i.registerFn], 'function');
+	const html = await import('node:fs').then(fs => fs.readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8'));
+	for (const id of ['hf', 'dc', 'rerun', 'cancel', 'toggle', 'clear', 'log', 'runFolder'])
+		assert.ok(html.includes(`id="${id}"`), `the panel has the ${id} button`);
 });
 
 test('part names with attribute references show the attribute values', async () => {

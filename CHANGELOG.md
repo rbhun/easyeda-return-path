@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.32] - 2026-11-26
+
+Numbered above 0.1.31 on main. First opened as 0.1.29; renumbered after #12 (0.1.30) and #10 (0.1.31) merged.
+
+From the owner, after 0.1.26: everything should work from the panel, not the menu, with an HF check button there; the wizard pages should look the same; the overlay lines should not be see-through.
+
+- **The menu has only Open Panel..., Show Saved Log... and About....** The analyses, Rerun last, Cancel, Hide/Show, Clear and the log were already panel buttons. Set Run Folder... (0.1.27) is now the panel's **Run folder…** button. Messages that pointed at menu items now point at the panel, and About says where things are.
+- **HF check button:** the panel's high-frequency button, "Selected net" until now, is labelled **HF check**, and "DC current…" became **DC check…**. HF check runs Show for Selected Net on the selected track, via or pad. When the pin names do not settle the driver, it asks for it in the wizard window. The panel's busy line and last-run label say "HF check: CLK, driver U1". The log lines and the run files keep the command name "Show for Selected Net", which the sync worker reads.
+- **One wizard window for every question.** The 0.1.26 load picker became the wizard window (`iframe/wizard.html`, `src/wizard-window.ts`). It asks every question of an analysis: the DC wizard's rails, ground, source, loads and currents; Show for Selected Net's driver; and the "open the DC view instead?" question for a power net. They share one page layout: a "Step n of 5" badge, the question, then radio buttons, check boxes with select-all, a text field or nothing (a confirmation), and OK/Cancel below. The window opens with the first question, stays open between steps, and closes before the analysis runs, on Cancel or when it is closed. The system-dialog fallback (page not connected within 4 s) is unchanged, and now covers every question kind.
+- **Opaque markers:** marker colours are sent with alpha 255 instead of 1. EasyEDA Pro 3.2 reads the colour channels on a 0–1 scale and clips above 1. If it reads alpha on a 0–255 scale, alpha 1 is nearly transparent. Alpha 255 is fully opaque on either scale.
+
 ## [0.1.31] - 2026-11-26
 
 Numbered above 0.1.30, main's version.

@@ -6,15 +6,16 @@ export type Rgba = { r: number; g: number; b: number; alpha: number };
 
 // EasyEDA Pro 3.2 reads marker colours on a 0–1 scale and clips above 1 (both { r: 255 } and { r: 1 }
 // draw red), so any mixed 0–255 colour comes out white. Channels of only 0 and 255 read the same on
-// either scale, which leaves these seven.
+// either scale, which leaves these seven. Alpha is 255 for the same reason: fully opaque whether it is
+// read on a 0–1 scale (clipped) or a 0–255 one, where 1 would be nearly transparent.
 export const PALETTE = {
-	red: { r: 255, g: 0, b: 0, alpha: 1 },
-	yellow: { r: 255, g: 255, b: 0, alpha: 1 },
-	green: { r: 0, g: 255, b: 0, alpha: 1 },
-	cyan: { r: 0, g: 255, b: 255, alpha: 1 },
-	blue: { r: 0, g: 0, b: 255, alpha: 1 },
-	magenta: { r: 255, g: 0, b: 255, alpha: 1 },
-	white: { r: 255, g: 255, b: 255, alpha: 1 },
+	red: { r: 255, g: 0, b: 0, alpha: 255 },
+	yellow: { r: 255, g: 255, b: 0, alpha: 255 },
+	green: { r: 0, g: 255, b: 0, alpha: 255 },
+	cyan: { r: 0, g: 255, b: 255, alpha: 255 },
+	blue: { r: 0, g: 0, b: 255, alpha: 255 },
+	magenta: { r: 255, g: 0, b: 255, alpha: 255 },
+	white: { r: 255, g: 255, b: 255, alpha: 255 },
 } satisfies Record<string, Rgba>;
 export type ColourName = keyof typeof PALETTE;
 

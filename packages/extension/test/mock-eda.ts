@@ -28,8 +28,8 @@ export interface MockHost {
 	pouredUnitMil?: number;
 	/** Thermal spokes served as unfilled pour-fill strokes (mm, with their pour id). */
 	spokes?: { pourId: string; a: Pt; b: Pt; width: number }[];
-	/** The picker window's page: 'page' (default) answers like a user, 'silent' never connects, 'refused' is not opened. */
-	picker?: 'page' | 'silent' | 'refused';
+	/** The wizard window's page: 'page' (default) answers like a user, 'silent' never connects, 'refused' is not opened. */
+	wizardWindow?: 'page' | 'silent' | 'refused';
 }
 
 /** Answers every dialog with its default unless `answer` says otherwise. */
@@ -60,14 +60,19 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const panelSend = (message: unknown) => {
 		for (const fn of subscribers.get('returnpath.panel.command') ?? []) fn(message);
 	};
-	const pickers: { title: string; prompt: string; options: { value: string; label: string }[]; selected: string[]; labels: Record<string, string> }[] = [];
-	/** The picker page: records the question as a multi dialog and answers with `answer`. */
-	const pickerPage = (q: any) => {
-		pickers.push(q);
-		const options = q.options.map((o: { value: string; label: string }) => ({ value: o.value, displayContent: o.label }));
-		dialogs.push({ kind: 'multi', prompt: q.prompt, options: options.map((o: { value: string }) => o.value), dflt: q.selected });
-		const v = answer({ kind: 'multi', prompt: q.prompt, title: q.title, options, dflt: q.selected }) as string[] | undefined;
-		queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.picker.reply', v === undefined ? { cmd: 'cancel', id: q.id } : { cmd: 'answer', id: q.id, values: v }));
+	const wizardPages: { id: string; kind: DialogCall['kind']; title: string; prompt: string; options: { value: string; label: string }[]; value: string | string[]; ok: string; labels: Record<string, string> }[] = [];
+	const wizard = { opens: 0 };
+	/** The wizard window's page: records each question like the system dialog would and answers with `answer`. */
+	const wizardPage = (q: typeof wizardPages[number]) => {
+		if (!iframes.has('returnPathWizard'))
+			return;
+		wizardPages.push(q);
+		const options = q.options.map(o => ({ value: o.value, displayContent: o.label }));
+		const dflt = q.kind === 'select' ? q.value || undefined : q.kind === 'confirm' ? undefined : q.value;
+		dialogs.push({ kind: q.kind, prompt: q.prompt, options: options.map(o => o.value), dflt });
+		const v = answer({ kind: q.kind, prompt: q.prompt, title: q.title, options, dflt });
+		const reply = q.kind === 'confirm' ? { cmd: 'answer', id: q.id, value: !!v } : v === undefined ? { cmd: 'cancel', id: q.id } : { cmd: 'answer', id: q.id, value: v };
+		queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.wizard.reply', reply));
 	};
 	const fsCall = <T>(fn: () => T) => async () => {
 		if (host.fileSystem === 'denied')
@@ -169,13 +174,14 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		},
 		sys_IFrame: {
 			openIFrame: async (html: string, width: number, height: number, id: string, props: Record<string, unknown>) => {
-				if (html === '/iframe/pick.html') {
-					if (host.picker === 'refused')
+				if (html === '/iframe/wizard.html') {
+					wizard.opens++;
+					if (host.wizardWindow === 'refused')
 						return false;
-					if (!subscribers.get('returnpath.picker.ask')?.includes(pickerPage))
-						eda.sys_MessageBus.subscribe('returnpath.picker.ask', pickerPage);
-					if (host.picker !== 'silent')
-						queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.picker.reply', { cmd: 'hello' }));
+					if (!subscribers.get('returnpath.wizard.ask')?.includes(wizardPage as (m: unknown) => void))
+						eda.sys_MessageBus.subscribe('returnpath.wizard.ask', wizardPage as (m: unknown) => void);
+					if (host.wizardWindow !== 'silent')
+						queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.wizard.reply', { cmd: 'hello' }));
 				}
 				iframes.set(id, { html, width, height, props, shown: true });
 				return true;
@@ -282,5 +288,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, pickers };
+	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, wizardPages, wizard };
 }

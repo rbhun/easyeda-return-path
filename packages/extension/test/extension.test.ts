@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { analyzeNet } from '@returnpath/core';
 import { parseEasyEdaPcb } from '@returnpath/cli/parse';
 import { buildEpro } from '@returnpath/cli/synth';
@@ -45,7 +46,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
 	const expectedColors = [COLORS.band, COLORS.gap, COLORS.hop, RETURN_COLORS.inner[0], RETURN_COLORS.inner[1]].map(c => JSON.stringify(c));
 	assert.deepEqual(colors, new Set(expectedColors), 'band, gap, hop and one return colour per reference layer, all opaque');
-	assert.ok(mock.markers.every(m => (m.color as { alpha: number }).alpha === 1));
+	assert.ok(mock.markers.every(m => (m.color as { alpha: number }).alpha === 255), 'alpha 255: opaque on a 0–1 (clipped) or a 0–255 scale');
 	assert.ok(mock.markers.every(m => ['r', 'g', 'b'].every(k => [0, 255].includes((m.color as Record<string, number>)[k]))), 'channels only 0 or 255: EasyEDA Pro 3.2 clips colours to a 0–1 scale');
 	const of = (c: object) => mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(c));
 	assert.ok([RETURN_COLORS.inner[0], RETURN_COLORS.inner[1]].every(c => of(c).length && of(c).every(m => m.width === 5)), 'return path thick');
@@ -102,7 +103,13 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	assert.equal(mock.messages.length, 0, 'no modal result dialog while the panel is open');
 	assert.ok(done.result.lines.includes('Driver: U1. Its other edge is drawn dashed yellow from its ground pin through the decap to its supply pin.'), done.result.lines.join('\n'));
 	assert.ok(done.result.lines.some((l: string) => /^\[warn\] U1 \(driver\): .* decap C1 into U1 pad 3 \(3V3\)/.test(l)));
-	assert.equal(done.lastRun, 'Show for Selected Net: CLK, driver U1');
+	assert.equal(done.lastRun, 'HF check: CLK, driver U1');
+	const asked = mock.wizardPages.filter(p => /Which part drives CLK/.test(p.prompt));
+	assert.equal(asked.length, 2, 'the HF check button asks for the driver in the wizard window');
+	assert.ok(asked.every(p => p.kind === 'select' && p.options.some(o => o.value === 'U1')));
+	assert.ok(!mock.iframes.has('returnPathWizard'), 'the wizard window is closed while the analysis runs');
+	const html = readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8');
+	assert.match(html, /<button id="hf"[^>]*>HF check<\/button>/);
 	const hops = mock.markers.filter(m => JSON.stringify(m.color) === yellow).length;
 	assert.ok(hops > hopsWithout, 'the two driver legs are drawn as hops');
 
