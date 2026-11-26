@@ -77,13 +77,6 @@ test('Set Run Folder stores the folder and later runs write there', async () => 
 	await ext.showReturnPath();
 	assert.equal(runs(restarted.files, dir).length, 1);
 	assert.equal(runs(restarted.files, DEFAULT_DIR).length, 0);
-
-	const fromPanel = install({ fileSystem: 'allowed', storage: new Map() }, d => (d.kind === 'input' ? dir : d.dflt));
-	await ext.showPanel();
-	fromPanel.panelSend({ cmd: 'hello' });
-	fromPanel.panelSend({ cmd: 'runFolder' });
-	await new Promise(r => setTimeout(r, 50));
-	assert.match(fromPanel.messages.at(-1)!, /agent-runs/, 'the panel\'s Run folder button does the same');
 });
 
 test('a DC run records rail, source, loads, drops and warnings', async () => {
@@ -136,12 +129,12 @@ type Fs = Record<string, unknown>;
 
 test('when the run files cannot be written, the log names the API that is missing or the error, not the permission', async () => {
 	const cases: [string, (fs: Fs) => void, RegExp][] = [
-		['no getEdaPath', fs => delete fs.getEdaPath, /run files not written: sys_FileSystem\.getEdaPath is not available in this EasyEDA version; choose a Run folder/],
-		['empty path', fs => (fs.getEdaPath = async () => ''), /run files not written: sys_FileSystem\.getEdaPath returned an empty path; choose a Run folder/],
+		['no getEdaPath', fs => delete fs.getEdaPath, /run files not written: sys_FileSystem\.getEdaPath is not available in this EasyEDA version; choose Return Path > Run Folder/],
+		['empty path', fs => (fs.getEdaPath = async () => ''), /run files not written: sys_FileSystem\.getEdaPath returned an empty path; choose Return Path > Run Folder/],
 		['throws', fs => (fs.getEdaPath = async () => {
 			throw new Error('getEdaPath is not supported on this platform');
-		}), /run files not written: sys_FileSystem\.getEdaPath failed: getEdaPath is not supported on this platform; choose a Run folder/],
-		['never answers', fs => (fs.getEdaPath = never), /run files not written: sys_FileSystem\.getEdaPath did not answer within \d+ s; choose a Run folder/],
+		}), /run files not written: sys_FileSystem\.getEdaPath failed: getEdaPath is not supported on this platform; choose Return Path > Run Folder/],
+		['never answers', fs => (fs.getEdaPath = never), /run files not written: sys_FileSystem\.getEdaPath did not answer within \d+ s; choose Return Path > Run Folder/],
 		['no saveFileToFileSystem', fs => delete fs.saveFileToFileSystem, /run files not written: sys_FileSystem\.saveFileToFileSystem is not available \(allow "External Interaction"/],
 	];
 	for (const [name, change, expected] of cases) {
@@ -199,5 +192,5 @@ test('declining the question leaves the reason in Show Saved Log and does not as
 	await ext.showReturnPath();
 	assert.equal(mock.dialogs.filter(d => /could not be written/.test(d.prompt)).length, 1);
 	await ext.showSavedLog();
-	assert.match(mock.dialogs.at(-1)!.prompt, /returnpath-log\.txt is not written: sys_FileSystem\.getEdaPath returned an empty path; choose a Run folder/);
+	assert.match(mock.dialogs.at(-1)!.prompt, /returnpath-log\.txt is not written: sys_FileSystem\.getEdaPath returned an empty path; choose Return Path > Run Folder/);
 });

@@ -398,15 +398,19 @@ test('the wizard falls back to the system dialogs, with a select-all entry, when
 	}
 });
 
-test('the menu has only Open Panel, Show Saved Log and About; everything else runs from the panel', async () => {
+test('the menu has Open Panel, Run Folder, Show Saved Log and About; the analyses and the overlay run from the panel', async () => {
 	const config = (await import('../extension.json', { with: { type: 'json' } })).default;
 	const items = config.headerMenus.pcb[0].menuItems;
-	assert.deepEqual(items.map(i => i.registerFn), ['showPanel', 'showSavedLog', 'about']);
+	assert.deepEqual(items.map(i => i.registerFn), ['showPanel', 'setRunFolder', 'showSavedLog', 'about']);
 	for (const i of items)
 		assert.equal(typeof (ext as Record<string, unknown>)[i.registerFn], 'function');
 	const html = await import('node:fs').then(fs => fs.readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8'));
-	for (const id of ['hf', 'dc', 'trace', 'rerun', 'toggle', 'clear', 'log', 'runFolder'])
+	for (const id of ['hf', 'dc', 'trace', 'rerun', 'toggle', 'clear'])
 		assert.ok(html.includes(`id="${id}"`), `the panel has the ${id} button`);
+	for (const id of ['log', 'runFolder'])
+		assert.ok(!html.includes(`id="${id}"`), `${id} is in the menu, not the panel`);
+	const names = (await import('../locales/extensionJson/zh-Hans.json', { with: { type: 'json' } })).default as Record<string, string>;
+	assert.ok(items.every(i => i.title in names), 'every menu title is translated');
 });
 
 test('part names with attribute references show the attribute values', async () => {

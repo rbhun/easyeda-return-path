@@ -27,7 +27,7 @@ export const TOPIC_MAILBOX = 'returnpath.panel.mailbox';
 /** What the mailbox carries: the shared fields that outlive an instance, and the overlay drawing. */
 export interface Snapshot { from: string; fields: Stamped; overlay?: { groups: MarkerGroup[]; visible: boolean } }
 
-type RunCmd = 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder';
+type RunCmd = 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel';
 export type PanelCommand = { to?: string } & (
 	| { cmd: 'hello' }
 	| { cmd: RunCmd }
@@ -274,7 +274,7 @@ async function onCommand(m: PanelCommand): Promise<void> {
 		toast(t('Busy: ${1}', shared.busy));
 		return;
 	}
-	const labels: Record<string, string> = { hf: 'HF check', dc: 'DC check', trace: 'Selected trace', rerun: 'Rerun', toggle: '', clear: '', cancel: '', log: '', runFolder: '' };
+	const labels: Record<string, string> = { hf: 'HF check', dc: 'DC check', trace: 'Selected trace', rerun: 'Rerun', toggle: '', clear: '', cancel: '' };
 	const busy = labels[m.cmd] || undefined;
 	if (busy)
 		share({ busy, busyOwner: me });

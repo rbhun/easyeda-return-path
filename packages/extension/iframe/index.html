@@ -118,8 +118,6 @@
 		<div class="row">
 			<button id="toggle">Hide</button>
 			<button id="clear">Clear</button>
-			<button id="log" title="Show the saved log">Log…</button>
-			<button id="runFolder" title="Folder for each analysis's .log and .results.json">Run folder…</button>
 		</div>
 
 		<h2>Result</h2>
@@ -160,7 +158,7 @@
 					$('version').textContent = 'v' + s.version;
 					$('state').innerHTML = s.busy ? 'Running: <b></b>' : 'Overlay: <b></b>';
 					$('state').querySelector('b').textContent = s.busy || { none: 'none', shown: 'shown', hidden: 'hidden' }[s.overlay];
-					['hf', 'dc', 'rerun', 'toggle', 'clear', 'log', 'runFolder'].forEach(function (id) { $(id).disabled = !!s.busy; });
+					['hf', 'dc', 'rerun', 'toggle', 'clear'].forEach(function (id) { $(id).disabled = !!s.busy; });
 					$('trace').textContent = s.busy ? 'Cancel' : 'Selected trace';
 					$('rerun').disabled = !!s.busy || !s.lastRun;
 					$('toggle').disabled = !!s.busy || s.overlay === 'none';
@@ -250,7 +248,7 @@
 					send({ cmd: 'style', style: style });
 				}
 
-				['hf', 'dc', 'rerun', 'toggle', 'clear', 'log', 'runFolder'].forEach(function (id) {
+				['hf', 'dc', 'rerun', 'toggle', 'clear'].forEach(function (id) {
 					$(id).onclick = function () { send({ cmd: id }); };
 				});
 				$('trace').onclick = function () { send({ cmd: last && last.busy ? 'cancel' : 'trace' }); };
