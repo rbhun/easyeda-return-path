@@ -294,6 +294,39 @@ test('drawn streamlines: one per load, later ones end where they meet an earlier
   assert.ok(Math.max(...turns) < 40, `sharpest turn ${Math.max(...turns).toFixed(0)}° over 0.25 mm`);
 });
 
+test('a load\'s streamline follows its own current across an open pour, not the sum of the other loads', () => {
+  // Source at the left, U4 straight across from it, and a second load well below. On one solid pour
+  // U4's own current goes straight; the combined flow bends down towards the other load.
+  const src = pad('s', 'GND', 1, 2, 10, 1.2, 1.2);
+  const u4 = pad('u4', 'GND', 1, 38, 10, 1.2, 1.2);
+  const other = pad('c', 'GND', 1, 20, 2, 1.2, 1.2);
+  const b = board(1, { pours: [pour('GND', 1, [rect(20, 10, 40, 20)])], pads: [src, u4, other] });
+  const setup: DcSetup = {
+    rail: 'V',
+    ground: 'GND',
+    normalised: false,
+    warnings: [],
+    source: { componentId: 's', designator: 'S', railPads: [], groundPads: [src], current: 0 },
+    loads: [
+      { componentId: 'u4', designator: 'U4', railPads: [], groundPads: [u4], current: 0.1 },
+      { componentId: 'c', designator: 'C23', railPads: [], groundPads: [other], current: 0.1 },
+    ],
+  };
+  const res = solveDc(b, setup, { cell: 0.5 });
+  assert.ok(res.ret!.loadCells.every((l) => l.own), 'each load solved on its own');
+  const bow = (pts: { x: number; y: number }[]) => {
+    const [a, c] = [pts[0], pts[pts.length - 1]];
+    const dx = c.x - a.x;
+    const dy = c.y - a.y;
+    const l = Math.hypot(dx, dy) || 1;
+    return Math.max(...pts.map((p) => Math.abs(dx * (p.y - a.y) - dy * (p.x - a.x)) / l));
+  };
+  const lines = traceStreamlines(res.grid, res.ret!, { perLoad: 1, merge: false, smooth: false });
+  const u = lines.find((l) => l.load === 'U4')!;
+  const off = bow(u.segments.flatMap((s) => s.pts));
+  assert.ok(off < 3, `U4 bows ${off.toFixed(1)} mm off the straight line to the source`);
+});
+
 test('a rail of two nets joined by a fuse: solved as one, the line runs through the fuse to the load beyond it', () => {
   // VBUS_R from the connector to the fuse, VBUS_RAW from the fuse to the load; the copper of the two nets does not touch.
   const comp = (id: string, designator: string, pads: Pad[]): Component => ({ id, designator, at: pads[0].at, rotation: 0, layer: 1, padIds: pads.map((p) => p.id) });

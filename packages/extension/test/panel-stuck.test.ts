@@ -28,7 +28,8 @@ runner.saveTimeouts.ms = 50;
 panelTimeouts.cancelMs = 100;
 
 const settle = async (until: () => boolean) => {
-	for (let i = 0; i < 400 && !until(); i++)
+	// A DC check solves each load on its own after the combined field, so a run takes longer than the button wait used to allow.
+	for (let i = 0; i < 4000 && !until(); i++)
 		await new Promise(r => setTimeout(r, 10));
 };
 

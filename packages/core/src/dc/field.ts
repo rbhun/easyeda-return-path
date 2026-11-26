@@ -88,7 +88,7 @@ function sample(g: Grid, f: DcLayerField, p: Pt): Pt {
 }
 
 /**
- * Traces streamlines from each load back to the source along the current field, switching layers
+ * Traces streamlines from each load back to the source along that load's own current, switching layers
  * at vias where the barrel hands the current to another layer. Seeds are the load's terminal cells
  * with the strongest flow, spread apart.
  */
@@ -96,9 +96,10 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   const opts: StreamOptions = { perLoad: 3, maxSteps: 4 * (g.nx + g.ny) * 4, merge: false, smooth: false, ...options };
   // Walk towards the source: along the current on the ground, against it on the rail.
   const dir = r.role === 'return' ? 1 : -1;
-  const byLayer = new Map(r.layers.map((f) => [f.layer, f]));
-  const viaAt = new Map<number, (typeof r.vias)[number]>();
-  for (const v of r.vias) if (v.cell >= 0) viaAt.set(v.cell, v);
+  // Rebound per load when that load was solved on its own; a line of the combined field bends towards the other loads.
+  let byLayer = new Map(r.layers.map((f) => [f.layer, f]));
+  let viaAt = new Map<number, (typeof r.vias)[number]>();
+  let scale = r.fullScale;
   /** Pad cells of the parts joining a rail's nets, by layer and cell: the part and which side. */
   const bridgeAt = new Map<string, { bridge: number; side: number }>();
   (r.bridges ?? []).forEach((br, bi) => br.sides.forEach((sd, si) => {
@@ -132,6 +133,10 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
 
   for (const ld of r.loadCells) {
     if (ld.current <= 0) continue;
+    byLayer = new Map((ld.own?.layers ?? r.layers).map((f) => [f.layer, f]));
+    viaAt = new Map();
+    for (const v of ld.own?.vias ?? r.vias) if (v.cell >= 0) viaAt.set(v.cell, v);
+    scale = ld.own?.fullScale || r.fullScale;
     const seeds: { layer: number; c: number; j: number }[] = [];
     for (const [layer, cells] of ld.cells) for (const c of cells) seeds.push({ layer, c, j: byLayer.get(layer)!.j[c] });
     seeds.sort((a, b) => b.j - a.j);
@@ -436,7 +441,7 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   }
 
   function rkStep(f: DcLayerField, p: Pt): Pt | undefined {
-    const minJ = r.fullScale * 1e-4;
+    const minJ = scale * 1e-4;
     const v1 = sample(g, f, p);
     const m1 = Math.hypot(v1.x, v1.y);
     if (m1 < minJ) return undefined;
