@@ -2,6 +2,16 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.9] - 2026-11-26
+
+From a test on a second 2-layer board (rack display, 12V and 9V), where GND came out with no copper path from any load and every streamline was the supply.
+
+- **Supply and return told apart without colour:** EasyEDA Pro 3.2 draws every indicator marker white whatever colour is passed, so the supply was indistinguishable from the return. Supply streamlines are now dashed (0.8 mm dashes, 0.6 mm gaps) and return streamlines solid. The summary says which is which.
+- **A net with no connected load is reported in words:** "GND: no load has a copper path to CN1; nothing is drawn for it." replaces "drop 0.00 mV/A, bottleneck 0.000 A/mm per A on -", and no contours are drawn for it. On that board every white line was the 9V or 12V supply; no return was drawn.
+- **Empty computed fills:** a pour whose computed fill decodes to nothing now falls back to its outline, with a warning. Before, it silently contributed no copper.
+- **Diagnostics:** each pour is logged with its net, layer, priority, outline area and computed-fill area. When loads are not reached, the log names the source and load pads on that net (layer and position) and the pours on it.
+- The cause of the missing GND copper on that board is not found yet: the R-Com dongle, with its file's pour fills served region by region as stored, still solves (+12V 48.8 mV/A, GND 1.4 mV/A). The board file and the saved log of a 0.1.9 run are needed.
+
 ## [0.1.8] - 2026-11-26
 
 The R-Com dongle project file (`.epro2`) reproduced the freeze offline. Its causes were in the extension, not in EasyEDA.

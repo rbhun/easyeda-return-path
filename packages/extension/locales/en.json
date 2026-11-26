@@ -33,5 +33,7 @@
 	"To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.": "To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.",
 	"Saved log (last ${1} of ${2} lines)": "Saved log (last ${1} of ${2} lines)",
 	"Save as file...": "Save as file...",
-	"If the editor froze, reopen it and use Return Path > Show Saved Log...": "If the editor froze, reopen it and use Return Path > Show Saved Log..."
+	"If the editor froze, reopen it and use Return Path > Show Saved Log...": "If the editor froze, reopen it and use Return Path > Show Saved Log...",
+	"${1}: no load has a copper path to ${2}; nothing is drawn for it.": "${1}: no load has a copper path to ${2}; nothing is drawn for it.",
+	"Streamlines: ${1} return current solid, ${2} supply current dashed.": "Streamlines: ${1} return current solid, ${2} supply current dashed."
 }

@@ -88,3 +88,29 @@ test('wizard: with several grounds, the ground is asked once, for the rail being
 	assert.equal(mock.dialogs[2].dflt, 'GND');
 	assert.ok(mock.markers.length > 0);
 });
+
+test('a ground with no copper path from any load is reported in words and gets no contours; the supply is dashed', async () => {
+	const noGnd = { ...board, pours: board.pours.filter(p => p.net !== 'GND'), tracks: board.tracks.filter(t => t.net !== 'GND'), vias: board.vias.filter(v => v.net !== 'GND') };
+	const mock = createMockEda(noGnd, '3V3');
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showDcReturn();
+	const msg = mock.messages.at(-1)!;
+	assert.match(msg, /GND: no load has a copper path to U1; nothing is drawn for it\./);
+	assert.doesNotMatch(msg, /GND: drop/);
+	assert.match(msg, /Contours drawn on: 3V3 [^,\n]+\.\n/);
+	assert.match(msg, /Streamlines: GND return current solid, 3V3 supply current dashed\./);
+	assert.ok(mock.logs.some(l => /GND: .* not reached from U1; source pads .*; pours on GND: none/.test(l.message)));
+	const supply = mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(DC_COLORS.supply));
+	const len = (m: { shape: Record<string, unknown> }) => Math.hypot((m.shape.endX as number) - (m.shape.startX as number), (m.shape.endY as number) - (m.shape.startY as number));
+	assert.ok(supply.length > 0 && supply.every(m => len(m) <= 0.8 / 0.0254 + 1e-6), 'supply streamlines in dashes of at most 0.8 mm');
+});
+
+test('dashes split a polyline into 0.8 mm dashes 0.6 mm apart, across its corners', async () => {
+	const { dashes } = await import('../src/dc-overlay.ts');
+	const d = dashes([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }]);
+	const length = (p: { x: number; y: number }[]) => p.slice(1).reduce((s, q, i) => s + Math.hypot(q.x - p[i].x, q.y - p[i].y), 0);
+	assert.equal(d.length, 8);
+	assert.ok(d.slice(0, 7).every(p => Math.abs(length(p) - 0.8) < 1e-9));
+	assert.ok(Math.abs(length(d[7]) - 0.2) < 1e-9);
+	assert.ok(d.some(p => p.length === 3), 'a dash bends around the corner');
+});

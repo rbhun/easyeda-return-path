@@ -3,9 +3,9 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, hfApplicability, solveDcSteps, traceStreamlines, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, hfApplicability, solveDcSteps, traceStreamlines, type Pad, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
-import { drawDc } from './dc-overlay';
+import { carriesCurrent, drawDc } from './dc-overlay';
 import { readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis } from './overlay';
 import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, runSteps, savedLog, saveLogAs, timed, toast } from './runner';
@@ -131,6 +131,13 @@ export async function runDcReturn(ask: Ask, preferredRail?: string): Promise<voi
 		};
 		const res = await runSteps(solveDcSteps(board, setup), { title, timeBudgetMs: DC_BUDGET_MS, percent });
 		log(`DC grid ${res.grid.nx}×${res.grid.ny} cells of ${res.grid.cell} mm; ${[res.supply, res.ret].filter(n => !!n).map(n => `${n!.net}: ${n!.nodes} nodes, ${n!.iterations} CG iterations, residual ${n!.residual.toExponential(1)}`).join('; ')}`);
+		for (const n of [res.supply, res.ret]) {
+			if (!n?.unconnected.length)
+				continue;
+			const pads = (ps: Pad[]) => ps.map(p => `${p.id} L${p.layer} (${p.at.x.toFixed(2)}, ${p.at.y.toFixed(2)})`).join(' ') || 'none';
+			const which = n.role === 'supply' ? 'railPads' : 'groundPads';
+			log(`${n.net}: ${n.unconnected.join(', ')} not reached from ${setup.source.designator}; source pads ${pads(setup.source[which])}; load pads ${setup.loads.map(l => `${l.designator}: ${pads(l[which])}`).join('; ')}; pours on ${n.net}: ${board.pours.filter(p => p.net === n.net).map(p => `${p.id} L${p.layer}`).join(', ') || 'none'}`, 'warn');
+		}
 		const streams = await timed('streamlines', async () => ({ supply: traceStreamlines(res.grid, res.supply), ret: res.ret ? traceStreamlines(res.grid, res.ret) : [] }), s => `${s.supply.length + s.ret.length} lines`);
 		const drawn = await timed('draw markers', () => drawDc(res, streams), d => `${d.markers} markers`);
 		const layerName = (id: number) => board.stackup.copper.find(l => l.id === id)?.name ?? `L${id}`;
@@ -139,8 +146,11 @@ export async function runDcReturn(ask: Ask, preferredRail?: string): Promise<voi
 		const lines = [
 			t('${1} / ${2}: source ${3}, loads ${4}.', setup.rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', ')),
 			setup.normalised ? t('No load currents given: 1 A total split equally; values are per amp.') : '',
-			...[res.supply, res.ret].filter(n => !!n).map(n => t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')),
-			t('Contours drawn on: ${1}.', drawn.contourLayers.map(c => `${c.net} ${layerName(c.layer)}`).join(', ')),
+			...[res.supply, res.ret].filter(n => !!n).map(n => carriesCurrent(n!)
+				? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
+				: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
+			drawn.contourLayers.length ? t('Contours drawn on: ${1}.', drawn.contourLayers.map(c => `${c.net} ${layerName(c.layer)}`).join(', ')) : '',
+			t('Streamlines: ${1} return current solid, ${2} supply current dashed.', setup.ground, setup.rail),
 			t('${1} overlay marker(s).', String(drawn.markers)),
 			...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 		].filter(Boolean);

@@ -682,6 +682,15 @@ export async function readBoard(): Promise<Board> {
 				log(`read board: pour ${id}: fill coordinates are in units of ${k} mil; scaled to match the pour outline`);
 			poured = scalePaths(poured, k);
 		}
+		const outlineArea = Math.abs(area(outline));
+		const fillArea = poured ? Math.abs(area(poured)) : 0;
+		log(`read board: pour ${id} "${p.getState_PourName()}" (${p.getState_Net()}), layer ${p.getState_Layer()}, priority ${p.getState_PourPriority()}: outline ${Math.round(outlineArea)} mm², ${poured ? `computed fill ${Math.round(fillArea)} mm² in ${poured.length} rings` : 'no computed fill'}`);
+		if (poured && !(fillArea > 0) && outlineArea > 0) {
+			const msg = `Pour "${p.getState_PourName()}" (${p.getState_Net()}) has an empty computed fill; it is computed from its outline.`;
+			log(`read board: ${msg}`, 'warn');
+			warnings.push(msg);
+			poured = undefined;
+		}
 		if (!poured && skippedIds.size)
 			warnings.push(`Pour "${p.getState_PourName()}" (${p.getState_Net()}) is computed from its outline: EasyEDA froze when asked for its fill.`);
 		else if (!poured && !allSkipped)

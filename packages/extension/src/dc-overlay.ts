@@ -1,6 +1,6 @@
 // DC return-current overlay (D7) as temporary indicator markers: streamlines per net, density
 // contours on each net's dominant layer with one marker call per colour bin, and the bottleneck.
-import { densityContours, dominantLayer, type DcNetResult, type DcResult, type Streamline } from '@returnpath/core';
+import { densityContours, dominantLayer, type DcNetResult, type DcResult, type Pt, type Streamline } from '@returnpath/core';
 import { clearOverlay, markerKit, type Marker, type Rgba } from './overlay';
 
 export const DC_COLORS = {
@@ -18,6 +18,50 @@ export const DC_COLORS = {
 /** Cap per marker call; marker performance in the thousands is a D1 test item. */
 const MAX_PER_CALL = 4000;
 
+/** Dash and gap of supply streamlines, mm. */
+const DASH = 0.8;
+const GAP = 0.6;
+
+/** Pieces of a polyline: DASH long, GAP apart. */
+export function dashes(pts: Pt[]): Pt[][] {
+	const out: Pt[][] = [];
+	let cur: Pt[] = [];
+	let on = true;
+	let left = DASH;
+	for (let i = 1; i < pts.length; i++) {
+		let a = pts[i - 1];
+		const b = pts[i];
+		let len = Math.hypot(b.x - a.x, b.y - a.y);
+		if (on && !cur.length)
+			cur.push(a);
+		while (len > left) {
+			const t = left / len;
+			const p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+			if (on) {
+				cur.push(p);
+				out.push(cur);
+				cur = [];
+			}
+			else {
+				cur = [p];
+			}
+			on = !on;
+			len -= left;
+			left = on ? DASH : GAP;
+			a = p;
+		}
+		left -= len;
+		if (on)
+			cur.push(b);
+	}
+	if (on && cur.length > 1)
+		out.push(cur);
+	return out;
+}
+
+/** Whether any load reached the source through this net's copper. */
+export const carriesCurrent = (n: DcNetResult) => n.layers.some(l => l.flow > 0);
+
 export interface DcDrawn {
 	markers: number;
 	/** Layer whose contours were drawn, per net. */
@@ -27,11 +71,13 @@ export interface DcDrawn {
 export async function drawDc(res: DcResult, streams: { supply: Streamline[]; ret: Streamline[] }): Promise<DcDrawn> {
 	const { segs, dot } = await markerKit();
 	const groups: { color: Rgba; markers: Marker[]; width: number }[] = [];
-	const streamMarkers = (lines: Streamline[]) => lines.flatMap(l => l.segments.flatMap(s => segs(s.pts, false)));
-	groups.push({ color: DC_COLORS.supply, markers: streamMarkers(streams.supply), width: 3 });
-	groups.push({ color: DC_COLORS.return, markers: streamMarkers(streams.ret), width: 3 });
+	const streamMarkers = (lines: Streamline[], dashed: boolean) => lines.flatMap(l => l.segments.flatMap(s => (dashed ? dashes(s.pts) : [s.pts]).flatMap(p => segs(p, false))));
+	// EasyEDA Pro 3.2 draws every indicator marker white whatever colour is passed, so the supply
+	// is dashed to tell it from the return.
+	groups.push({ color: DC_COLORS.supply, markers: streamMarkers(streams.supply, true), width: 3 });
+	groups.push({ color: DC_COLORS.return, markers: streamMarkers(streams.ret, false), width: 3 });
 
-	const nets = [res.supply, res.ret].filter((n): n is DcNetResult => !!n);
+	const nets = [res.supply, res.ret].filter((n): n is DcNetResult => !!n && carriesCurrent(n));
 	const contourLayers: DcDrawn['contourLayers'] = [];
 	const bins: Marker[][] = DC_COLORS.bins.map(() => []);
 	for (const net of nets) {
