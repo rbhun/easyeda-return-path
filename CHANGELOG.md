@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.64] - 2026-11-26
+
+From Balazs: on the R-Com dongle the forward current of 48V + VBUS + VBUS_R + VBUS_RAW, sourced at L1, drew no yellow line on the 48V traces. C6 and U1 were reported as not reached.
+
+- **An eFuse or ideal diode joins the nets it passes the rail through.** E1 has IN on VBUS and OUT on 48V, plus its control pins. Only a part whose every pin was on the rail was taken as the short, so E1 was not, and the 48V copper carried no current. Its input and output pins are now the link. A part that only senses across the nets (VIN+ and VIN-) is still not a short. On this run the forward line reaches C6 and U1 on the 48V tracks.
+
 ## [0.1.63] - 2026-11-26
 
 From Balazs: show the voltage drop, and check whether a trace or a choke is too narrow.

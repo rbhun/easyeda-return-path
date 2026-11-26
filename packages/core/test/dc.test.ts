@@ -383,6 +383,37 @@ test('a converter behind a shunt and a jumper: the chain to it is offered, it is
   assert.ok(alone.warnings.some((w) => /the supply behind it on \$1N261/.test(w)));
 });
 
+test('an eFuse with other pins still joins its input net to its output net, so the far side carries the current', () => {
+  const comp = (id: string, designator: string, pads: Pad[]): Component => ({ id, designator, at: pads[0].at, rotation: 0, layer: 1, padIds: pads.map((p) => p.id) });
+  const j1 = [pad('j1.1', 'VBUS', 1, 0, 0, 0.6, 0.6, 'j1'), pad('j1.2', 'GND', 1, 0, 3, 0.6, 0.6, 'j1')];
+  const e1 = [
+    pad('e1.in', 'VBUS', 1, 8, 0, 0.6, 0.6, 'e1', 'IN'),
+    pad('e1.out', '48V', 1, 12, 0, 0.6, 0.6, 'e1', 'OUT'),
+    pad('e1.gnd', 'GND', 1, 10, 2, 0.6, 0.6, 'e1', 'GND'),
+    pad('e1.uv', '$UV', 1, 10, 3, 0.4, 0.4, 'e1', 'UVLO'),
+  ];
+  const c6 = [pad('c6.1', '48V', 1, 20, 0, 0.6, 0.6, 'c6'), pad('c6.2', 'GND', 1, 20, 3, 0.6, 0.6, 'c6')];
+  const b = board(1, {
+    pads: [...j1, ...e1, ...c6],
+    components: [comp('j1', 'J1', j1), comp('e1', 'E1', e1), comp('c6', 'C6', c6)],
+    tracks: [
+      { id: 't1', net: 'VBUS', layer: 1, a: { x: 0, y: 0 }, b: { x: 8, y: 0 }, width: 0.5 },
+      { id: 't2', net: '48V', layer: 1, a: { x: 12, y: 0 }, b: { x: 20, y: 0 }, width: 0.5 },
+      { id: 'tg', net: 'GND', layer: 1, a: { x: 0, y: 3 }, b: { x: 20, y: 3 }, width: 0.5 },
+    ],
+  });
+  const setup = buildDcSetup(b, { rail: '48V', railNets: ['VBUS'], ground: 'GND', source: 'J1', loads: ['C6'], currents: { C6: 0.1 } });
+  assert.deepEqual(setup.bridges.map((x) => x.designator), ['E1']);
+  assert.ok(setup.warnings.some((w) => /E1 joins 48V \+ VBUS, taken as a short/.test(w)));
+  assert.ok(!setup.warnings.some((w) => /No part joins/.test(w)));
+  const res = solveDc(b, setup, { cell: 0.25 });
+  assert.deepEqual(res.supply.unconnected, [], 'C6 on 48V is reached from J1 on VBUS through E1');
+  const line = traceStreamlines(res.grid, res.supply, { perLoad: 1, merge: false, smooth: false }).find((l) => l.load === 'C6');
+  assert.ok(line?.complete, 'the forward line runs along the 48V track');
+  const pts = line!.segments.flatMap((s) => s.pts);
+  assert.ok(pts.some((p) => p.x <= 8) && pts.some((p) => p.x >= 19), 'the line crosses E1 onto the 48V track and reaches C6');
+});
+
 test('focusInput: one part of the rail, with its own current when one was given', () => {
   const input = { rail: '3V3', ground: 'GND', source: 'U1', loads: ['U2', 'U3'], currents: { U2: 0.15, U3: 0.02 } };
   assert.deepEqual(focusInput(input, 'U3'), { rail: '3V3', ground: 'GND', source: 'U1', loads: ['U3'], currents: { U3: 0.02 } });
