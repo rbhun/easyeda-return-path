@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.52] - 2026-11-26
+
+HF check: no drawn return line leaves its reference copper.
+
+- **Returns keep inside the copper**: detours and via-route legs are drawn 0.1 mm inside the reference copper (0.05 or 0.02 mm where it is narrower), not along its edge, so the drawn line no longer straddles the edge of a hole. Ends that sit at a gap edge step straight in.
+- **Hairline fill slivers are not copper**: pour fill narrower than 0.1 mm (EasyEDA's stored fill can hold 0.015 mm strips between a pour edge and a clearance) is dropped. A return no longer detours along such a strip; where one used to bridge a gap, the gap is now reported (a small detour, a via route, or unconnected islands).
+- Audit on both test boards, every signal net: no return line on or across another net's copper, and none outside its reference copper beyond single samples on the edge.
+
 ## [0.1.51] - 2026-11-26
 
 From Balazs: show the board info CSV format at the import.

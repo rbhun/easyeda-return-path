@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { arcPoints, area, difference, geodesic, isGroundNet, pairGround, pouredScale, rect, scalePaths, splitIslands, union } from '../src/index.js';
+import { arcPoints, area, difference, dropNarrow, geodesic, isGroundNet, pairGround, pouredScale, rect, scalePaths, splitIslands, union } from '../src/index.js';
 
 test('arc discretisation keeps radius', () => {
   const pts = arcPoints({ x: 1, y: 0 }, { x: 0, y: 1 }, 90);
@@ -73,4 +73,25 @@ test('geodesic: ends on separate islands get no detour; within one island the pa
   const region = union([rect(0, 0, 10, 4)], [rect(0, 10, 10, 4)]);
   assert.equal(geodesic(region, { x: 0, y: 1 }, { x: 0, y: 9 }, { minHoleArea: 0.05, window: 5 }), null);
   assert.ok(geodesic(region, { x: -4, y: 1 }, { x: 4, y: -1 }, { minHoleArea: 0.05, window: 5 }), 'within one island the path is found');
+});
+
+test('dropNarrow removes a hairline strip between two pads of copper and keeps the rest', () => {
+  const region = union([rect(0, 0, 4, 4), rect(6, 0, 4, 4), rect(3, -1.9925, 4, 0.015)]);
+  assert.equal(splitIslands(region).length, 1);
+  const kept = dropNarrow(region, 0.1);
+  assert.equal(splitIslands(kept).length, 2);
+  assert.ok(Math.abs(area(kept) - 32) < 0.01, `area ${area(kept)}`);
+});
+
+test('geodesic with an inset keeps inside the copper; ends at the copper edge step straight in', () => {
+  const plane = difference([rect(0, 0, 20, 20)], [rect(0, 4, 1, 12)]); // slot x∈[-0.5,0.5], y∈[-2,10]
+  const a = { x: -0.5, y: 5 };
+  const b = { x: 0.5, y: 5 };
+  const det = geodesic(plane, a, b, { minHoleArea: 0.1, window: 3, inset: 0.1, snapEnds: 0.2 })!;
+  assert.ok(det);
+  assert.deepEqual(det.path[0], a);
+  assert.deepEqual(det.path.at(-1), b);
+  const toSlot = (p: { x: number; y: number }) => Math.hypot(Math.max(0, Math.abs(p.x) - 0.5), Math.max(0, -2 - p.y, p.y - 10));
+  for (const p of det.path.slice(2, -2)) assert.ok(toSlot(p) >= 0.095, `(${p.x}, ${p.y}) hugs the slot`);
+  assert.equal(geodesic(plane, a, b, { minHoleArea: 0.1, window: 3, inset: 0.1 }), null, 'without snapping, ends on the edge have no path');
 });

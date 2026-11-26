@@ -12,6 +12,10 @@ export interface DetourOptions {
   maxNodes?: number;
   /** Receives the largest graph size searched, for diagnostics. */
   info?: { nodes: number };
+  /** How far inside the copper the path keeps, mm (default 0.005). */
+  inset?: number;
+  /** Ends closer than the inset to the copper edge are joined straight to a point up to this far inside it, mm. */
+  snapEnds?: number;
 }
 
 export interface Detour {
@@ -37,8 +41,15 @@ export function geodesic(region: Paths, a: Pt, b: Pt, opts: DetourOptions): Deto
 export function* geodesicSteps(region: Paths, a: Pt, b: Pt, opts: DetourOptions): Steps<Detour | null | typeof TOO_COMPLEX> {
   // Ends on different islands of the copper have no path between them, however far the window grows.
   yield { phase: 'detour' };
-  const whole = preparedIslands(region, opts.minHoleArea).find((isl) => pointInPaths(a, isl.paths) && pointInPaths(b, isl.paths));
+  const islands = preparedIslands(region, opts.minHoleArea, opts.inset ?? 0.005);
+  const ends = [a, b];
+  if (opts.snapEnds) {
+    a = snapInside(islands, a, opts.snapEnds) ?? a;
+    b = snapInside(islands, b, opts.snapEnds) ?? b;
+  }
+  const whole = islands.find((isl) => pointInPaths(a, isl.paths) && pointInPaths(b, isl.paths));
   if (!whole) return null;
+  const withEnds = (path: Path): Path => [...(a === ends[0] ? [] : [ends[0]]), ...path, ...(b === ends[1] ? [] : [ends[1]])];
   const rb = whole.box;
   const regionSize = Math.max(rb.maxX - rb.minX, rb.maxY - rb.minY);
   const maxNodes = opts.maxNodes ?? DEFAULT_MAX_DETOUR_NODES;
@@ -64,28 +75,44 @@ export function* geodesicSteps(region: Paths, a: Pt, b: Pt, opts: DetourOptions)
       const touches = path.some(
         (p) => Math.abs(p.x - win.minX) < 1e-3 || Math.abs(p.x - win.maxX) < 1e-3 || Math.abs(p.y - win.minY) < 1e-3 || Math.abs(p.y - win.maxY) < 1e-3,
       );
-      if (!touches || covers) return { path, length: path.reduce((s, p, i) => (i ? s + dist(path[i - 1], p) : 0), 0) };
+      if (!touches || covers) {
+        const full = withEnds(path);
+        return { path: full, length: full.reduce((s, p, i) => (i ? s + dist(full[i - 1], p) : 0), 0) };
+      }
     }
     if (covers || half > 4 * regionSize) return null;
     half *= 2;
   }
 }
 
-const prepared = new WeakMap<Paths, Map<number, { paths: Paths; box: ReturnType<typeof bbox> }[]>>();
+/** The nearest point found within `reach` of p that lies in one of the islands; p itself when it does. */
+function snapInside(islands: { paths: Paths; box: ReturnType<typeof bbox> }[], p: Pt, reach: number): Pt | null {
+  const inside = (q: Pt) => islands.some((isl) => q.x >= isl.box.minX && q.x <= isl.box.maxX && q.y >= isl.box.minY && q.y <= isl.box.maxY && pointInPaths(q, isl.paths));
+  if (inside(p)) return p;
+  for (let r = 0.02; r <= reach + 1e-9; r += 0.02)
+    for (let k = 0; k < 16; k++) {
+      const q = { x: p.x + r * Math.cos((k * Math.PI) / 8), y: p.y + r * Math.sin((k * Math.PI) / 8) };
+      if (inside(q)) return q;
+    }
+  return null;
+}
+
+const prepared = new WeakMap<Paths, Map<string, { paths: Paths; box: ReturnType<typeof bbox> }[]>>();
 
 /** The region's islands with small holes filled, computed once per region. */
-function preparedIslands(region: Paths, minHoleArea: number) {
-  let byArea = prepared.get(region);
-  if (!byArea) prepared.set(region, (byArea = new Map()));
-  let islands = byArea.get(minHoleArea);
-  if (!islands) byArea.set(minHoleArea, (islands = prepareRegion(region, minHoleArea).map((paths) => ({ paths, box: bbox(paths) }))));
+function preparedIslands(region: Paths, minHoleArea: number, inset: number) {
+  let byKey = prepared.get(region);
+  if (!byKey) prepared.set(region, (byKey = new Map()));
+  const key = `${minHoleArea}/${inset}`;
+  let islands = byKey.get(key);
+  if (!islands) byKey.set(key, (islands = prepareRegion(region, minHoleArea, inset).map((paths) => ({ paths, box: bbox(paths) }))));
   return islands;
 }
 
-function prepareRegion(paths: Paths, minHoleArea: number): Paths[] {
+function prepareRegion(paths: Paths, minHoleArea: number, inset: number): Paths[] {
   const kept = paths.filter((p) => signedArea(p) > 0 || -signedArea(p) >= minHoleArea);
-  // Shrink slightly so graph vertices lie strictly inside the copper.
-  const shrunk = simplify(inflate(kept, -0.005), 0.01);
+  // Shrink so graph vertices lie strictly inside the copper.
+  const shrunk = simplify(inflate(kept, -inset), 0.01);
   return splitIslands(shrunk);
 }
 
