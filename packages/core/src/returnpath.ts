@@ -41,10 +41,25 @@ export interface DriverOptions {
   drivers?: string[];
   /** Driver pin → decap → driver pin path length, mm. */
   driverDecap: { good: number; warn: number };
+  /** Widest trace-edge-to-pour gap a coplanar return is drawn across, mm. */
+  maxCoplanarGap: number;
 }
 
-/** Net of the reference copper at p on a layer, optionally ignoring one net. */
-export type NetAt = (p: Pt, layer: number, exclude?: string) => string | null;
+/** Copper lookups on the board's reference copper (see analyze.ts Context). */
+export interface CopperProbe {
+  /** Net of the reference copper at p on a layer, optionally ignoring one net. */
+  netAt(p: Pt, layer: number, exclude?: string): string | null;
+  /** p lies on a conductor the return cannot flow through (a track, pad or via of a net without a pour there). */
+  blockedAt(p: Pt, layer: number): boolean;
+  /** Gap from the trace edge to the first pour copper of another net along n, unless another conductor comes first. */
+  pourBeside(p: Pt, n: Pt, halfWidth: number, layer: number, net: string, maxGap: number, ownBlocks?: boolean): { d: number; net: string } | null;
+}
+
+/** Sampling step of the drawn return, and how far inside the pour edge a coplanar return is drawn, mm. */
+const STEP = 0.05;
+const INSET = 0.1;
+
+const dot = (a: Pt, b: Pt) => a.x * b.x + a.y * b.y;
 
 const unitNormal = (a: Pt, b: Pt): Pt => {
   const d = sub(b, a);
@@ -72,7 +87,7 @@ function padAt(board: Board, p: Pt, net: string, layer: number): Pad | undefined
  * the pin where the return leaves the reference copper (or saying the part has none), and one per
  * driver for the edge that has to cross to the other supply net through a decap.
  */
-export function buildReturnPath(board: Board, net: string, chains: ChainResult[], vias: ViaResult[], netAt: NetAt, findings: Finding[], opts: DriverOptions): ReturnPath {
+export function buildReturnPath(board: Board, net: string, chains: ChainResult[], vias: ViaResult[], probe: CopperProbe, findings: Finding[], opts: DriverOptions): ReturnPath {
   const traces: ReturnTrace[] = [];
   const jumps: ReturnJump[] = [];
   const trackById = new Map(board.tracks.map((t) => [t.id, t]));
@@ -86,48 +101,69 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
     const halfWidth = (trackById.get(c.chain.trackIds[0])?.width ?? 0.2) / 2;
     const breaks = c.gaps.filter((g) => g.kind !== 'via-antipad').sort((a, b) => a.s0 - b.s0);
     const exclude = ref.coplanar ? net : undefined;
+    const aside = halfWidth + ref.h;
+    const maxGap = opts.maxCoplanarGap;
     const push = (s0: number, s1: number) => {
       if (s1 - s0 < 1e-6) return;
-      const centre = line.slice(s0, s1);
-      if (!ref.coplanar) {
-        traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: centre });
-        return;
-      }
-      // Coplanar return crowds the pour edges on either side of the trace, along the stretches with pour
-      // on that side within the band (a meander's pour clearance is wider than the gap elsewhere). The
-      // edge is sampled rather than offset as a polyline, which would fold back inside tight bends.
-      const o = halfWidth + ref.h;
-      const reach = halfWidth + 4.25 * ref.h + 0.05;
-      const k = Math.max(1, Math.ceil((s1 - s0) / 0.1));
-      for (const side of [1, -1]) {
+      const k = Math.max(1, Math.ceil((s1 - s0) / STEP));
+      // Each drawn point lies in reference copper, and so does the line to the next one; where no such
+      // point exists the line breaks rather than crossing clearance or another conductor.
+      const inCopper = (q: Pt) => !!probe.netAt(q, ref.layer, exclude) && !probe.blockedAt(q, ref.layer);
+      const joins = (a: Pt, b: Pt) => [0.25, 0.5, 0.75].every((f) => inCopper(add(a, mul(sub(b, a), f))));
+      const trace = (pointAt: (at: number) => Pt | null) => {
         let run: Path = [];
+        let last: Pt | undefined;
         const flush = () => {
           if (run.length > 1 && dist(run[0], run[run.length - 1]) > 0.3) traces.push({ layer: ref.layer, signalLayer: c.chain.layer, pts: straighten(run) });
           run = [];
         };
         for (let i = 0; i <= k; i++) {
           const at = s0 + ((s1 - s0) * i) / k;
-          const p = line.at(at);
-          const n = unitNormal({ x: 0, y: 0 }, line.dirAt(at));
-          // Other legs of the same trace nearby: the edge point must stay clear of them, and they block the pour behind them.
-          const near: [Pt, Pt][] = [];
-          for (let j = 1; j < line.pts.length; j++)
-            if (line.cum[j] > at - 2 * reach && line.cum[j - 1] < at + 2 * reach && (line.cum[j] < at - 1e-9 || line.cum[j - 1] > at + 1e-9)) near.push([line.pts[j - 1], line.pts[j]]);
-          const q = add(p, mul(n, side * o));
-          let ok = near.every(([a, b]) => distPointSeg(q, a, b) >= 0.9 * o);
-          if (ok) {
-            ok = false;
-            for (let d = halfWidth + 0.05; d <= reach && !ok; d += 0.05) {
-              const r = add(p, mul(n, side * d));
-              if (d > 2 * halfWidth && near.some(([a, b]) => distPointSeg(r, a, b) < halfWidth)) break;
-              ok = !!netAt(r, ref.layer, exclude);
-            }
-          }
-          if (ok) run.push(q);
+          const q = pointAt(at);
+          // Offset points fold back inside a bend; the return does not run backwards there.
+          if (q && last && dot(sub(q, last), line.dirAt(at)) < 0) continue;
+          if (q && run.length && !joins(run[run.length - 1], q)) flush();
+          if (q) run.push((last = q));
           else flush();
         }
         flush();
+      };
+      if (!ref.coplanar) {
+        // Under the trace on the plane, stepping aside around holes (antipads, crossing traces' clearance).
+        // It keeps to the side it took unless the other is clearly nearer, so it does not zigzag or fold back at corners.
+        let lastSide = 1;
+        trace((at) => {
+          const p = line.at(at);
+          if (inCopper(p)) return p;
+          const n = unitNormal({ x: 0, y: 0 }, line.dirAt(at));
+          const nearest = (side: number) => {
+            for (let d = STEP; d <= aside + 1e-9; d += STEP) if (inCopper(add(p, mul(n, side * d)))) return d;
+            return Infinity;
+          };
+          const [same, other] = [nearest(lastSide), nearest(-lastSide)];
+          if (same === Infinity && other === Infinity) return null;
+          let d = same;
+          if (other + 0.3 < same) {
+            lastSide = -lastSide;
+            d = other;
+          }
+          return add(p, mul(n, lastSide * d));
+        });
+        return;
       }
+      // Coplanar: along the pour edge on each side that has pour before any other conductor, just inside it.
+      for (const side of [1, -1])
+        trace((at) => {
+          const p = line.at(at);
+          const n = mul(unitNormal({ x: 0, y: 0 }, line.dirAt(at)), side);
+          const edge = probe.pourBeside(p, n, halfWidth, ref.layer, net, maxGap, true);
+          if (!edge) return null;
+          for (const inset of [INSET, INSET / 2, 0.025]) {
+            const q = add(p, mul(n, halfWidth + edge.d + inset));
+            if (inCopper(q)) return q;
+          }
+          return null;
+        });
     };
     let s = 0;
     for (const g of breaks) {
@@ -180,7 +216,7 @@ export function buildReturnPath(board: Board, net: string, chains: ChainResult[]
       const coplanar = c.ref.coplanar;
       const halfWidth = (trackById.get(c.chain.trackIds[0])?.width ?? 0.2) / 2;
       const sides = coplanar ? [1, -1].map((k) => add(probeAt, mul(unitNormal(end, inward), k * (halfWidth + 1.5 * c.ref!.h + 0.05)))) : [probeAt];
-      const endNet = sides.map((p) => netAt(p, c.ref!.layer, coplanar ? net : undefined)).find(Boolean) ?? c.refNets[0] ?? null;
+      const endNet = sides.map((p) => probe.netAt(p, c.ref!.layer, coplanar ? net : undefined)).find(Boolean) ?? c.refNets[0] ?? null;
       const candidates = board.pads.filter((p) => p.componentId === comp.id && p.id !== pad.id && p.net && (p.net === endNet || (!endNet && c.refNets.includes(p.net))));
       const pin = candidates.sort((a, b) => dist(a.at, pad.at) - dist(b.at, pad.at))[0];
       const where = `${comp.designator} pad ${pad.number}`;

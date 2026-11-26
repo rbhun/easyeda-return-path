@@ -1,7 +1,7 @@
 import { AnalysisAborted, runAsync, runSync, type RunOptions, type Steps } from './budget.js';
 import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
 import { DEFAULT_MAX_DETOUR_NODES, geodesicSteps, TOO_COMPLEX, type Detour } from './detour.js';
-import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, Polyline, strokePath, union } from './geom.js';
+import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, pointInPaths, Polyline, strokePath, union } from './geom.js';
 import { allCopper, buildReferenceCopperSteps, vertexCount, type LayerCopper } from './refcopper.js';
 import { isPassive } from './driver.js';
 import { buildReturnPath, type ReturnPath } from './returnpath.js';
@@ -274,7 +274,7 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     yield { phase: 'vias', fraction: i / ownVias.length };
     vias.push(analyzeVia(ctx, via, tracks, results, findings));
   }
-  const returnPath = buildReturnPath(board, net, results, vias, (p, layer, exclude) => ctx.netAt(p, layer, exclude), findings, opts);
+  const returnPath = buildReturnPath(board, net, results, vias, ctx, findings, opts);
   return { net, refCopper, chains: results, vias, returnPath, findings, stats };
 }
 
@@ -300,6 +300,61 @@ class Context {
       this.indexes.set(layer, idx);
     }
     return idx;
+  }
+
+  private readonly conductors = new Map<number, Map<string, { net: string; hit: (p: Pt) => boolean }[]>>();
+
+  /**
+   * True where p lies on a track, pad or via of a net that has no pour on the layer: copper the return
+   * cannot flow through, such as a neighbouring signal trace or another leg of the trace itself.
+   * Copper of `ignore` does not count.
+   */
+  blockedAt(p: Pt, layer: number, ignore?: string): boolean {
+    let grid = this.conductors.get(layer);
+    if (!grid) {
+      grid = new Map();
+      const pourNets = this.refCopper.get(layer)?.byNet ?? new Map();
+      const put = (x0: number, y0: number, x1: number, y1: number, net: string, hit: (q: Pt) => boolean) => {
+        for (let i = Math.floor(x0); i <= Math.floor(x1); i++)
+          for (let j = Math.floor(y0); j <= Math.floor(y1); j++) {
+            const k = `${i},${j}`;
+            grid!.get(k)?.push({ net, hit }) ?? grid!.set(k, [{ net, hit }]);
+          }
+      };
+      for (const t of this.board.tracks) {
+        if (t.layer !== layer || pourNets.has(t.net)) continue;
+        const r = t.width / 2;
+        put(Math.min(t.a.x, t.b.x) - r, Math.min(t.a.y, t.b.y) - r, Math.max(t.a.x, t.b.x) + r, Math.max(t.a.y, t.b.y) + r, t.net, (q) => distPointSeg(q, t.a, t.b) <= r);
+      }
+      for (const v of this.board.vias) {
+        if (pourNets.has(v.net)) continue;
+        const r = v.diameter / 2;
+        put(v.at.x - r, v.at.y - r, v.at.x + r, v.at.y + r, v.net, (q) => dist(q, v.at) <= r);
+      }
+      for (const pd of this.board.pads) {
+        if ((pd.layer !== layer && pd.layer !== MULTI_LAYER) || (pd.net && pourNets.has(pd.net))) continue;
+        const xs = pd.shape.flat();
+        if (!xs.length) continue;
+        put(Math.min(...xs.map((q) => q.x)), Math.min(...xs.map((q) => q.y)), Math.max(...xs.map((q) => q.x)), Math.max(...xs.map((q) => q.y)), pd.net ?? '', (q) => pointInPaths(q, pd.shape));
+      }
+      this.conductors.set(layer, grid);
+    }
+    return !!grid.get(`${Math.floor(p.x)},${Math.floor(p.y)}`)?.some((c) => c.net !== ignore && c.hit(p));
+  }
+
+  /**
+   * Distance from the trace edge (at p, along unit normal n) to the first copper of a pour net other
+   * than `net`, up to maxGap; null when nothing is that close or another conductor comes first (with
+   * `ownBlocks`, also the trace's own copper, such as another leg of a meander).
+   */
+  pourBeside(p: Pt, n: Pt, halfWidth: number, layer: number, net: string, maxGap: number, ownBlocks = false, step = 0.025): { d: number; net: string } | null {
+    for (let d = step; d <= maxGap + 1e-9; d += step) {
+      const q = add(p, mul(n, halfWidth + d));
+      const hit = this.netAt(q, layer, net);
+      if (hit) return { d, net: hit };
+      if (this.blockedAt(q, layer, ownBlocks ? undefined : net)) return null;
+    }
+    return null;
   }
 
   /** Net of the reference copper at p (optionally ignoring one net). */
@@ -380,13 +435,8 @@ function coplanarGap(ctx: Context, chain: Chain, line: Polyline, halfWidth: numb
     const s = ((i + 0.5) / k) * line.length;
     const p = line.at(s);
     const n = normal(line.dirAt(s));
-    for (let d = step; d <= ctx.opts.maxCoplanarGap + 1e-9; d += step) {
-      const o = halfWidth + d;
-      if (ctx.netAt(add(p, mul(n, o)), chain.layer, chain.net) || ctx.netAt(add(p, mul(n, -o)), chain.layer, chain.net)) {
-        gaps.push(d);
-        break;
-      }
-    }
+    const side = [n, mul(n, -1)].map((nv) => ctx.pourBeside(p, nv, halfWidth, chain.layer, chain.net, ctx.opts.maxCoplanarGap, false, step)?.d ?? Infinity);
+    if (Math.min(...side) < Infinity) gaps.push(Math.min(...side));
   }
   if (gaps.length < k / 3) return null;
   gaps.sort((a, b) => a - b);
@@ -410,11 +460,7 @@ function splitByReference(ctx: Context, chain: Chain): Chain[] {
   const besideAt = (s: number) => {
     const p = line.at(s);
     const nv = normal(line.dirAt(s));
-    for (let d = 0.025; d <= limit + 1e-9; d += 0.025) {
-      const o = halfWidth + d;
-      if (ctx.netAt(add(p, mul(nv, o)), chain.layer, chain.net) || ctx.netAt(add(p, mul(nv, -o)), chain.layer, chain.net)) return true;
-    }
-    return false;
+    return !!(ctx.pourBeside(p, nv, halfWidth, chain.layer, chain.net, limit) ?? ctx.pourBeside(p, mul(nv, -1), halfWidth, chain.layer, chain.net, limit));
   };
   const runs: { s0: number; s1: number; coplanar: boolean }[] = [];
   for (let i = 0; i < n; i++) {
@@ -449,9 +495,7 @@ function splitByReference(ctx: Context, chain: Chain): Chain[] {
     const probeS = Math.min(Math.max(s, co.s0 + 0.1), co.s1 - 0.1);
     const p = line.at(probeS);
     const nv = normal(line.dirAt(probeS));
-    let pourNet: string | null = null;
-    for (let d = 0.025; d <= limit + 1e-9 && !pourNet; d += 0.025)
-      pourNet = ctx.netAt(add(p, mul(nv, halfWidth + d)), chain.layer, chain.net) ?? ctx.netAt(add(p, mul(nv, -halfWidth - d)), chain.layer, chain.net);
+    const pourNet = (ctx.pourBeside(p, nv, halfWidth, chain.layer, chain.net, limit) ?? ctx.pourBeside(p, mul(nv, -1), halfWidth, chain.layer, chain.net, limit))?.net ?? null;
     const at = line.at(s);
     return board.vias.filter((v) => v.net === pourNet && dist(v.at, at) <= reach).sort((a, b) => dist(a.at, at) - dist(b.at, at))[0];
   };
