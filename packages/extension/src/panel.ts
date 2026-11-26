@@ -28,6 +28,8 @@ const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, 
 let host: PanelHost | undefined;
 /** The bus the command subscription is on; a new editor API object needs a new subscription. */
 let subscribed: unknown;
+/** The page of the open panel has said hello on this bus, so results sent there are seen. */
+let pageOn: unknown;
 let busy: string | undefined;
 let result: { title: string; lines: string[]; at: string } | undefined;
 
@@ -54,6 +56,9 @@ async function onCommand(m: PanelCommand): Promise<void> {
 	if (!m || typeof m !== 'object')
 		return;
 	if (m.cmd === 'hello') {
+		if (pageOn !== bus())
+			log('panel: page connected');
+		pageOn = bus();
 		publishState();
 		return;
 	}
@@ -100,20 +105,44 @@ export function publishState(): void {
 	}
 }
 
-/** Opens the panel, or brings it back if it is open but hidden or minimised. */
-export async function openPanel(): Promise<void> {
+/** Set when the user closes the panel, so analyses stop reopening it until Open Panel is used again. */
+let closedByUser = false;
+
+/** Opens the panel, or brings it back if it is open but hidden or minimised. False when EasyEDA refused. */
+export async function openPanel(): Promise<boolean> {
+	closedByUser = false;
 	if (await panelIsOpen()) {
 		await eda.sys_IFrame.showIFrame(PANEL_ID);
 		publishState();
-		return;
+		return true;
 	}
-	await eda.sys_IFrame.openIFrame(PANEL_HTML, 400, 620, PANEL_ID, {
-		title: t('Return Path'),
-		minimizeButton: true,
-		maximizeButton: false,
-		grayscaleMask: false,
-	});
-	log('panel: opened');
+	let opened: unknown;
+	pageOn = undefined;
+	try {
+		opened = await eda.sys_IFrame.openIFrame(PANEL_HTML, 400, 620, PANEL_ID, {
+			title: t('Return Path'),
+			minimizeButton: true,
+			maximizeButton: false,
+			grayscaleMask: false,
+			buttonCallbackFn: (button) => {
+				if (button === 'close')
+					closedByUser = true;
+			},
+		});
+	}
+	catch (e) {
+		log(`panel: openIFrame failed (${e instanceof Error ? e.message : String(e)})`, 'warn');
+		return false;
+	}
+	log(`panel: openIFrame returned ${JSON.stringify(opened)}`, opened === false ? 'warn' : 'info');
+	return opened !== false;
+}
+
+/** Opens the panel at the start of an analysis, unless the user closed it; failures are only logged. */
+export async function autoOpenPanel(): Promise<void> {
+	if (closedByUser || await panelIsOpen())
+		return;
+	await openPanel();
 }
 
 export async function panelIsOpen(): Promise<boolean> {
@@ -128,7 +157,8 @@ export async function panelIsOpen(): Promise<boolean> {
 /** Shows a result in the panel when it is open, else in a dialog. */
 export async function report(title: string, lines: string[]): Promise<void> {
 	result = { title, lines, at: new Date().toLocaleTimeString() };
-	if (subscribed && subscribed === bus() && await panelIsOpen()) {
+	// A panel whose page never connected (no API access in the frame) would swallow the result.
+	if (subscribed && subscribed === bus() && pageOn === bus() && await panelIsOpen()) {
 		publishState();
 		toast(t('${1}: done; the result is in the Return Path panel.', title));
 		return;

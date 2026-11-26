@@ -53,5 +53,6 @@
 	"Return, inner layers": "Return, inner layers",
 	"Hops (via, decap, cap, pin)": "Hops (via, decap, cap, pin)",
 	"Gaps and bottleneck": "Gaps and bottleneck",
-	"±3h band edges": "±3h band edges"
+	"±3h band edges": "±3h band edges",
+	"This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.": "This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details."
 }

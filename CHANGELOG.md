@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.18] - 2026-11-26
+
+From the owner's run of 0.1.17 on the rack display: a 9V track selected, Show for Selected Net, then the DC view.
+
+- **The selected rail is not asked for again.** With a guessed rail selected, or a rail handed over from Show for Selected Net, the wizard skips "confirm the power rails" and "rail to solve" and starts at the ground (when there is a choice) or the source.
+- **"Export failed" once, not once per version.** That message most likely comes from `pcb_Net.getNetlist`. The flag that skips the netlist after it gave no pin names was tied to the extension version, so every upgrade showed the message again. It is now kept until the netlist reader itself changes.
+- **Board outline.** The rack display's outline is a single rectangle polyline of type `BOARD_OUTLINE`, which the polyline API apparently does not return. The outline is now also looked for on all layers and then in the PCB's document source (`sys_FileManager.getDocumentSource`). The log says how many polylines each step found.
+- **Panel.** Every analysis opens the Return Path panel unless you closed it. Results go to the panel only once its page has connected (said hello); otherwise they stay in the dialog, so a panel that cannot reach the extension never swallows a result. Open Panel reports when EasyEDA refuses to open the window, and the log records what `openIFrame` returned.
+
 ## [0.1.17] - 2026-11-26
 
 From the first run on the rack display backup (`rack display_2026-11-23-17-52.epro2`).

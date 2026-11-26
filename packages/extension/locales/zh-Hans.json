@@ -37,5 +37,6 @@
 	"Return, inner layers": "回流，内层",
 	"Hops (via, decap, cap, pin)": "跳转（过孔、去耦、电容、引脚）",
 	"Gaps and bottleneck": "缝隙与瓶颈",
-	"±3h band edges": "±3h 带边界"
+	"±3h band edges": "±3h 带边界",
+	"This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.": "此版本的 EasyEDA 未能打开面板窗口。Return Path 菜单项无需面板即可使用；详情见保存的日志。"
 }

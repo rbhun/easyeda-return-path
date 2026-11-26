@@ -8,7 +8,7 @@ import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis, toggleOverlay } from './overlay';
-import { initPanel, openPanel, publishState, report } from './panel';
+import { autoOpenPanel, initPanel, openPanel, publishState, report } from './panel';
 import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, readStored, runSteps, savedLog, saveLogAs, timed, toast, writeStored } from './runner';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
@@ -68,6 +68,7 @@ export async function showReturnPath(): Promise<void> {
 export async function runReturnPath(ask: Ask): Promise<void> {
 	const title = t('Return path');
 	await guarded(title, async () => {
+		await showPanelForRun();
 		const net = await selectedNet();
 		if (!net) {
 			eda.sys_Dialog.showInformationMessage(t('Select a track, via or pad of the net to analyse.'), title);
@@ -87,7 +88,7 @@ async function hfFor(net: string, ask: Ask): Promise<void> {
 	if (!scope.ok) {
 		log(`${net}: not a signal net (${scope.kind}); high-frequency check skipped`, 'warn');
 		if (await confirm(scope.message!, title, t('Open DC view')))
-			await runDcReturn(ask, scope.kind === 'power' ? net : undefined);
+			await runDcReturn(ask, scope.kind === 'power' ? net : undefined, scope.kind === 'power');
 		return;
 	}
 	if (!board)
@@ -114,14 +115,16 @@ export async function showDcReturn(): Promise<void> {
 	await runDcReturn(dialogAsk());
 }
 
-export async function runDcReturn(ask: Ask, preferredRail?: string): Promise<void> {
+/** `railGiven`: the rail came from the selection and was judged a supply net, so the wizard does not ask for it. */
+export async function runDcReturn(ask: Ask, preferredRail?: string, railGiven = false): Promise<void> {
 	const title = t('DC return current');
 	await guarded(title, async () => {
 		log(`DC Return Current (v${extensionConfig.version})`);
+		await showPanelForRun();
 		const rail = preferredRail ?? await timed('read selection', selectedNet, n => n ?? 'nothing selected');
 		const board = await timed('read board', readBoard, boardSizes);
 		await addPinNames(board);
-		const wiz = await runDcWizard(board, loggedAsk(ask), rail);
+		const wiz = await runDcWizard(board, loggedAsk(ask), rail, railGiven);
 		if (!wiz)
 			return;
 		await remember({ kind: 'dc', input: wiz.input });
@@ -203,11 +206,15 @@ export async function rerunAnalysis(): Promise<void> {
 		return;
 	}
 	if (run.kind === 'hf') {
-		await guarded(t('Return path'), () => hfFor(run.net, dialogAsk()));
+		await guarded(t('Return path'), async () => {
+			await showPanelForRun();
+			await hfFor(run.net, dialogAsk());
+		});
 		return;
 	}
 	await guarded(t('DC return current'), async () => {
 		log(`Rerun DC Return Current (v${extensionConfig.version})`);
+		await showPanelForRun();
 		const board = await timed('read board', readBoard, boardSizes);
 		await addPinNames(board);
 		await dcFor(board, run.input);
@@ -235,10 +242,19 @@ export async function clearReturnPath(): Promise<void> {
 	publishState();
 }
 
+/** Analyses open the panel, so their result lands there, unless the user closed it. */
+async function showPanelForRun(): Promise<void> {
+	initPanel(panelHost);
+	await autoOpenPanel();
+}
+
 /** Opens the Return Path panel: last result, actions and overlay colours in a window that stays open. */
 export async function showPanel(): Promise<void> {
 	initPanel(panelHost);
-	await guarded(t('Return Path'), openPanel);
+	await guarded(t('Return Path'), async () => {
+		if (!await openPanel())
+			eda.sys_Dialog.showInformationMessage(t('This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.'), t('Return Path'));
+	});
 }
 
 const panelHost = {
