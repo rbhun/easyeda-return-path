@@ -1,5 +1,6 @@
 import { AnalysisAborted, runAsync, runSync, type RunOptions, type Steps } from './budget.js';
 import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
+import { resolveNet } from './nets.js';
 import { DEFAULT_MAX_DETOUR_NODES, geodesic, geodesicSteps, TOO_COMPLEX, type Detour } from './detour.js';
 import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, pointInPaths, Polyline, strokePath, union } from './geom.js';
 import { allCopper, buildReferenceCopperSteps, vertexCount, type LayerCopper } from './refcopper.js';
@@ -214,6 +215,7 @@ const POWER_TRACK_MM = 0.8;
 const INDUCTOR_DES = /^(?:L|FB)\d/i;
 
 export function hfApplicability(board: Pick<Board, 'pours'> & Partial<Pick<Board, 'tracks' | 'pads' | 'components'>>, net: string): HfScope {
+  net = resolveNet(board, net);
   const dc = 'Use "DC Return Current..." to see how supply current flows and returns.';
   if (isGroundNet(net))
     return { ok: false, kind: 'ground', message: `${net} is a ground net: it is the return path, not a signal. Select a signal net routed over it. ${dc}` };
@@ -257,6 +259,7 @@ export function analyzeNetAsync(board: Board, net: string, options: Partial<Anal
 }
 
 export function* analyzeNetSteps(board: Board, net: string, options: Partial<AnalyzeOptions> = {}): Steps<Analysis> {
+  net = resolveNet(board, net);
   const opts = { ...defaultOptions, ...options };
   const tracks = board.tracks.filter((t) => t.net === net);
   if (!tracks.length) {

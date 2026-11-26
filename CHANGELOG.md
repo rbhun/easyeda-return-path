@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.71] - 2026-11-27
+
+From Balazs: the extension treats net names case-sensitively, while EasyEDA treats 3v3 and 3V3 as the same net. So the extension split nets EasyEDA shows as one.
+
+- **Net names that differ only in letter case are one net.** The board read joins them, as EasyEDA does, and keeps the spelling most of the net's copper uses. The result lists the joined spellings as a warning. On the R-Com dongle, two track segments spelt gnd now belong to GND.
+- **A name in any case finds the net.** This covers the selected net, a rerun's stored rail and ground, the DC wizard's choices, series-part neighbours and rail groups, ground detection, the CLI's --net, --dc and --ground flags, and the board-info rows (CSV import, the per-project store and its prefills). Labels and results show the board's spelling.
+
 ## [0.1.70] - 2026-11-27
 
 From Balazs: the 3V3 check on 0.1.68 drew only the forward current. The ground solve did no work, and the loads were reported as not reached from the source.

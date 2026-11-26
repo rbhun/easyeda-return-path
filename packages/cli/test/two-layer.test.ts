@@ -95,6 +95,34 @@ test('2-layer DC: the GND return follows the pours that exist', () => {
   }
 });
 
+test('net names differ only in case: one net, as in EasyEDA, for the board, the HF check and the DC solve', () => {
+  const files = unzipSync(buildTwoLayerEpro('coplanar'));
+  const footprints = new Map<string, string>();
+  let pcb = '';
+  for (const [name, data] of Object.entries(files)) {
+    if (name.endsWith('.epcb')) pcb = strFromU8(data);
+    if (name.endsWith('.efoo')) footprints.set(name.split('/').pop()!.split('.')[0], strFromU8(data));
+  }
+  let k = 0;
+  const mixedPcb = pcb.replace(/"GND"/g, (m) => (k++ % 3 === 1 ? '"gnd"' : m)).replace(/"3V3"/g, (m) => (k++ % 4 === 2 ? '"3v3"' : m));
+  assert.ok(mixedPcb.includes('"gnd"') && mixedPcb.includes('"3v3"'));
+  const mixed = parseEasyEdaPcb({ pcb: mixedPcb, footprints });
+  assert.deepEqual(mixed.nets, coplanar.nets);
+  assert.ok(!mixed.tracks.some((t) => t.net === 'gnd' || t.net === '3v3') && !mixed.pads.some((p) => p.net === 'gnd' || p.net === '3v3'));
+  assert.ok(mixed.warnings.some((w) => /GND and gnd differ only in letter case.*analysed as GND/.test(w)), mixed.warnings.join('\n'));
+
+  assert.deepEqual(kinds(mixed, 'clk'), kinds(coplanar, 'CLK'));
+  assert.equal(analyzeNet(mixed, 'clk').net, 'CLK');
+  assert.equal(hfApplicability(mixed, 'gnd').kind, 'ground');
+
+  const want = runDc(coplanar, { rail: '3V3' }).result;
+  const got = runDc(mixed, { rail: '3v3', ground: 'Gnd' }).result;
+  assert.equal(got.setup.rail, '3V3');
+  assert.equal(got.setup.ground, 'GND');
+  assert.deepEqual(got.setup.loads.map((l) => l.designator), want.setup.loads.map((l) => l.designator));
+  assert.ok(Math.abs(got.supply.drop - want.supply.drop) < 1e-9 && Math.abs(got.ret!.drop - want.ret!.drop) < 1e-9);
+});
+
 test('DC solve in time slices yields to the host and gives the same answer', async () => {
   const setup = buildDcSetup(bottomOnly, { rail: '3V3', ground: 'GND', source: 'U1' });
   const sync = solveDc(bottomOnly, setup);

@@ -1,6 +1,7 @@
 // Which part drives a signal net (D3), guessed from schematic pin names with the pin-hint rules,
 // and the driver-side close of the return loop (brief: "rising edge → VDD, falling edge → VSS").
 import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
+import { resolveNet } from './nets.js';
 import { dist } from './geom.js';
 import type { Board, Component, Pad, Pt } from './types.js';
 
@@ -58,6 +59,7 @@ export const isPassive = (c: Component) =>
  * a single part is left once the named receivers are taken out.
  */
 export function guessDrivers(board: Board, net: string): DriverGuess {
+  net = resolveNet(board, net);
   const comps = new Map(board.components.map((c) => [c.id, c]));
   const candidates: DriverCandidate[] = [];
   const seen = new Set<string>();

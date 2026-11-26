@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Resvg } from '@resvg/resvg-js';
-import { AnalysisAborted, analyzeNet, classifySignal, GENERIC, guessDrivers, guessRails, hfApplicability, hfCandidates, parseHz, summariseSignal, type Analysis, type Board } from '@returnpath/core';
+import { AnalysisAborted, analyzeNet, classifySignal, GENERIC, guessDrivers, guessRails, hfApplicability, hfCandidates, parseHz, resolveNet, summariseSignal, type Analysis, type Board } from '@returnpath/core';
 import { dcReport, dcViews, describeGuess, runDc } from './dc.js';
 import { loadBoard } from './easyeda/load.js';
 import { renderOverlay } from './render/svg.js';
@@ -86,7 +86,7 @@ if (values['list-nets'] || !values.net) {
   process.exit(values.net ? 0 : 1);
 }
 
-const net = values.net;
+const net = resolveNet(board, values.net);
 const scope = hfApplicability(board, net);
 if (!scope.ok && !values.force) {
   console.error(`${scope.message}\nCLI: returnpath <board> --dc <rail>. Pass --force to run the high-frequency check anyway.`);

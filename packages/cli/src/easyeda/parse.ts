@@ -1,4 +1,4 @@
-import { assumedDielectricsMm, pouredScale, scalePaths, add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
+import { unifyNetCase, assumedDielectricsMm, pouredScale, scalePaths, add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
 import { parseRecords, type Rec } from './records.js';
 
 /** EasyEDA Pro PCB data is in mil. */
@@ -150,7 +150,7 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
   }
 
   nets.delete('');
-  return { outline, stackup, nets: [...nets].sort(), tracks, vias, pads, components, pours, keepouts, warnings };
+  return unifyNetCase({ outline, stackup, nets: [...nets].sort(), tracks, vias, pads, components, pours, keepouts, warnings });
 }
 
 function buildStackup(recs: Rec[], opts: ParseOptions, warnings: string[]): Board['stackup'] {

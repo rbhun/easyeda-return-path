@@ -127,6 +127,26 @@ test('plane-layer copper takes its net from the mode-2 fill around it', async ()
 	assert.ok(!mock.messages[0].includes('warning:'), mock.messages[0]);
 });
 
+test('net names in another letter case are the same net, as in EasyEDA: the selection, the copper and the result', async () => {
+	const mixed = demoBoard();
+	let k = 0;
+	for (const p of [...mixed.tracks, ...mixed.vias, ...mixed.pads]) {
+		if (p.net === 'GND' && k++ % 3 === 0)
+			p.net = 'gnd';
+		if (p.net === 'CLK' && k++ % 4 === 0)
+			p.net = 'clk';
+	}
+	assert.ok(mixed.tracks.some(t => t.net === 'clk') && mixed.pads.some(p => p.net === 'gnd'));
+	const mock = createMockEda(mixed, 'clk', [], d => (/Which part drives/.test(d.prompt) ? 'U1' : d.dflt));
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showReturnPath();
+	assert.equal(mock.wizardPages.find(p => p.kind === 'nets')?.value, 'CLK', 'the selected clk is the board net CLK');
+	assert.match(mock.messages[0], /^CLK: 8 finding\(s\)/);
+	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
+	assert.match(mock.messages[0], /warning: Nets CLK and clk differ only in letter case; EasyEDA takes them as one net, analysed as CLK\./);
+	assert.match(mock.messages[0], /warning: Nets GND and gnd differ only in letter case/);
+});
+
 test('the driver picked in the dialog is kept for Rerun Last Analysis', async () => {
 	const mock = createMockEda(board, 'CLK', [], d => (/Which part drives/.test(d.prompt) ? 'U2' : d.dflt));
 	(globalThis as Record<string, unknown>).eda = mock.eda;
