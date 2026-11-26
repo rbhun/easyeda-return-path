@@ -7,8 +7,8 @@ import { analyzeNetSteps, buildDcSetup, classifySignal, formatHz, GENERIC, guess
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
-import { clearOverlay, drawAnalysis, toggleOverlay } from './overlay';
-import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, report, shareLastRun, sharedLastRun } from './panel';
+import { clearOverlay, drawAnalysis, leftoverOverlay, overlayState, toggleOverlay } from './overlay';
+import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, releaseOverlay, report, shareLastRun, sharedLastRun } from './panel';
 import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, withBack, type Ask } from './wizard';
@@ -387,6 +387,11 @@ export async function toggleReturnPath(): Promise<void> {
 	if (forwardOverlayCommand('toggle'))
 		return;
 	await guarded(t('Return path'), async () => {
+		if (overlayState() === 'none' && leftoverOverlay()) {
+			await clearOverlay();
+			toast(t('Removed the overlay left on the board by an earlier session. Rerun last draws it again.'));
+			return;
+		}
 		const visible = await toggleOverlay();
 		toast(visible === undefined ? t('No overlay to show: run an analysis first.') : visible ? t('Overlay shown.') : t('Overlay hidden. Use Show in the panel to show it again.'));
 	});
@@ -405,6 +410,7 @@ export async function clearReturnPath(): Promise<void> {
 	await panelReady();
 	forwardOverlayCommand('clear');
 	await guarded(t('Return path'), clearOverlay);
+	releaseOverlay();
 	publishState();
 }
 

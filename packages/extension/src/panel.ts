@@ -12,7 +12,7 @@
 // pulled. The panel's page pulls the mailbox and hands each snapshot to the panel's owner, which takes
 // over the result, the last run and the overlay drawing.
 import extensionConfig from '../extension.json' with { type: 'json' };
-import { adoptOverlay, forgetOverlay, overlayGroups, overlayState, restyleOverlay, type MarkerGroup } from './overlay';
+import { adoptOverlay, forgetOverlay, leftoverOverlay, overlayGroups, overlayState, restyleOverlay, type MarkerGroup } from './overlay';
 import { log, toast } from './runner';
 import { currentStyle, DEFAULT_STYLE, INNER_CYCLE, PALETTE, ROLE_LABELS, ROLE_USE, ROLES, saveStyle, setSharedStyle, type Role, type RoleStyle } from './style';
 import { t } from './i18n';
@@ -204,6 +204,9 @@ export function initPanel(h: PanelHost): void {
 		return;
 	}
 	publish(TOPIC_SYNC, { from: me, request: true } satisfies SyncMessage);
+	const left = leftoverOverlay();
+	if (left)
+		log(`overlay: markers drawn by v${left} may still be on the canvas; Clear or Hide removes them`);
 }
 
 function onSync(m: SyncMessage): void {
@@ -225,7 +228,8 @@ function handler(m: PanelCommand): string | undefined {
 		return m.cmd === 'hello' ? me : undefined;
 	if (shared.panelOwner !== me)
 		return undefined;
-	if ((m.cmd === 'toggle' || m.cmd === 'clear' || m.cmd === 'restyle') && shared.overlayOwner)
+	// Clear stays here: removing the markers works from any instance, and the owner may be gone.
+	if ((m.cmd === 'toggle' || m.cmd === 'restyle') && shared.overlayOwner)
 		return shared.overlayOwner;
 	if (m.cmd === 'cancel' && shared.busyOwner)
 		return shared.busyOwner;
@@ -297,6 +301,19 @@ export function forwardOverlayCommand(cmd: 'toggle' | 'clear'): boolean {
 	return true;
 }
 
+/** After a Clear here: no instance holds an overlay any more, even when the one that drew it is gone. */
+export function releaseOverlay(): void {
+	if (!shared.overlayOwner || shared.overlayOwner === me)
+		return;
+	share({ overlay: 'none', overlayOwner: undefined });
+	pushSnapshot();
+}
+
+/** Markers on the canvas that no live instance holds: drawn before an update or a reload of the extension. */
+function leftover(): string | undefined {
+	return overlayState() === 'none' && !shared.overlayOwner ? leftoverOverlay() : undefined;
+}
+
 /** The last analysis as seen by any instance; undefined when none has shared one. */
 export function sharedLastRun(): unknown {
 	return shared.lastRun;
@@ -311,7 +328,7 @@ function overlayNow(): Shared['overlay'] {
 	const local = overlayState();
 	if (local !== 'none' || shared.overlayOwner === me)
 		return local;
-	return shared.overlayOwner ? shared.overlay : 'none';
+	return shared.overlayOwner ? shared.overlay : leftover() ? 'shown' : 'none';
 }
 
 export function publishState(): void {
@@ -332,6 +349,7 @@ export function publishState(): void {
 		version: extensionConfig.version,
 		busy: shared.busy,
 		overlay: overlayNow(),
+		leftover: leftover(),
 		lastRun: host?.lastRunLabel(),
 		result: shared.result,
 		roles: ROLES.filter(r => !kind || ROLE_USE[r].includes(kind)).map(r => ({ role: r, label: t(ROLE_LABELS[r]), colour: style[r].colour, width: style[r].width, visible: style[r].visible, isDefault: style[r].colour === DEFAULT_STYLE[r].colour && style[r].width === DEFAULT_STYLE[r].width && style[r].visible === DEFAULT_STYLE[r].visible })),
