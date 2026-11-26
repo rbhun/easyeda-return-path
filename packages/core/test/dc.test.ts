@@ -403,7 +403,7 @@ test('an eFuse with other pins still joins its input net to its output net, so t
     ],
   });
   const setup = buildDcSetup(b, { rail: '48V', railNets: ['VBUS'], ground: 'GND', source: 'J1', loads: ['C6'], currents: { C6: 0.1 } });
-  assert.deepEqual(setup.bridges.map((x) => x.designator), ['E1']);
+  assert.deepEqual(setup.bridges?.map((x) => x.designator), ['E1']);
   assert.ok(setup.warnings.some((w) => /E1 joins 48V \+ VBUS, taken as a short/.test(w)));
   assert.ok(!setup.warnings.some((w) => /No part joins/.test(w)));
   const res = solveDc(b, setup, { cell: 0.25 });
