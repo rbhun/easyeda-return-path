@@ -2,6 +2,19 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.8] - 2026-11-26
+
+The R-Com dongle project file (`.epro2`) reproduced the freeze offline. Its causes were in the extension, not in EasyEDA.
+
+- **Freeze:** `union()` called Clipper's two-argument overload, which rounds to 0.01 mm. EasyEDA Pro 3.2 stores and returns pour fills in units of 10 mil, so decoded as mil they were 10 times too small. One fill region of the Top GND pour, at that size and rounding, sent Clipper into an endless loop that used up all memory (the white window). `union()` now keeps 0.1 µm like the other operations.
+- **Pour-fill scale:** each pour's fill is compared with its outline, and fills in 10 mil units are scaled up (logged). Before, the fills sat in a 12 × 7 mm corner of the board, which on its own explains "U4/U5 has no copper path to J3 on GND".
+- **Thermal spokes:** unfilled fill entries (thermal spokes) are now stroked with their line width instead of dropped. The CLI read `fill: false` as filled.
+- **DC wizard:** the rail is picked first (step 2) and its ground asked once (step 3), only when there is more than one ground. Before, a ground dialog came for every rail: 12 on this board.
+- **Grounds:** nets with a prefix before GND (`48V_PGND`, `ISO_GND`) are grounds, not rails, and a rail pairs with the ground named after it (48V → 48V_PGND).
+- **CLI:** reads `.epro2` projects (one `.epru` with all documents) and the object form of editor 3.2: compound ids, `use` layer flags, component `x`/`y`, prohibit types as words, nested pour fills, and object pad shapes and holes.
+- What earlier versions stored about pour fills that froze is now ignored, because every one of those freezes was this bug. Otherwise both GND pours of the R-Com dongle would stay on the skip list and be computed from their outlines. Markers and the skip list now record the version that wrote them. Saved logs from older builds are no longer read for hung fetches.
+- On this board, offline through the mocked API: DC +12V / GND (J3 to U4, U5, F2) takes 2.3 s; Show for Selected Net takes 1.4 s for `$1N261` and 0.4 s for `BNC1+`.
+
 ## [0.1.7] - 2026-11-26
 
 With 0.1.5 on the R-Com dongle, EasyEDA returned every pour fill within 3 ms, but DC Return Current still froze: first while the regions of fill `0ca4da6a31655d4b` were read, then, with that fill skipped, after the fetch. Only one step of that later stretch was saved to the log, and it covered decoding and merging every fill.

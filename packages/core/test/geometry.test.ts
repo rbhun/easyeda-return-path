@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { arcPoints, difference, geodesic, rect, splitIslands } from '../src/index.js';
+import { arcPoints, area, difference, geodesic, isGroundNet, pairGround, pouredScale, rect, scalePaths, splitIslands, union } from '../src/index.js';
 
 test('arc discretisation keeps radius', () => {
   const pts = arcPoints({ x: 1, y: 0 }, { x: 0, y: 1 }, 90);
@@ -46,4 +46,25 @@ test('splitIslands puts each hole in its tightest island and stays fast on plane
   assert.equal(groups[0].length, 1 + 400, 'holes between islands belong to the big outline');
   assert.ok(groups.slice(1).every((g) => g.length === 10));
   assert.ok(ms < 500, `${ms} ms`);
+});
+
+test('union keeps 0.1 µm precision, like difference and intersect', () => {
+  // The two-argument Clipper overload rounded to 0.01 mm; a real pour fill rounded that coarsely made Clipper loop forever.
+  const thin = [rect(0, 0, 1, 0.004)];
+  assert.ok(Math.abs(area(union(thin)) - 0.004) < 1e-4, String(area(union(thin))));
+});
+
+test('pour fills stored in 10 mil units are scaled onto their pour outline', () => {
+  const outline = [rect(60, -40, 100, 60)];
+  const fill = [rect(60, -40, 98, 58)];
+  assert.equal(pouredScale(outline, fill), 1);
+  assert.equal(pouredScale(outline, scalePaths(fill, 0.1)), 10);
+  assert.equal(pouredScale([], fill), 1);
+});
+
+test('nets with a prefix before GND are grounds, and pair with the rail they are named after', () => {
+  for (const n of ['48V_PGND', 'ISO_GND', 'GND_ISO', 'AGND', 'GND']) assert.ok(isGroundNet(n), n);
+  for (const n of ['48V', '+12V', 'VBUS_RAW']) assert.ok(!isGroundNet(n), n);
+  assert.equal(pairGround({ pads: [], pours: [] } as never, '48V', ['GND', '48V_PGND']), '48V_PGND');
+  assert.equal(pairGround({ pads: [], pours: [] } as never, '+12V', ['GND', '48V_PGND']), 'GND');
 });

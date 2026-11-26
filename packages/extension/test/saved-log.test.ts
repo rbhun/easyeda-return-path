@@ -27,6 +27,8 @@ const LOG_FILE = 'C:\\Users\\me\\Documents\\EasyEDA-Pro\\ReturnPath\\returnpath-
 const saved = (mock: { storage: Map<string, unknown> }) => String(mock.storage.get('log') ?? '').split('\n');
 const never = () => new Promise<never>(() => {});
 const boardModule = await import('../src/eda-board.ts');
+const { area, bbox } = await import('@returnpath/core');
+const { version: VERSION } = (await import('../extension.json', { with: { type: 'json' } })).default;
 runner.saveTimeouts.ms = 50;
 Object.assign(boardModule.apiTimeouts, { callMs: 200, stackupMs: 100, pinsMs: 100 });
 
@@ -195,7 +197,7 @@ test('computed pour fills are fetched one at a time; a fill whose fetch hung is 
 	void ext.showReturnPath();
 	await new Promise(r => setTimeout(r, 150));
 	boardModule.apiTimeouts.callMs = 200;
-	assert.equal(storage.get('fetchingPouredSince'), `get:${ids[0]}`);
+	assert.equal(storage.get('fetchingPouredSince'), `${VERSION} get:${ids[0]}`);
 	assert.match(saved(hung).at(-1)!, /read board: pcb_PrimitivePoured.get 1\/3 \(.*\)…$/);
 
 	for (let run = 0; run < 2; run++) {
@@ -205,28 +207,26 @@ test('computed pour fills are fetched one at a time; a fill whose fetch hung is 
 		next.eda.pcb_PrimitivePoured.get = async (id: string) => (fetched.push(id), get(id));
 		await ext.showReturnPath();
 		assert.deepEqual(fetched, ids.slice(1));
-		assert.deepEqual(storage.get('pouredIdsThatHang'), [ids[0]]);
+		assert.deepEqual(storage.get('pouredIdsThatHang'), { version: VERSION, ids: [ids[0]] });
 		assert.match(next.messages.at(-1)!, /is computed from its outline: EasyEDA froze when asked for its fill/);
 		assert.ok(next.markers.length > 0);
 		assert.equal(storage.get('fetchingPouredSince'), '');
 	}
 });
 
-test('a saved log from an older build that ends in a pour-fill fetch skips that fill, also with its marker still set', async () => {
+test('markers and skip lists left by an older version are ignored: that version froze for reasons fixed since', async () => {
 	const ids = await install({}).eda.pcb_PrimitivePoured.getAllPrimitiveId();
-	const storage = new Map<string, unknown>([['log', [
-		`2026-11-26 01:02:19.100 INFO  read board: pcb_PrimitivePoured.get 1/3 (${ids[0]})…`,
-		`2026-11-26 01:02:19.103 INFO  read board: poured ${ids[0]}: pour -, layer ?, 1 fill regions, 8 path values, 3 ms`,
-		`2026-11-26 01:02:19.104 INFO  read board: pcb_PrimitivePoured.get 2/3 (${ids[1]})…`,
-		'2026-11-26 01:03:40.000 INFO  Show for Selected Net: GND (v0.1.4)',
-	].join('\n')], ['fetchingPouredSince', '2026-11-26T00:09:10.906Z']]);
-	const mock = install({ storage });
-	const get = mock.eda.pcb_PrimitivePoured.get;
-	const fetched: string[] = [];
-	mock.eda.pcb_PrimitivePoured.get = async (id: string) => (fetched.push(id), get(id));
-	await ext.showReturnPath();
-	assert.deepEqual(storage.get('pouredIdsThatHang'), [ids[1]]);
-	assert.deepEqual(fetched, [ids[0], ids[2]]);
+	for (const [marker, skip] of [[`0.1.7 decode:${ids[1]}`, ['x']], ['get:x', { version: '0.1.7', ids: [ids[0]] }], ['2026-11-26T00:09:10.906Z', [ids[2]]]] as const) {
+		const storage = new Map<string, unknown>([['fetchingPouredSince', marker], ['pouredIdsThatHang', skip]]);
+		const mock = install({ storage });
+		const get = mock.eda.pcb_PrimitivePoured.get;
+		const fetched: string[] = [];
+		mock.eda.pcb_PrimitivePoured.get = async (id: string) => (fetched.push(id), get(id));
+		await ext.showReturnPath();
+		assert.deepEqual(fetched, ids);
+		assert.ok(saved(mock).some(l => l.includes('ignoring what an older version stored')));
+		assert.doesNotMatch(mock.messages.at(-1)!, /computed from (its|their) outlines?/);
+	}
 });
 
 test('a run that froze decoding or merging a pour fill skips that fill next time; each step is saved first', async () => {
@@ -239,19 +239,32 @@ test('a run that froze decoding or merging a pour fill skips that fill next time
 		assert.ok(decoding >= 0 && /decoded .*: \d+ fill regions, \d+ rings, \d+ points/.test(lines[decoding + 1]), lines.join('\n'));
 	}
 	assert.ok(lines.some(l => /read board: merging \d+ rings of pour .*…$/.test(l)));
-	for (const [marker, skipped] of [[`decode:${ids[1]}`, [ids[1]]], [`union:${ids[0]},${ids[2]}`, [ids[0], ids[2]]]] as const) {
+	for (const [marker, skipped] of [[`${VERSION} decode:${ids[1]}`, [ids[1]]], [`${VERSION} union:${ids[0]},${ids[2]}`, [ids[0], ids[2]]]] as const) {
 		const storage = new Map<string, unknown>([['fetchingPouredSince', marker]]);
 		const mock = install({ storage });
 		const get = mock.eda.pcb_PrimitivePoured.get;
 		const fetched: string[] = [];
 		mock.eda.pcb_PrimitivePoured.get = async (id: string) => (fetched.push(id), get(id));
 		await ext.showReturnPath();
-		assert.deepEqual(storage.get('pouredIdsThatHang'), [...skipped]);
+		assert.deepEqual(storage.get('pouredIdsThatHang'), { version: VERSION, ids: [...skipped] });
 		assert.deepEqual(fetched, ids.filter(i => !skipped.includes(i)));
-		assert.ok(saved(mock).some(l => new RegExp(`froze while ${marker.startsWith('decode') ? 'decoding' : 'merging'} computed pour fill`).test(l)));
+		assert.ok(saved(mock).some(l => new RegExp(`froze while ${marker.includes('decode') ? 'decoding' : 'merging'} computed pour fill`).test(l)));
 		assert.equal(storage.get('fetchingPouredSince'), '');
 		assert.ok(mock.markers.length > 0);
 	}
+});
+
+test('pour fills served in 10 mil units are scaled onto their pours, and thermal spokes are stroked', async () => {
+	const plain = await (install({}), boardModule.readBoard());
+	const pour = plain.pours.find(p => p.poured?.length && p.name !== 'fill')!;
+	const b = bbox(pour.poured!);
+	const spoke = { pourId: pour.id, a: { x: b.minX - 0.6, y: b.minY - 0.6 }, b: { x: b.minX - 0.1, y: b.minY - 0.6 }, width: 0.3 };
+	const mock = install({ pouredUnitMil: 10, spokes: [spoke] });
+	const read = await boardModule.readBoard();
+	const scaled = read.pours.find(p => p.id === pour.id)!;
+	const a0 = Math.abs(area(pour.poured!));
+	assert.ok(Math.abs(Math.abs(area(scaled.poured!)) - a0 - 0.5 * 0.3 - Math.PI * 0.15 ** 2) < 0.02, `${area(scaled.poured!)} vs ${a0}`);
+	assert.ok(saved(mock).some(l => l.includes(`pour ${pour.id}: fill coordinates are in units of 10 mil`)));
 });
 
 test('slow pour-fill fetches switch the rest to outlines', async () => {
@@ -272,8 +285,8 @@ test('slow pour-fill fetches switch the rest to outlines', async () => {
 	assert.ok(mock.markers.length > 0);
 });
 
-test('a saved log from an older build that ends in pcb_PrimitivePoured.getAll also switches to pour outlines', async () => {
-	const storage = new Map<string, unknown>([['log', '2026-11-26 00:19:41.588 INFO  read board: pcb_PrimitivePoured.getAll…']]);
+test('a run of this version that froze inside pcb_PrimitivePoured.getAll makes the next one use pour outlines', async () => {
+	const storage = new Map<string, unknown>([['fetchingPouredSince', `${VERSION} getAll`]]);
 	const mock = install({ storage });
 	let fetched = 0;
 	mock.eda.pcb_PrimitivePoured.get = async () => (fetched++, undefined);

@@ -77,3 +77,14 @@ test('wizard: cancelling draws nothing', async () => {
 	assert.equal(mock.messages.length, 0);
 	assert.equal(mock.markers.length, 0);
 });
+
+test('wizard: with several grounds, the ground is asked once, for the rail being solved', async () => {
+	const mock = createMockEda({ ...board, vias: [...board.vias, { ...board.vias[0], id: 'pgnd-via', net: 'VBUS_PGND' }] }, '3V3');
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showDcReturn();
+	assert.deepEqual(mock.dialogs.map(d => d.kind), ['multi', 'select', 'select', 'select', 'multi', 'input']);
+	assert.match(mock.dialogs[1].prompt, /Step 2\/5: rail to solve/);
+	assert.match(mock.dialogs[2].prompt, /Step 3\/5: ground that carries the return current of 3V3/);
+	assert.equal(mock.dialogs[2].dflt, 'GND');
+	assert.ok(mock.markers.length > 0);
+});

@@ -5,7 +5,7 @@ import type { Board, Component, Pad } from '../types.js';
 
 const bare = (net: string) => net.replace(/^[/\\]+/, '').trim();
 
-const GROUND_RE = /^(?:[A-Z]{0,2}GND\w*|VSS\w*|0V|EARTH|PE)$/i;
+const GROUND_RE = /^(?:(?:\w*[_-])?[A-Z]{0,2}GND\w*|VSS\w*|0V|EARTH|PE)$/i;
 const POWER_RE =
   /^(?:\+?\d+(?:\.\d+)?V\d*\w*|P\d+V\d*\w*|V\d+V\d*\w*|\w*_\+?\d+V\d*|[A-Z]?V(?:CC|DD)\w*|V(?:IN|BUS|BAT|BATT|SYS|USB|EXT|DC|IO|CORE|MOT|LED|PP|OUT)\w*|BAT\+?|BATT\+?|DC_?IN\w*)$/i;
 const INPUT_RE = /^(?:V(?:IN|BUS|BAT|BATT|USB|SYS|EXT|DC)\w*|BATT?\+?|DC_?IN\w*)$/i;
@@ -92,7 +92,7 @@ export function componentsOnNet(board: Board, net: string): Component[] {
   return board.components.filter((c) => comps.has(c.id));
 }
 
-/** Ground for a rail: name match (AVDD → AGND, PVIN → PGND, *_ISO → GND_ISO), else GND, else the busiest ground. */
+/** Ground for a rail: name match (AVDD → AGND, PVIN → PGND, *_ISO → GND_ISO, 48V → 48V_PGND), else GND, else the busiest ground. */
 export function pairGround(board: Board, rail: string, grounds: string[]): string | undefined {
   if (grounds.length <= 1) return grounds[0];
   const r = bare(rail).toUpperCase();
@@ -107,6 +107,8 @@ export function pairGround(board: Board, rail: string, grounds: string[]): strin
     const lg = g((n) => n.startsWith(`${letter}GND`));
     if (lg) return lg;
   }
+  const named = g((n) => n.split(/[_-]/).includes(r));
+  if (named) return named;
   const plain = g((n) => n === 'GND');
   if (plain) return plain;
   const count = (n: string) => board.pads.filter((p) => p.net === n).length + 10 * board.pours.filter((p) => p.net === n).length;

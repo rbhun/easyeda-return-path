@@ -34,7 +34,7 @@ const { values, positionals } = parseArgs({
 
 const file = positionals[0];
 if (values.help || !file) {
-  console.log(`Usage: returnpath <board.epro|board.epcb> --net CLK [--out dir] [--name prefix] [--png]
+  console.log(`Usage: returnpath <board.epro|board.epro2|board.epcb> --net CLK [--out dir] [--name prefix] [--png]
        [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets] [--force] [--verbose]
        returnpath <board> --list-rails
        returnpath <board> --dc 3V3 [--ground GND] [--source U1] [--loads U2,U3] [--current U2=0.15,U3=20mA]

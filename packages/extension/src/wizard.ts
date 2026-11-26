@@ -76,28 +76,28 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	if (!rails?.length)
 		return undefined;
 
-	// 2. Grounds.
+	// 2. Rail to solve.
 	const grounds = guess.grounds.length ? guess.grounds : allNets.filter(n => !rails.includes(n));
 	const pairs: Record<string, string> = {};
-	for (const rail of rails) {
-		const dflt = byNet.get(rail)?.ground ?? grounds[0];
-		if (grounds.length <= 1 && dflt) {
-			pairs[rail] = dflt;
-			continue;
-		}
-		const g = await ask.select(title, t('Step 2/5: ground that carries the return current of ${1}.', rail), grounds.map(n => ({ value: n, label: n })), dflt);
-		if (!g)
-			return undefined;
-		pairs[rail] = g;
+	for (const r of rails) {
+		const dflt = byNet.get(r)?.ground ?? grounds[0];
+		if (dflt)
+			pairs[r] = dflt;
 	}
-
-	// 3. Rail to solve.
 	let rail = rails[0];
 	if (rails.length > 1) {
-		const picked = await ask.select(title, t('Step 3/5: rail to solve.'), rails.map(r => ({ value: r, label: `${r} / ${pairs[r]}` })), preferredRail && rails.includes(preferredRail) ? preferredRail : rails[0]);
+		const picked = await ask.select(title, t('Step 2/5: rail to solve.'), rails.map(r => ({ value: r, label: pairs[r] ? `${r} / ${pairs[r]}` : r })), preferredRail && rails.includes(preferredRail) ? preferredRail : rails[0]);
 		if (!picked)
 			return undefined;
 		rail = picked;
+	}
+
+	// 3. Its ground, asked only when there is a choice.
+	if (grounds.length > 1 || !pairs[rail]) {
+		const ground = await ask.select(title, t('Step 3/5: ground that carries the return current of ${1}.', rail), grounds.map(n => ({ value: n, label: n })), pairs[rail]);
+		if (!ground)
+			return undefined;
+		pairs[rail] = ground;
 	}
 	const g: RailGuess = byNet.get(rail) ?? { net: rail, reason: 'name', candidates: [], rule: 'ask', loads: [], excluded: [], askReason: t('${1} was not guessed as a rail: pick its source.', rail) };
 

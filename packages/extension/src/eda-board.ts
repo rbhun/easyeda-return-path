@@ -8,9 +8,11 @@ import {
 	decodeComplex,
 	decodeRings,
 	pointInPaths,
+	pouredScale,
 	intersect,
 	rect,
 	rotate,
+	scalePaths,
 	splitIslands,
 	strokePath,
 	union,
@@ -27,7 +29,10 @@ import {
 	type Track,
 	type Via,
 } from '@returnpath/core';
-import { checkpoint, log, readStored, savedLog, TimedOut, withTimeout, writeStored, yieldToEditor } from './runner';
+import extensionConfig from '../extension.json' with { type: 'json' };
+import { checkpoint, log, readStored, TimedOut, withTimeout, writeStored, yieldToEditor } from './runner';
+
+const VERSION = extensionConfig.version;
 
 export const MIL = 0.0254;
 const LAYER_MULTI = 12;
@@ -340,34 +345,30 @@ function fillSource(f: PourFill): unknown {
 	return typeof path?.getSource === 'function' ? path.getSource() : path?.source;
 }
 
-/** Pour-fill IDs whose fetch froze the editor; they are never fetched again. */
+/** Pour-fill IDs whose fetch froze the editor; they are never fetched again by this version. */
 const SKIP_POURED = 'pouredIdsThatHang';
 
 /**
- * The pour fill a previous run was fetching when the editor hung: from the marker, or, for builds
- * that logged fetches but stored no ID, from a saved-log fetch line with no result after it.
- * `'*'` means a hang inside getAll, which names no single fill.
+ * Markers and skip lists carry the version that wrote them. A newer build may have fixed what froze
+ * (0.1.8 did: every hang until then was the extension's own), so older entries are dropped.
  */
+const stamp = (s: string) => `${VERSION} ${s}`;
+
+/** The pour fills a previous run of this version was working on when the editor hung. `'*'`: inside getAll. */
 function hungFetch(marker: unknown): { ids: string[]; while: string } | undefined {
-	const m = typeof marker === 'string' ? /^(get|decode|union):(.+)$/.exec(marker) : null;
-	if (m)
-		return { ids: m[2].split(','), while: { get: 'fetching', decode: 'decoding', union: 'merging' }[m[1]]! };
-	const fromLog = hungFetchInLog();
-	if (fromLog)
-		return { ids: [fromLog], while: 'fetching' };
-	return typeof marker === 'string' && marker ? { ids: ['*'], while: 'fetching' } : undefined;
+	const m = typeof marker === 'string' ? /^(\S+) (getAll|get|decode|union):?(.*)$/.exec(marker) : null;
+	if (!m || m[1] !== VERSION)
+		return undefined;
+	if (m[2] === 'getAll')
+		return { ids: ['*'], while: 'fetching' };
+	return { ids: m[3].split(','), while: { get: 'fetching', decode: 'decoding', union: 'merging' }[m[2]]! };
 }
 
-function hungFetchInLog(): string | undefined {
-	const lines = savedLog();
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const get = /read board: pcb_PrimitivePoured\.get \d+\/\d+ \((.+)\)…$/.exec(lines[i]);
-		if (get)
-			return lines.slice(i + 1).some(l => l.includes(`poured ${get[1]}:`) || l.includes(`${get[1]} returned`)) ? undefined : get[1];
-		if (/read board: pcb_PrimitivePoured\.getAll…$/.test(lines[i]))
-			return lines.slice(i + 1).some(l => /computed copper areas|did not answer|pours are computed from their outlines/.test(l)) ? undefined : '*';
-	}
-	return undefined;
+function storedSkipList(): Set<string> {
+	const stored = readStored(SKIP_POURED) as { version?: string; ids?: unknown[] } | unknown[] | undefined;
+	if (!stored || Array.isArray(stored) || stored.version !== VERSION)
+		return new Set();
+	return new Set((stored.ids ?? []).filter((x): x is string => typeof x === 'string'));
 }
 
 /**
@@ -378,8 +379,11 @@ function hungFetchInLog(): string | undefined {
  * Slow fetches switch the rest to outlines too.
  */
 async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skippedIds: Set<string>; allSkipped: boolean }> {
-	const skip = new Set(((readStored(SKIP_POURED) as string[] | undefined) ?? []).filter(x => typeof x === 'string'));
-	const hung = hungFetch(readStored(POURED_MARKER));
+	const marker = readStored(POURED_MARKER);
+	const skip = storedSkipList();
+	const hung = hungFetch(marker);
+	if (marker && !hung)
+		log(`read board: ignoring what an older version stored about pour fills that froze (${String(marker)}); this version fixed the known causes`);
 	await writeStored(POURED_MARKER, '');
 	if (hung?.ids[0] === '*') {
 		const msg = 'The previous run froze while fetching computed pour fills; pours are computed from their outlines this time.';
@@ -390,7 +394,7 @@ async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipp
 	const fresh = hung?.ids.filter(id => !skip.has(id)) ?? [];
 	if (fresh.length) {
 		fresh.forEach(id => skip.add(id));
-		await writeStored(SKIP_POURED, [...skip].slice(-50));
+		await writeStored(SKIP_POURED, { version: VERSION, ids: [...skip].slice(-50) });
 		log(`read board: the previous run froze while ${hung!.while} computed pour fill ${fresh.join(', ')}; it is skipped from now on`, 'warn');
 	}
 	const api = eda.pcb_PrimitivePoured;
@@ -398,7 +402,7 @@ async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipp
 	const skippedIds = new Set<string>();
 	try {
 		if (!ids) {
-			await writeStored(POURED_MARKER, 'getAll');
+			await writeStored(POURED_MARKER, stamp('getAll'));
 			return { poured: await call('pcb_PrimitivePoured.getAll', () => api.getAll()), skippedIds, allSkipped: false };
 		}
 		const out: Poured[] = [];
@@ -416,7 +420,7 @@ async function readPoured(warnings: string[]): Promise<{ poured: Poured[]; skipp
 				ids.slice(i).forEach(x => skippedIds.add(x));
 				return { poured: out, skippedIds, allSkipped: false };
 			}
-			await writeStored(POURED_MARKER, `get:${id}`);
+			await writeStored(POURED_MARKER, stamp(`get:${id}`));
 			const t1 = clock();
 			const raw: unknown = await call(`pcb_PrimitivePoured.get ${i + 1}/${ids.length} (${id})`, () => api.get(id));
 			const ms = clock() - t1;
@@ -584,7 +588,7 @@ export async function readBoard(): Promise<Board> {
 	const pouredOfPour = new Map<string, string[]>();
 	for (const poured of pouredAll) {
 		const pouredId = String(poured.getState_PrimitiveId());
-		await writeStored(POURED_MARKER, `decode:${pouredId}`);
+		await writeStored(POURED_MARKER, stamp(`decode:${pouredId}`));
 		log(`read board: decoding pour fill ${pouredId}…`);
 		await checkpoint();
 		const rings: Paths = [];
@@ -593,9 +597,11 @@ export async function readBoard(): Promise<Board> {
 		try {
 			const fills = poured.getState_PourFills();
 			for (const f of fills) {
-				if (!f.fill)
-					continue;
-				for (const r of decodeComplex(fillSource(f) as Parameters<typeof decodeComplex>[0], conv, MIL)) {
+				const src = fillSource(f) as Parameters<typeof decodeComplex>[0];
+				// Unfilled regions are thermal spokes and similar strokes, drawn with their line width.
+				const width = Number((f as { lineWidth?: number; strokeWidth?: number }).lineWidth ?? (f as { strokeWidth?: number }).strokeWidth) * MIL;
+				const decoded = f.fill ? decodeComplex(src, conv, MIL) : width > 0 ? union(...decodeRings(src, conv, MIL).filter(r => r.length >= 2).map(r => strokePath(r.length > 2 ? [...r, r[0]] : r, width))) : [];
+				for (const r of decoded) {
 					if (r.every(q => Number.isFinite(q.x) && Number.isFinite(q.y))) {
 						rings.push(r);
 						points += r.length;
@@ -645,7 +651,7 @@ export async function readBoard(): Promise<Board> {
 
 	const fillsByPour = new Map<string, Paths>();
 	for (const [id, rings] of ringsByPour) {
-		await writeStored(POURED_MARKER, `union:${(pouredOfPour.get(id) ?? [id]).join(',')}`);
+		await writeStored(POURED_MARKER, stamp(`union:${(pouredOfPour.get(id) ?? [id]).join(',')}`));
 		log(`read board: merging ${rings.length} rings of pour ${id}…`);
 		await checkpoint();
 		const t1 = clock();
@@ -668,7 +674,14 @@ export async function readBoard(): Promise<Board> {
 
 	for (const p of await call('pcb_PrimitivePour.getAll', () => eda.pcb_PrimitivePour.getAll())) {
 		const id = p.getState_PrimitiveId();
-		const poured = fillsByPour.get(id);
+		const outline = decodeComplex(p.getState_ComplexPolygon().getSource(), conv, MIL);
+		let poured = fillsByPour.get(id);
+		if (poured) {
+			const k = pouredScale(outline, poured);
+			if (k !== 1)
+				log(`read board: pour ${id}: fill coordinates are in units of ${k} mil; scaled to match the pour outline`);
+			poured = scalePaths(poured, k);
+		}
 		if (!poured && skippedIds.size)
 			warnings.push(`Pour "${p.getState_PourName()}" (${p.getState_Net()}) is computed from its outline: EasyEDA froze when asked for its fill.`);
 		else if (!poured && !allSkipped)
@@ -679,7 +692,7 @@ export async function readBoard(): Promise<Board> {
 			layer: p.getState_Layer() as number,
 			name: p.getState_PourName(),
 			priority: p.getState_PourPriority(),
-			outline: decodeComplex(p.getState_ComplexPolygon().getSource(), conv, MIL),
+			outline,
 			poured,
 		});
 	}

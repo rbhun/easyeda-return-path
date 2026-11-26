@@ -1,6 +1,6 @@
 // In-memory stand-in for the subset of the EasyEDA Pro API the extension uses, serving a core
 // Board as API primitives (mil, Y up). Lets the extension run under Node without EasyEDA.
-import { buildReferenceCopper, defaultOptions, intersect, splitIslands, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
+import { buildReferenceCopper, defaultOptions, intersect, scalePaths, splitIslands, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
 
 const MIL = 0.0254;
 const m = (mm: number) => mm / MIL;
@@ -24,6 +24,10 @@ export interface MockHost {
 	storage?: Map<string, unknown>;
 	/** 'denied' throws like a client without the external-interaction permission; omitted = browser (no file system). */
 	fileSystem?: 'allowed' | 'denied';
+	/** Unit of pour-fill coordinates in mil (EasyEDA Pro 3.2 stores and returns 10); default 1. */
+	pouredUnitMil?: number;
+	/** Thermal spokes served as unfilled pour-fill strokes (mm, with their pour id). */
+	spokes?: { pourId: string; a: Pt; b: Pt; width: number }[];
 }
 
 /** Answers every dialog with its default unless `answer` says otherwise. */
@@ -75,7 +79,13 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		PrimitiveId: `${p.id}-fill`,
 		PourPrimitiveId: isPlane(p) ? undefined : p.id,
 		Layer: p.layer,
-		PourFills: complex(fillOf(p)).map((source, i) => ({ id: `${i}`, fill: true, lineWidth: 0, path: { getSource: () => source } })),
+		PourFills: [
+			...complex(scalePaths(fillOf(p), 1 / (host.pouredUnitMil ?? 1))).map((source, i) => ({ id: `${i}`, fill: true, lineWidth: 0, path: { getSource: () => source } })),
+			...(host.spokes ?? []).filter(k => k.pourId === p.id).map((k, i) => {
+				const u = MIL * (host.pouredUnitMil ?? 1);
+				return { id: `spoke${i}`, fill: false, lineWidth: k.width / u, path: { getSource: () => [[k.a.x / u, k.a.y / u, 'L', k.b.x / u, k.b.y / u]] } };
+			}),
+		],
 	}));
 	const eda = {
 		sys_I18n: { text: (key: string, _ns?: string, _lang?: string, ...args: string[]) => args.reduce((s, a, i) => s.replace(`\${${i + 1}}`, a), key) },

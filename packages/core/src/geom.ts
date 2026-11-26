@@ -87,7 +87,9 @@ export function arcPoints(a: Pt, b: Pt, sweepDeg: number, maxSegDeg = 10): Path 
 export function union(...sets: Paths[]): Paths {
   const all = sets.flat();
   if (!all.length) return [];
-  return Clipper.unionD(all, FillRule.NonZero);
+  // The two-argument overload rounds to 0.01 mm; some real pour fills (R-Com dongle, POUR2)
+  // rounded that coarsely send Clipper into an endless loop that exhausts memory.
+  return Clipper.unionD(all, [], FillRule.NonZero, PREC);
 }
 
 export function intersect(a: Paths, b: Paths): Paths {
@@ -104,7 +106,7 @@ export function difference(a: Paths, b: Paths): Paths {
 /** Enclosed area of a closed, possibly self-intersecting path (even-odd). */
 export function enclosedArea(path: Path): number {
   if (path.length < 3) return 0;
-  return Math.abs(area(Clipper.unionD([path], FillRule.EvenOdd)));
+  return Math.abs(area(Clipper.unionD([path], [], FillRule.EvenOdd, PREC)));
 }
 
 export function inflate(paths: Paths, delta: number): Paths {
@@ -243,4 +245,28 @@ export function splitIslands(paths: Paths): Paths[] {
     if (o) o.group.push(paths[i]);
   }
   return outers.map((o) => o.group);
+}
+
+export function scalePaths(paths: Paths, k: number): Paths {
+  return k === 1 ? paths : paths.map((p) => p.map((q) => ({ x: q.x * k, y: q.y * k })));
+}
+
+/**
+ * Factor that brings a pour's computed fill onto its outline. EasyEDA Pro 3.2 stores pour fills
+ * (POURED, and what the API returns for them) in units of 10 mil while everything else is in mil;
+ * decoded as mil, the fill shrinks towards the origin. Picks 1 or 10, whichever overlaps the outline's
+ * bounding box best.
+ */
+export function pouredScale(outline: Paths, fill: Paths): number {
+  const o = bbox(outline);
+  const f = bbox(fill);
+  if (!Number.isFinite(o.minX) || !Number.isFinite(f.minX)) return 1;
+  const overlap = (k: number) => {
+    const w = Math.min(o.maxX, f.maxX * k) - Math.max(o.minX, f.minX * k);
+    const h = Math.min(o.maxY, f.maxY * k) - Math.max(o.minY, f.minY * k);
+    const inter = w > 0 && h > 0 ? w * h : 0;
+    const area = (b: BBox) => (b.maxX - b.minX) * (b.maxY - b.minY);
+    return inter / (area(o) + area({ minX: f.minX * k, minY: f.minY * k, maxX: f.maxX * k, maxY: f.maxY * k }) - inter || 1);
+  };
+  return overlap(10) > overlap(1) ? 10 : 1;
 }

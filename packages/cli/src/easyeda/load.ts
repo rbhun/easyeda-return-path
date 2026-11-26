@@ -5,7 +5,8 @@ import type { Board } from '@returnpath/core';
 import { parseEasyEdaPcb, type ParseOptions } from './parse.js';
 
 /**
- * Load a board from an EasyEDA Pro project (.epro / .zip: PCB *.epcb + FOOTPRINT *.efoo + optional *.ecop)
+ * Load a board from an EasyEDA Pro project (.epro / .zip: PCB *.epcb + FOOTPRINT *.efoo + optional *.ecop;
+ * .epro2: one *.epru holding all documents)
  * or a bare PCB document (.epcb / saved getDocumentSource() text).
  */
 export function loadBoard(file: string, opts: ParseOptions & { pcb?: string } = {}): Board {
@@ -23,6 +24,12 @@ export function loadBoard(file: string, opts: ParseOptions & { pcb?: string } = 
     if (name.endsWith('.epcb')) pcbs.push([name, text()]);
     else if (name.endsWith('.efoo')) footprints.set(stem, text());
     else if (name.endsWith('.ecop')) poured.push(text());
+    else if (name.endsWith('.epru')) {
+      for (const doc of splitEpru(text())) {
+        if (doc.type === 'PCB') pcbs.push([`${name}#${doc.uuid}`, doc.text]);
+        else if (doc.type === 'FOOTPRINT') footprints.set(doc.uuid, doc.text);
+      }
+    }
   }
   if (!pcbs.length) throw new Error(`${file}: no .epcb document inside`);
   const chosen = opts.pcb ? pcbs.find(([n]) => n.includes(opts.pcb!)) : pcbs[0];
@@ -30,4 +37,17 @@ export function loadBoard(file: string, opts: ParseOptions & { pcb?: string } = 
   const board = parseEasyEdaPcb({ pcb: chosen[1], footprints, poured }, opts);
   if (pcbs.length > 1) board.warnings.push(`Project has ${pcbs.length} PCBs; analysed ${chosen[0]} (use --pcb to pick).`);
   return board;
+}
+
+/** An `.epru` (inside `.epro2`) holds every document of the project in one file, each starting with a DOCHEAD line. */
+export function splitEpru(text: string): { type: string; uuid: string; text: string }[] {
+  const docs: { type: string; uuid: string; lines: string[] }[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith('{"type":"DOCHEAD"')) {
+      const body = line.slice(line.indexOf('||') + 2).replace(/\|\s*$/, '');
+      const head = JSON.parse(body) as { docType?: string; uuid?: string };
+      docs.push({ type: head.docType ?? '', uuid: head.uuid ?? '', lines: [] });
+    } else if (docs.length) docs[docs.length - 1].lines.push(line);
+  }
+  return docs.map((d) => ({ type: d.type, uuid: d.uuid, text: d.lines.join('\n') }));
 }

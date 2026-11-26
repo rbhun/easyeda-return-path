@@ -1,4 +1,4 @@
-import { add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
+import { pouredScale, scalePaths, add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
 import { parseRecords, type Rec } from './records.js';
 
 /** EasyEDA Pro PCB data is in mil. */
@@ -102,7 +102,7 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
         const target = str(r.targetId);
         const sw = num(r.strokeWidth) * MIL;
         let paths: Paths;
-        if (num(r.fill, 1)) paths = decodeComplex(r.path, conv, MIL);
+        if (typeof r.fill === 'boolean' ? r.fill : num(r.fill, 1)) paths = decodeComplex(r.path, conv, MIL);
         else if (sw > 0) paths = union(...decodeRings(r.path, conv, MIL).map((ring) => strokePath([...ring, ring[0]], sw)));
         else break;
         pouredByPour.set(target, [...(pouredByPour.get(target) ?? []), paths]);
@@ -123,7 +123,10 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
 
   for (const p of pours) {
     const fills = pouredByPour.get(p.id);
-    if (fills) p.poured = union(...fills);
+    if (fills) {
+      const merged = union(...fills);
+      p.poured = scalePaths(merged, pouredScale(p.outline, merged));
+    }
   }
   if (pours.some((p) => !p.poured))
     warnings.push('Some pours have no stored fill (POURED); their copper was recomputed from outlines with a uniform clearance.');

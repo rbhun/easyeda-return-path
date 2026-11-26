@@ -67,6 +67,37 @@ function parseLoose(json: string): unknown {
   }
 }
 
+/** REGION prohibit types as words (current object form) → the numbers of the array form. */
+const PROHIBIT_WORDS: Record<string, number> = { COMPONENT: 2, TRACK: 5, FILL: 6, COPPER: 7, PLANE: 8 };
+
+/**
+ * Object-form differences from the array form (editor 3.2, .epro2): compound ids such as
+ * ["LAYER",1] or ["PAD_NET","<component>","<pad>",…], `use` instead of a status bit, component
+ * `x`/`y`, prohibit types as words, and every fill region of a pour nested in one POURED record.
+ */
+function fromObject(r: Rec): Rec[] {
+  const key = r.id.startsWith('[') ? (parseLoose(r.id) as unknown[]) : null;
+  if (key) r.id = String(key[1] ?? '');
+  if (r.type === 'LAYER' && typeof r.use === 'boolean' && r.status === undefined) r.status = r.use ? 1 : 0;
+  if (r.type === 'PAD_NET' && key) r.padNum ??= key[2];
+  if (r.type === 'COMPONENT') {
+    r.positionX ??= r.x;
+    r.positionY ??= r.y;
+  }
+  if (r.type === 'PAD') {
+    const pad = r.defaultPad as { padType?: string; width?: number; height?: number; path?: unknown } | null;
+    if (pad && !Array.isArray(pad) && typeof pad === 'object')
+      r.defaultPad = pad.padType === 'POLYGON' || pad.padType === 'POLY' ? [pad.padType, pad.path] : [pad.padType, pad.width, pad.height];
+    const hole = r.hole as { holeType?: string; width?: number; height?: number } | null;
+    if (hole && !Array.isArray(hole) && typeof hole === 'object') r.hole = [hole.holeType, hole.width, hole.height];
+  }
+  if (r.type === 'REGION' && Array.isArray(r.prohibitType))
+    r.prohibitType = (r.prohibitType as unknown[]).map((t) => (typeof t === 'string' ? (PROHIBIT_WORDS[t] ?? t) : t));
+  if (r.type === 'POURED' && Array.isArray(r.pourFill))
+    return (r.pourFill as Record<string, unknown>[]).map((f, i) => ({ type: 'POURED', id: `${r.id}#${i}`, targetId: r.id, strokeWidth: f.strokeWidth, fill: f.fill, path: f.path }));
+  return [r];
+}
+
 export function parseRecords(text: string): Rec[] {
   const out: Rec[] = [];
   for (const raw of text.split(/\r?\n/)) {
@@ -81,7 +112,7 @@ export function parseRecords(text: string): Rec[] {
       let body = sep >= 0 ? line.slice(sep + 2).trim() : '';
       if (body.endsWith('|')) body = body.slice(0, -1);
       const payload = body ? (parseLoose(body) as object) : {};
-      out.push({ ...payload, type: head.type, id: String(head.id ?? '') });
+      out.push(...fromObject({ ...payload, type: head.type, id: String(head.id ?? '') }));
     }
   }
   return out;
