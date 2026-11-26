@@ -33,9 +33,19 @@ export interface StreamOptions {
 const MERGE_MM = 0.6;
 /** Radius around a via, mm, on which the flow past it is measured. */
 const VIA_RING_MM = 1;
+/** A joining streamline meets the earlier one this far, mm, past the point it came close to. */
+const JOIN_MM = 1;
+
+interface Mark {
+  pt: Pt;
+  piece: Path;
+  idx: number;
+}
 
 /** For drawing: one streamline per load, merged where paths meet and smoothed; several per load crowd the view. */
 export const DRAWN_STREAMS: Partial<StreamOptions> = { perLoad: 1, merge: true, smooth: true };
+/** For drawing one part's current alone: a few lines from its pads, so parallel paths show. */
+export const FOCUS_STREAMS: Partial<StreamOptions> = { ...DRAWN_STREAMS, perLoad: 3 };
 
 /** Index of the density bin of a value: 0 below the first level … DENSITY_LEVELS.length at or above the last. */
 export function densityBin(j: number, fullScale: number, levels = DENSITY_LEVELS): number {
@@ -86,17 +96,17 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
   const step = g.cell * 0.4;
   const out: Streamline[] = [];
   /** Streamlines closer than this (cells) are drawn as one. */
-  const reach = Math.max(2, Math.ceil(MERGE_MM / g.cell));
+  const reach = Math.max(1, Math.ceil(MERGE_MM / g.cell));
   /** Ring around a via, cells, on which the flow past it is measured. */
   const ring = Math.min(8, Math.max(2, Math.round(VIA_RING_MM / g.cell)));
-  /** Per layer: a point of an earlier streamline in each cell it passed. */
-  const taken = new Map<number, Map<number, Pt>>();
-  const meets = (layer: number, c: number): Pt | undefined => {
+  /** Per layer: where an earlier drawn streamline passed each cell (the point, its piece and the index of the piece's point before it). */
+  const taken = new Map<number, Map<number, Mark>>();
+  const meets = (layer: number, c: number): Mark | undefined => {
     const t = taken.get(layer);
     if (!t) return undefined;
     const i = c % g.nx;
     const j = (c - i) / g.nx;
-    let best: Pt | undefined;
+    let best: Mark | undefined;
     let bestD = Infinity;
     for (let dj = -reach; dj <= reach; dj++)
       for (let di = -reach; di <= reach; di++) {
@@ -145,7 +155,8 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       if (opts.merge && k > 0) {
         const hit = meets(layer, c);
         if (hit) {
-          segments[segments.length - 1].pts.push(hit);
+          const pts = segments[segments.length - 1].pts;
+          pts.push(...join(pts, p, hit).slice(1));
           complete = true;
           break;
         }
@@ -212,8 +223,12 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       p = next;
       segments[segments.length - 1].pts.push(p);
     }
+    const segs = segments
+      .filter((s) => s.pts.length > 1)
+      .map((s) => ({ layer: s.layer, pts: opts.smooth ? simplifyLine(chaikin(s.pts, 3), g.cell * 0.3) : simplifyLine(s.pts, g.cell * 0.25) }));
+    // Later streamlines join the drawn (smoothed) pieces, so a join lands on the line as drawn.
     if (opts.merge)
-      for (const sg of segments) {
+      for (const sg of segs) {
         let t = taken.get(sg.layer);
         if (!t) taken.set(sg.layer, (t = new Map()));
         for (let q = 1; q < sg.pts.length; q++) {
@@ -223,19 +238,58 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
           for (let m = 0; m <= n; m++) {
             const pt = { x: a.x + ((b.x - a.x) * m) / n, y: a.y + ((b.y - a.y) * m) / n };
             const [pi, pj] = cellOf(g, pt);
-            if (inGrid(g, pi, pj) && !t.has(pj * g.nx + pi)) t.set(pj * g.nx + pi, pt);
+            if (inGrid(g, pi, pj) && !t.has(pj * g.nx + pi)) t.set(pj * g.nx + pi, { pt, piece: sg.pts, idx: q - 1 });
           }
         }
       }
-    const segs = segments
-      .filter((s) => s.pts.length > 1)
-      .map((s) => ({ layer: s.layer, pts: opts.smooth ? simplifyLine(chaikin(s.pts, 2), g.cell * 0.5) : simplifyLine(s.pts, g.cell * 0.25) }));
     // Present every streamline in the direction the current flows.
-    if (r.role === 'supply') {
-      segs.reverse();
-      for (const s of segs) s.pts.reverse();
-    }
+    if (r.role === 'supply') return { load, segments: segs.map((s) => ({ layer: s.layer, pts: [...s.pts].reverse() })).reverse(), complete };
     return { load, segments: segs, complete };
+  }
+
+  /**
+   * A curve from p, heading the way the streamline was going, onto an earlier drawn piece: it meets
+   * the piece a little downstream of the point it came close to, along the piece's direction, so the
+   * two read as one line (a tangent merge instead of a corner).
+   */
+  function join(pts: Path, p: Pt, hit: Mark): Path {
+    const { piece } = hit;
+    // Walk down the earlier piece from the point it came close to.
+    let at = hit.pt;
+    let i = hit.idx + 1;
+    let left = Math.max(JOIN_MM, 3 * g.cell);
+    while (i < piece.length) {
+      const d = Math.hypot(piece[i].x - at.x, piece[i].y - at.y);
+      if (d >= left) {
+        at = { x: at.x + ((piece[i].x - at.x) * left) / d, y: at.y + ((piece[i].y - at.y) * left) / d };
+        break;
+      }
+      left -= d;
+      at = piece[i];
+      i++;
+    }
+    const prev = pts.length > 1 ? pts[pts.length - 2] : undefined;
+    const unit = (x: number, y: number) => {
+      const m = Math.hypot(x, y);
+      return m > 1e-9 ? { x: x / m, y: y / m } : undefined;
+    };
+    const d0 = (prev && unit(p.x - prev.x, p.y - prev.y)) ?? unit(at.x - p.x, at.y - p.y);
+    const k = Math.min(i, piece.length - 1);
+    const d3 = unit(piece[k].x - piece[Math.max(0, k - 1)].x, piece[k].y - piece[Math.max(0, k - 1)].y) ?? d0;
+    const span = Math.hypot(at.x - p.x, at.y - p.y);
+    if (!d0 || !d3 || span < 1e-6) return [p, at];
+    const c1 = { x: p.x + d0.x * span * 0.4, y: p.y + d0.y * span * 0.4 };
+    const c2 = { x: at.x - d3.x * span * 0.4, y: at.y - d3.y * span * 0.4 };
+    const out: Path = [];
+    for (let n = 0; n <= 8; n++) {
+      const u = n / 8;
+      const v = 1 - u;
+      out.push({
+        x: v * v * v * p.x + 3 * v * v * u * c1.x + 3 * v * u * u * c2.x + u * u * u * at.x,
+        y: v * v * v * p.y + 3 * v * v * u * c1.y + 3 * v * u * u * c2.y + u * u * u * at.y,
+      });
+    }
+    return out;
   }
 
   /**

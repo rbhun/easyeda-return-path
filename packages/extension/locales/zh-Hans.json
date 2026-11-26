@@ -112,5 +112,10 @@
 	"Which part drives ${1}? Its supply pins and decap close the loop for the edge that does not return straight into its ground pin. Your answer is saved to the board info.": "哪个器件驱动 ${1}？其电源引脚和去耦电容为不直接回到其地引脚的边沿闭合回路。你的回答会保存到电路板信息。",
 	"Step 1/5: confirm the power rails (from the board info, net names and pours).": "第 1/5 步：确认电源轨（依据电路板信息、网络名称和铺铜）。",
 	"Step 4/5: active source of ${1}: ${2}, from the board info.": "第 4/5 步：${1} 的有效电源：${2}，来自电路板信息。",
-	"Total current of the rail, shared between the loads with the sliders; a load's current can also be typed (150mA, or 0.15 for amps). Prefilled from the board info (typical current), else with the last run's values on this rail, else ${1} per load. Clear the total to split 1 A equally and show normalised density. What you change here is saved to the board info.": "电源轨的总电流，用滑块在各负载间分配；也可直接输入某个负载的电流（150mA，或以安培为单位的 0.15）。按电路板信息（典型电流）预填，否则为此电源轨上次运行的值，否则每个负载 ${1}。清空总电流则平均分配 1 A 并显示归一化密度。你在此所做的修改会保存到电路板信息。"
+	"Total current of the rail, shared between the loads with the sliders; a load's current can also be typed (150mA, or 0.15 for amps). Prefilled from the board info (typical current), else with the last run's values on this rail, else ${1} per load. Clear the total to split 1 A equally and show normalised density. What you change here is saved to the board info.": "电源轨的总电流，用滑块在各负载间分配；也可直接输入某个负载的电流（150mA，或以安培为单位的 0.15）。按电路板信息（典型电流）预填，否则为此电源轨上次运行的值，否则每个负载 ${1}。清空总电流则平均分配 1 A 并显示归一化密度。你在此所做的修改会保存到电路板信息。",
+	"The selected pad belongs to no part. Select a pad of a part, or the part itself.": "所选焊盘不属于任何元件。请选择元件的焊盘或元件本身。",
+	"${1} has no pad on a power rail, so it draws no DC current to show.": "${1} 没有焊盘连接到电源轨，因此没有可显示的直流电流。",
+	"${1} is the source of ${2}. Select a pad of a part it supplies.": "${1} 是 ${2} 的电源。请选择由它供电的元件的焊盘。",
+	"Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.": "聚焦 ${1}：仅求解并绘制它从 ${4} 经 ${2} / ${3} 的自身电流。重新运行上次分析会再次绘制所有负载。",
+	"No current given for ${1}: values are per amp of its current.": "未给出 ${1} 的电流：数值为其每安培电流。"
 }

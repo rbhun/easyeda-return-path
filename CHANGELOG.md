@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.48] - 2026-11-26
+
+From Balazs, on the DC lines: a nicer join where one line meets another, a little smoothing, and a focus mode for one pad.
+
+- **Lines join along each other**: where a load's line reaches an earlier one, it now bends onto it and meets it about 1 mm further along, heading the same way. Before, it ended in a corner, a sharp V or a sideways jog. Lines are smoothed a little more (three rounds instead of two), and a line counts as meeting another within 0.6 mm (at least one cell; before, two).
+- **Focus on one pad or part**: with one pad or part selected on the canvas, the panel's **Rerun last** reads **Rerun for single pad** (or **Rerun for single part**). It solves and draws only that part's current, on the rail of the last DC run when the part is on it, with the current given for it then (per amp when none was given), and a few lines from its pads so parallel paths show. The result starts with "Focus on U3: …". **Rerun last** still means every load once the selection is cleared.
+- **Selected trace with a pad or part selected** does the same: a pad on a signal net gets the HF check of its net. A pad on a supply net picks that rail, while a ground pad or a whole part picks the rail the part draws from. The DC wizard is asked first when no DC run covers that rail.
+
 ## [0.1.47] - 2026-11-26
 
 From Balazs: a per-project board info database, so each net and rail is set up once.

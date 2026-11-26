@@ -68,6 +68,18 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	/** Messages pushed with no puller waiting, and pullers waiting for a message (sys_MessageBus.push / pullAsync). */
 	const queues = new Map<string, unknown[]>();
 	const pullers = new Map<string, ((m: unknown) => void)[]>();
+	/** Set with select(): what the canvas has selected, as primitive type and id. */
+	let selection: { type: string; id: string }[] | undefined;
+	const mouseListeners = new Map<string, (type: string, props: unknown[]) => void>();
+	/** Selects pads or parts on the canvas and tells the mouse listeners, as a click would. */
+	const select = (items: { type: string; id: string }[] | undefined) => {
+		selection = items;
+		const props = (items ?? []).map((i) => {
+			const comp = i.type === 'Component' ? board.components.find(c => c.id === i.id) : board.components.find(c => c.padIds.includes(i.id));
+			return { primitiveId: i.id, primitiveType: i.type, ...(i.type === 'Component' ? { designator: comp?.designator } : { parentComponentPrimitiveId: comp?.id, parentComponentDesignator: comp?.designator }) };
+		});
+		for (const fn of mouseListeners.values()) fn(items?.length ? 'selected' : 'clearSelected', props);
+	};
 	const iframes = new Map<string, { html: string; width: number; height: number; props: Record<string, unknown>; shown: boolean }>();
 	/** Sends a message as the panel would. */
 	const panelSend = (message: unknown) => {
@@ -243,7 +255,12 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 			},
 		},
 		pcb_Document: { convertDataOriginToCanvasOrigin: async (x: number, y: number) => ({ x, y }) },
-		pcb_SelectControl: { getAllSelectedPrimitives: async () => [{ getState_Net: () => selectedNet }] },
+		pcb_SelectControl: {
+			getAllSelectedPrimitives: async () => selection
+				? selection.map(i => ({ getState_PrimitiveType: () => i.type, getState_PrimitiveId: () => i.id, getState_Net: () => board.pads.find(p => p.id === i.id)?.net }))
+				: [{ getState_Net: () => selectedNet }],
+		},
+		pcb_Event: { addMouseEventListener: (id: string, _type: string, fn: (type: string, props: unknown[]) => void) => void mouseListeners.set(id, fn) },
 		pcb_Layer: {
 			getStackup: async () => ({ layers: stackLayers, totalThickness: 1.6, unit: 'mm' }),
 			getAllLayers: async () => board.stackup.copper.map(l => ({ id: l.id, name: l.name, type: planeLayers.includes(l.id) ? 'PLANE' : 'SIGNAL', layerStatus: 1 })),
@@ -310,5 +327,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, markers, messages, infoDialogs, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, wizardPages, wizard };
+	return { eda, select, markers, messages, infoDialogs, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, wizardPages, wizard };
 }

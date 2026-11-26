@@ -339,6 +339,68 @@ test('panel: opens without blocking, runs DC from a button, shows the result the
 	assert.ok(mock.toasts.some(t => /open the Return Path panel to see the result/.test(t)), 'a toast points to the panel');
 });
 
+test('panel: with a pad selected, Rerun becomes Rerun for single pad and draws only that part\'s current', async () => {
+	const mock = createMockEda(board, '3V3', [], d => (d.kind === 'currents' ? 'U2=150mA, U3=20mA, J2=100mA' : d.dflt), { storage: new Map() });
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.clearReturnPath();
+	await ext.showPanel();
+	const states = () => mock.published.filter(p => p.topic === 'returnpath.panel.state').map(p => p.message);
+	const settle = async () => {
+		for (let i = 0; i < 400 && !(states().at(-1)?.result && !states().at(-1).busy); i++)
+			await new Promise(r => setTimeout(r, 25));
+	};
+	mock.panelSend({ cmd: 'hello' });
+	mock.panelSend({ cmd: 'dc' });
+	await settle();
+	const full = states().at(-1);
+	assert.match(full.result.lines[0], /^3V3 \/ GND: source U1, loads U2, U3, J2\./);
+	const fullMarkers = mock.markers.length;
+
+	const u2 = board.components.find(c => c.designator === 'U2')!;
+	const gndPad = board.pads.find(p => p.componentId === u2.id && p.net === 'GND')!;
+	mock.select([{ type: 'ComponentPad', id: gndPad.id }]);
+	assert.deepEqual(states().at(-1).selection, { kind: 'pad', label: 'U2' }, 'the panel hears of the selection and relabels Rerun');
+
+	const before = mock.dialogs.length;
+	mock.panelSend({ cmd: 'rerun' });
+	for (let i = 0; i < 400 && (!/^Focus on/.test(states().at(-1)?.result?.lines[0] ?? '') || states().at(-1).busy); i++)
+		await new Promise(r => setTimeout(r, 25));
+	const focused = states().at(-1);
+	assert.equal(mock.dialogs.length, before, 'the last DC run is on U2\'s rail: no wizard');
+	assert.match(focused.result.lines[0], /^Focus on U2: only its own current on 3V3 \/ GND from U1 is solved and drawn\./);
+	assert.match(focused.result.lines.join('\n'), /3V3: drop \d+\.\d+ mV,/, 'U2\'s own 150 mA, not per amp');
+	assert.equal(focused.lastRun, full.lastRun, 'Rerun last still means every load');
+	assert.ok(mock.markers.length > 0 && mock.markers.length < fullMarkers, 'fewer lines than with every load');
+
+	mock.select(undefined);
+	assert.equal(states().at(-1).selection, undefined);
+	mock.panelSend({ cmd: 'rerun' });
+	for (let i = 0; i < 400 && (/^Focus on/.test(states().at(-1)?.result?.lines[0] ?? '') || states().at(-1).busy); i++)
+		await new Promise(r => setTimeout(r, 25));
+	assert.match(states().at(-1).result.lines[0], /^3V3 \/ GND: source U1, loads U2, U3, J2\./, 'nothing selected: Rerun last again');
+	await ext.clearReturnPath();
+});
+
+test('Selected trace with a pad selected: the DC paths of that part alone, the wizard asked first when no DC run covers its rail', async () => {
+	const u3 = board.components.find(c => c.designator === 'U3')!;
+	const railPad = board.pads.find(p => p.componentId === u3.id && p.net === '3V3')!;
+	const mock = createMockEda(board, '', [], undefined, { storage: new Map() });
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	mock.select([{ type: 'ComponentPad', id: railPad.id }]);
+	await ext.showForSelectedTrace();
+	assert.deepEqual(mock.dialogs.map(d => d.kind), ['select', 'multi', 'currents'], 'the pad\'s rail is given: source, loads, currents');
+	const msg = mock.messages.at(-1)!;
+	assert.match(msg, /^Focus on U3: only its own current on 3V3 \/ GND from U1 is solved and drawn\./);
+	assert.doesNotMatch(msg, /per amp/, 'the 100 mA from the wizard');
+	assert.ok(mock.markers.length > 0);
+
+	const u1 = board.components.find(c => c.designator === 'U1')!;
+	mock.select([{ type: 'Component', id: u1.id }]);
+	await ext.showForSelectedTrace();
+	assert.match(mock.infoDialogs.at(-1)!, /U1 is the source of 3V3\. Select a pad of a part it supplies\./);
+	await ext.clearReturnPath();
+});
+
 test('a ground with no copper path from any load is reported in words and gets no contours', async () => {
 	const noGnd = { ...board, pours: board.pours.filter(p => p.net !== 'GND'), tracks: board.tracks.filter(t => t.net !== 'GND'), vias: board.vias.filter(v => v.net !== 'GND') };
 	const mock = createMockEda(noGnd, '3V3');

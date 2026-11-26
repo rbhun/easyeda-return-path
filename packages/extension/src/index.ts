@@ -3,11 +3,11 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, netInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, withNet, DRAWN_STREAMS, type Board, type BoardInfo, type DcSetupInput, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, netInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, type Board, type BoardInfo, type DcSetupInput, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { boardInfo } from './board-info';
 import { carriesCurrent, drawDc } from './dc-overlay';
-import { addPinNames, readBoard, selectedNet } from './eda-board';
+import { addPinNames, readBoard, selectedNet, selectedPart, type SelectedPart } from './eda-board';
 import { clearOverlay, drawAnalysis, leftoverOverlay, overlayState, toggleOverlay } from './overlay';
 import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, releaseOverlay, report, shareLastRun, sharedLastRun } from './panel';
 import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
@@ -104,6 +104,11 @@ export async function runReturnPath(ask: Ask, fromSelection = false): Promise<vo
 	const command = fromSelection ? 'Selected trace' : 'HF check';
 	await recorded(command, title, async () => {
 		await showPanelForRun();
+		const part = fromSelection ? await readSelectedPart() : undefined;
+		if (part) {
+			await focusOn(part, ask, command);
+			return;
+		}
 		const selected = await selectedNet();
 		log(`${command} (v${extensionConfig.version}), selected net ${selected ?? 'none'}`);
 		if (fromSelection) {
@@ -330,7 +335,74 @@ export async function runDcReturn(ask: Ask, preferredRail?: string, railGiven = 
 	}).finally(ask.close);
 }
 
-async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
+async function readSelectedPart(): Promise<SelectedPart | undefined> {
+	try {
+		return await selectedPart();
+	}
+	catch (e) {
+		log(`read selection: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+		return undefined;
+	}
+}
+
+/**
+ * A run for one selected pad or part: the HF check of a signal pad's net, otherwise the DC paths of
+ * that part's own current alone, on the rail of the last DC run when the part is on it.
+ */
+async function focusOn(sel: SelectedPart, ask: Ask, command: string): Promise<void> {
+	const title = t('DC return current');
+	const board = await timed('read board', readBoard, boardSizes);
+	await addPinNames(board);
+	recordResult('board', boardSizes(board));
+	const pad = sel.kind === 'pad' ? board.pads.find(p => p.id === sel.id) : undefined;
+	const comp = sel.kind === 'pad' ? board.components.find(c => c.padIds.includes(sel.id)) : board.components.find(c => c.id === sel.id);
+	log(`${command} (v${extensionConfig.version}), selected ${pad ? `pad ${comp?.designator ?? '?'}.${pad.number} on ${pad.net || 'no net'}` : comp?.designator ?? sel.id}`);
+	if (!comp) {
+		recordResult('outcome', 'selection not on a part');
+		eda.sys_Dialog.showInformationMessage(t('The selected pad belongs to no part. Select a pad of a part, or the part itself.'), title);
+		return;
+	}
+	recordResult('focus', comp.designator);
+	const kind = pad?.net ? hfApplicability(board, pad.net) : undefined;
+	if (pad?.net && kind?.ok) {
+		await hfFor(pad.net, ask, { board });
+		return;
+	}
+	const nets = new Set(padsOf(board, comp).map(p => p.net).filter(Boolean));
+	// A pad on a supply net picks that rail; a ground pad or the whole part picks the rail it draws from.
+	const wanted = kind?.kind === 'power' ? pad!.net : undefined;
+	const last = lastRun();
+	let input = last?.kind === 'dc' && (wanted ? last.input.rail === wanted : nets.has(last.input.rail)) ? last.input : undefined;
+	if (!input) {
+		const rails = guessRails(board).rails;
+		const rail = wanted ?? rails.find(r => r.loads.some(l => l.componentId === comp.id))?.net ?? rails.find(r => nets.has(r.net))?.net;
+		if (!rail) {
+			recordResult('outcome', 'part not on a rail');
+			eda.sys_Dialog.showInformationMessage(t('${1} has no pad on a power rail, so it draws no DC current to show.', comp.designator), title);
+			return;
+		}
+		const bi = await boardInfo();
+		const wiz = await withBack(loggedAsk(ask), a => runDcWizard(board, a, rail, true, undefined, bi.info));
+		await ask.close();
+		if (!wiz) {
+			recordResult('outcome', 'wizard closed');
+			return;
+		}
+		if (wiz.learned)
+			await bi.save(wiz.learned, `${wiz.input.rail}: source ${wiz.input.source}, loads and currents`);
+		await remember({ kind: 'dc', input: wiz.input });
+		input = wiz.input;
+	}
+	if (input.source === comp.designator) {
+		recordResult('outcome', 'source selected');
+		eda.sys_Dialog.showInformationMessage(t('${1} is the source of ${2}. Select a pad of a part it supplies.', comp.designator, input.rail), title);
+		return;
+	}
+	await dcFor(board, focusInput(input, comp.designator), comp.designator);
+}
+
+/** `focus`: the one part whose current alone is solved and drawn (the last run stays as it was). */
+async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise<void> {
 	const title = t('DC return current');
 	log(`DC setup: ${JSON.stringify(input)}`);
 	await checkpoint();
@@ -359,11 +431,12 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 		const which = n.role === 'supply' ? 'railPads' : 'groundPads';
 		log(`${n.net}: ${n.unconnected.join(', ')} not reached from ${setup.source.designator}; source pads ${pads(setup.source[which])}; load pads ${setup.loads.map(l => `${l.designator}: ${pads(l[which])}`).join('; ')}; pours on ${n.net}: ${board.pours.filter(p => p.net === n.net).map(p => `${p.id} L${p.layer}`).join(', ') || 'none'}`, 'warn');
 	}
-	const streams = await timed('streamlines', async () => ({ supply: traceStreamlines(res.grid, res.supply, DRAWN_STREAMS), ret: res.ret ? traceStreamlines(res.grid, res.ret, DRAWN_STREAMS) : [] }), s => `${s.supply.length + s.ret.length} lines`);
+	const streams = await timed('streamlines', async () => ({ supply: traceStreamlines(res.grid, res.supply, focus ? FOCUS_STREAMS : DRAWN_STREAMS), ret: res.ret ? traceStreamlines(res.grid, res.ret, focus ? FOCUS_STREAMS : DRAWN_STREAMS) : [] }), s => `${s.supply.length + s.ret.length} lines`);
 	const drawn = await timed('draw markers', () => drawDc(res, streams), d => `${d.markers} markers`);
 	const layerName = (id: number) => board.stackup.copper.find(l => l.id === id)?.name ?? `L${id}`;
 	recordResult('dc', {
 		input,
+		...(focus ? { focus } : {}),
 		rail: setup.rail,
 		ground: setup.ground,
 		source: setup.source.designator,
@@ -387,8 +460,10 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 	const vUnit = setup.normalised ? 'mV/A' : 'mV';
 	const jUnit = setup.normalised ? 'A/mm per A' : 'A/mm';
 	const lines = [
-		t('${1} / ${2}: source ${3}, loads ${4}.', setup.rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', ')),
-		setup.normalised ? t('No load currents given: 1 A total split equally; values are per amp.') : '',
+		focus
+			? t('Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.', focus, setup.rail, setup.ground, setup.source.designator)
+			: t('${1} / ${2}: source ${3}, loads ${4}.', setup.rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', ')),
+		setup.normalised ? (focus ? t('No current given for ${1}: values are per amp of its current.', focus) : t('No load currents given: 1 A total split equally; values are per amp.')) : '',
 		...[res.supply, res.ret].filter(n => !!n).map(n => carriesCurrent(n!)
 			? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
 			: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
@@ -447,6 +522,22 @@ export async function rerunAnalysis(): Promise<void> {
 	});
 }
 
+/** The panel's Rerun: for the one selected pad or part when there is one, otherwise the last analysis. */
+export async function rerunForSelection(): Promise<void> {
+	initPanel(panelHost);
+	await panelReady();
+	const part = await readSelectedPart();
+	if (!part) {
+		await rerunAnalysis();
+		return;
+	}
+	const ask = dialogAsk();
+	await recorded(part.kind === 'pad' ? 'Rerun for single pad' : 'Rerun for single part', t('DC return current'), async () => {
+		await showPanelForRun();
+		await focusOn(part, ask, part.kind === 'pad' ? 'Rerun for single pad' : 'Rerun for single part');
+	}).finally(ask.close);
+}
+
 /** Hides the overlay, or shows it again. */
 export async function toggleReturnPath(): Promise<void> {
 	initPanel(panelHost);
@@ -499,7 +590,7 @@ export async function showPanel(): Promise<void> {
 
 const panelHost = {
 	run: async (cmd: 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel') => {
-		const actions = { hf: showReturnPath, dc: showDcReturn, trace: showForSelectedTrace, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis() };
+		const actions = { hf: showReturnPath, dc: showDcReturn, trace: showForSelectedTrace, rerun: rerunForSelection, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis() };
 		await actions[cmd]();
 	},
 	lastRunKind: () => lastRun()?.kind,

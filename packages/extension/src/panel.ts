@@ -59,6 +59,13 @@ interface Shared {
 	/** The user closed the panel; analyses do not reopen it until Open Panel is used. */
 	closedByUser: boolean;
 	style: Record<Role, RoleStyle> | undefined;
+	/** One pad or part selected on the canvas, so Rerun becomes a run for it alone. */
+	selection: PanelSelection | undefined;
+}
+export interface PanelSelection {
+	kind: 'pad' | 'component';
+	/** "U3" or "U3 pad 4". */
+	label: string;
 }
 type Field = keyof Shared;
 export type Stamped = { [K in Field]?: { v: Shared[K]; at: number } };
@@ -71,7 +78,7 @@ const me = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}
 let host: PanelHost | undefined;
 /** The bus the subscriptions are on; a new editor API object needs new subscriptions. */
 let subscribed: unknown;
-const shared: Shared = { result: undefined, lastRun: undefined, overlay: 'none', overlayOwner: undefined, busy: undefined, busyOwner: undefined, panelOwner: undefined, pageConnected: false, closedByUser: false, style: undefined };
+const shared: Shared = { result: undefined, lastRun: undefined, overlay: 'none', overlayOwner: undefined, busy: undefined, busyOwner: undefined, panelOwner: undefined, pageConnected: false, closedByUser: false, style: undefined, selection: undefined };
 const stampOf: Partial<Record<Field, number>> = {};
 let clock = 0;
 /** Strictly increasing, so two changes in one millisecond keep their order. */
@@ -183,7 +190,7 @@ export function initPanel(h: PanelHost): void {
 	if (!b || subscribed === b)
 		return;
 	// A new editor API object means a new editor session: nothing shared earlier applies.
-	Object.assign(shared, { result: undefined, lastRun: undefined, overlay: 'none', overlayOwner: undefined, busy: undefined, busyOwner: undefined, panelOwner: undefined, pageConnected: false, closedByUser: false, style: undefined });
+	Object.assign(shared, { result: undefined, lastRun: undefined, overlay: 'none', overlayOwner: undefined, busy: undefined, busyOwner: undefined, panelOwner: undefined, pageConnected: false, closedByUser: false, style: undefined, selection: undefined });
 	for (const k of Object.keys(stampOf) as Field[])
 		delete stampOf[k];
 	setSharedStyle(undefined);
@@ -204,9 +211,50 @@ export function initPanel(h: PanelHost): void {
 		return;
 	}
 	publish(TOPIC_SYNC, { from: me, request: true } satisfies SyncMessage);
+	watchSelection();
 	const left = leftoverOverlay();
 	if (left)
 		log(`overlay: markers drawn by v${left} may still be on the canvas; Clear or Hide removes them`);
+}
+
+interface MouseProp {
+	primitiveType?: string;
+	designator?: string;
+	parentComponentDesignator?: string;
+	padNumber?: string;
+}
+
+/** What the panel calls a single selected pad or part; undefined for anything else. */
+export function selectionOf(props: MouseProp[] | undefined): PanelSelection | undefined {
+	if (!Array.isArray(props) || props.length !== 1)
+		return undefined;
+	const p = props[0];
+	if ((p.primitiveType === 'ComponentPad' || p.primitiveType === 'Pad') && p.parentComponentDesignator)
+		return { kind: 'pad', label: p.padNumber ? `${p.parentComponentDesignator} pad ${p.padNumber}` : p.parentComponentDesignator };
+	if (p.primitiveType === 'Component' && p.designator)
+		return { kind: 'component', label: p.designator };
+	return undefined;
+}
+
+/** Follows the canvas selection, so the panel can offer a run for a selected pad or part. */
+function watchSelection(): void {
+	const events = (eda as unknown as { pcb_Event?: { addMouseEventListener?: (id: string, type: string, cb: (type: string, props: MouseProp[]) => void, once?: boolean) => unknown } }).pcb_Event;
+	if (typeof events?.addMouseEventListener !== 'function')
+		return;
+	try {
+		events.addMouseEventListener('returnpath-selection', 'all', (type, props) => {
+			if (type !== 'selected' && type !== 'clearSelected')
+				return;
+			const next = type === 'selected' ? selectionOf(props) : undefined;
+			if (next?.label === shared.selection?.label && next?.kind === shared.selection?.kind)
+				return;
+			share({ selection: next });
+			publishState();
+		}, false);
+	}
+	catch (e) {
+		log(`panel: cannot follow the selection (${e instanceof Error ? e.message : String(e)})`, 'warn');
+	}
 }
 
 function onSync(m: SyncMessage): void {
@@ -351,6 +399,7 @@ export function publishState(): void {
 		overlay: overlayNow(),
 		leftover: leftover(),
 		lastRun: host?.lastRunLabel(),
+		selection: shared.selection,
 		result: shared.result,
 		roles: ROLES.filter(r => !kind || ROLE_USE[r].includes(kind)).map(r => ({ role: r, label: t(ROLE_LABELS[r]), colour: style[r].colour, width: style[r].width, visible: style[r].visible, isDefault: style[r].colour === DEFAULT_STYLE[r].colour && style[r].width === DEFAULT_STYLE[r].width && style[r].visible === DEFAULT_STYLE[r].visible })),
 		palette: Object.keys(PALETTE),

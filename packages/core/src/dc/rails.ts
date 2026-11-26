@@ -351,6 +351,15 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
   };
 }
 
+/**
+ * The same rail with only one part drawing current. The copper is linear, so its paths are exactly
+ * its share of the full solve; with no current given for it, the result is per amp of its own current.
+ */
+export function focusInput(input: DcSetupInput, designator: string): DcSetupInput {
+  const current = input.currents?.[designator];
+  return { rail: input.rail, ground: input.ground, source: input.source, loads: [designator], ...(current !== undefined ? { currents: { [designator]: current } } : {}) };
+}
+
 /** "U2=0.15, U3=20mA" → { U2: 0.15, U3: 0.02 } (A). Empty → undefined (equal split). */
 export function parseCurrents(s: string | undefined): Record<string, number> | undefined {
   const out: Record<string, number> = {};
