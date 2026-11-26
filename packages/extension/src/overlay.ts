@@ -3,7 +3,7 @@
 import { dist, lerp, type Analysis, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { MIL } from './eda-board';
-import { readStored, writeStored } from './runner';
+import { log, readStored, writeStored } from './runner';
 import { roleColour, type Role } from './style';
 
 export type { Rgba } from './style';
@@ -119,10 +119,49 @@ export async function toggleOverlay(): Promise<boolean | undefined> {
 	return shown.visible;
 }
 
+let lastOrigin: { api: unknown; at: Pt } | undefined;
+
+/**
+ * Where the data origin sits in canvas coordinates (mil). The editor's conversion throws inside
+ * itself when it has no PCB canvas to work on (seen in EasyEDA Pro with pro-api 0.3.59), so the
+ * inverse conversion is tried next, then the origin read earlier in this session (readBoard reads it
+ * while the PCB is surely open), then no offset at all.
+ */
+export async function canvasOrigin(): Promise<Pt> {
+	const ok = (p: unknown): p is Pt => !!p && Number.isFinite((p as Pt).x) && Number.isFinite((p as Pt).y);
+	const failed: string[] = [];
+	const tries: [string, () => Promise<unknown>][] = [
+		['convertDataOriginToCanvasOrigin', () => eda.pcb_Document.convertDataOriginToCanvasOrigin(0, 0)],
+		['convertCanvasOriginToDataOrigin', async () => {
+			const d = await eda.pcb_Document.convertCanvasOriginToDataOrigin(0, 0);
+			return ok(d) ? { x: -d.x, y: -d.y } : d;
+		}],
+	];
+	for (const [name, f] of tries) {
+		try {
+			const p = await f();
+			if (ok(p))
+				return (lastOrigin = { api: eda, at: { x: p.x, y: p.y } }).at;
+			failed.push(`${name} returned ${JSON.stringify(p)}`);
+		}
+		catch (e) {
+			failed.push(`${name} failed: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+	let doc: unknown;
+	try {
+		doc = await eda.dmt_SelectControl.getCurrentDocumentInfo();
+	}
+	catch {}
+	const earlier = lastOrigin?.api === eda ? lastOrigin.at : undefined;
+	log(`overlay: canvas origin unavailable (${failed.join('; ')}); current document ${JSON.stringify(doc ?? null)}; ${earlier ? `using the one read earlier (${earlier.x}, ${earlier.y})` : 'drawing without an origin offset'}`, 'warn');
+	return earlier ?? { x: 0, y: 0 };
+}
+
 /** Marker builders in canvas coordinates for core geometry in mm. */
 export async function markerKit() {
 	// Assumes marker coordinates are canvas coordinates, offset from data coordinates by a translation (D1: to test).
-	const origin = await eda.pcb_Document.convertDataOriginToCanvasOrigin(0, 0);
+	const origin = await canvasOrigin();
 	const toMil = (p: Pt) => ({ x: p.x / MIL + origin.x, y: p.y / MIL + origin.y });
 	const segs = (path: Path, closed: boolean): Marker[] => {
 		const pts = path.map(toMil);
