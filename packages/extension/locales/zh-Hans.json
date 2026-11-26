@@ -52,5 +52,10 @@
 	"${1}: done; open the Return Path panel to see the result.": "${1}：完成；打开回流路径面板查看结果。",
 	"Total current": "总电流",
 	"Equal": "平分",
-	"Share the total equally between the loads": "在负载之间平分总电流"
+	"Share the total equally between the loads": "在负载之间平分总电流",
+	"The run files (.log and .results.json) could not be written: ${1}.\n\nChoose a folder for them?": "运行文件（.log 和 .results.json）未能写入：${1}。\n\n是否为其选择一个文件夹？",
+	"Choose folder...": "选择文件夹...",
+	"The log file ${1} is not written: ${2}": "日志文件 ${1} 未写入：${2}",
+	"The last run's files were written there too.": "上一次运行的文件也已写入该处。",
+	"Run files are not written: ${1}": "运行文件未写入：${1}"
 }

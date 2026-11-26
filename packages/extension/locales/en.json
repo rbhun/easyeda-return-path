@@ -64,7 +64,6 @@
 	"Run folder": "Run folder",
 	"Folder for the run files (absolute path). Leave empty for the default.": "Folder for the run files (absolute path). Leave empty for the default.",
 	"Each analysis now writes its .log and .results.json to: ${1}": "Each analysis now writes its .log and .results.json to: ${1}",
-	"Run files need file access: allow \"External Interaction\" for this extension in Advanced > Extension Manager (desktop client).": "Run files need file access: allow \"External Interaction\" for this extension in Advanced > Extension Manager (desktop client).",
 	"Select all": "Select all",
 	"OK": "OK",
 	"${1} of ${2} selected": "${1} of ${2} selected",
@@ -72,5 +71,10 @@
 	"${1}: done; open the Return Path panel to see the result.": "${1}: done; open the Return Path panel to see the result.",
 	"Total current": "Total current",
 	"Equal": "Equal",
-	"Share the total equally between the loads": "Share the total equally between the loads"
+	"Share the total equally between the loads": "Share the total equally between the loads",
+	"The run files (.log and .results.json) could not be written: ${1}.\n\nChoose a folder for them?": "The run files (.log and .results.json) could not be written: ${1}.\n\nChoose a folder for them?",
+	"Choose folder...": "Choose folder...",
+	"The log file ${1} is not written: ${2}": "The log file ${1} is not written: ${2}",
+	"The last run's files were written there too.": "The last run's files were written there too.",
+	"Run files are not written: ${1}": "Run files are not written: ${1}"
 }
