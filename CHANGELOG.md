@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.65] - 2026-11-26
+
+From Balazs: U8's return on the +6V rail drew a loop that changed from run to run, and it started on pad 7.
+
+- **An NC pin tied to ground does not start the return.** U8 pin 7 is NC, and pin 11 is GND. The return used every pad on GND whenever any one of them had no name, so the drawn line left from pad 7 and followed that pin's copper: a small loop, a hairpin, or the long way round the board, depending on the run. A named ground pin is now the only start. Pad 7 is listed as tied to GND and carrying no supply current. With no named ground pin, every pad on the ground still counts.
+
 ## [0.1.64] - 2026-11-26
 
 From Balazs: on the R-Com dongle the forward current of 48V + VBUS + VBUS_R + VBUS_RAW, sourced at L1, drew no yellow line on the 48V traces. C6 and U1 were reported as not reached.
