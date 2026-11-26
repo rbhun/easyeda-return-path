@@ -567,7 +567,7 @@ function viaRoute(ctx: Context, net: string, refLayer: number, otherLayer: numbe
   const there = ctx.refCopper.get(otherLayer)?.byNet.get(net);
   if (!here || !there) return null;
   const stops = [...board.vias.filter((v) => v.net === net).map((v) => v.at), ...board.pads.filter((p) => p.net === net && p.layer === MULTI_LAYER).map((p) => p.at)];
-  const go = (region: Paths, p: Pt, q: Pt) => geodesic(region, p, q, { minHoleArea: DRAWN_HOLE_AREA, window: 5, maxNodes: opts.maxDetourNodes });
+  const go = (region: Paths, p: Pt, q: Pt) => drawnGeodesic(region, p, q, opts.maxDetourNodes);
   const near = (p: Pt) =>
     stops
       .filter((s) => dist(s, p) <= VIA_ROUTE_REACH)
@@ -597,6 +597,21 @@ function viaRoute(ctx: Context, net: string, refLayer: number, otherLayer: numbe
 const VIA_ROUTE_REACH = 6;
 /** Holes a drawn return goes around, however small (mm²): a line across an antipad would pass through a via. */
 const DRAWN_HOLE_AREA = 1e-4;
+/** How far inside the copper a drawn return keeps, so the line does not straddle the copper edge, mm; tried in order. */
+const DRAWN_INSETS = [0.1, 0.05, 0.02];
+
+/**
+ * The return as drawn: around every hole, inside the copper by the largest inset that still joins
+ * a and b (ends at a gap edge, close to the copper edge, step straight in), along the edge where none does.
+ */
+function drawnGeodesic(region: Paths, a: Pt, b: Pt, maxNodes?: number) {
+  const o = { minHoleArea: DRAWN_HOLE_AREA, window: 5, maxNodes };
+  for (const inset of DRAWN_INSETS) {
+    const d = geodesic(region, a, b, { ...o, inset, snapEnds: 2 * inset });
+    if (d) return d;
+  }
+  return geodesic(region, a, b, o);
+}
 
 function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Finding[]): Steps<ChainResult> {
   const { board, opts, stats } = ctx;
@@ -739,7 +754,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
         const loop = [...direct, ...[...det.path].reverse()];
         // A coplanar detour starts beside the trace and can come out shorter than the centreline.
         gap.detour = { ...det, directLength, extraLength: Math.max(0, det.length - directLength), loopArea: enclosedArea(loop), loop };
-        gap.drawn = geodesic(lc.byNet.get(before!)!, pa, pb, { minHoleArea: DRAWN_HOLE_AREA, window: 5, maxNodes: opts.maxDetourNodes })?.path;
+        gap.drawn = drawnGeodesic(lc.byNet.get(before!)!, pa, pb, opts.maxDetourNodes)?.path;
         if (gap.detour.extraLength < opts.slotDetour.ignore) {
           minorGaps.push(gap);
           continue;

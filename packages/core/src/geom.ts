@@ -114,6 +114,13 @@ export function inflate(paths: Paths, delta: number): Paths {
   return Clipper.inflatePathsD(paths, delta, JoinType.Round, EndType.Polygon, 2, PREC);
 }
 
+/** The region without parts narrower than `width` (morphological opening, mitred so corners add no vertices). */
+export function dropNarrow(paths: Paths, width: number): Paths {
+  if (!paths.length) return [];
+  const shrunk = Clipper.inflatePathsD(paths, -width / 2, JoinType.Miter, EndType.Polygon, 2, PREC);
+  return Clipper.inflatePathsD(shrunk, width / 2, JoinType.Miter, EndType.Polygon, 2, PREC);
+}
+
 /** Outline of an open polyline drawn with a round pen of the given width. */
 export function strokePath(path: Path, width: number, butt = false): Paths {
   if (path.length < 2) return path.length ? [circle(path[0], width / 2)] : [];
