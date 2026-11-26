@@ -2,6 +2,16 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.55] - 2026-11-26
+
+HF check: return lines run into the GND pins and vias the current leaves through, instead of hopping to them through the air.
+
+- **Into the ground pin**: where a trace ends on (or passes through) a part's pad, its return is drawn through the copper into that part's GND pin, which is marked with a circle only. A pin on the other layer is reached through the nearest GND via and that layer's copper (on SD0: OLED1 pin 7 and U7 pin 11).
+- **Into the GND via**: where the return changes layer at a GND via (stitching, or between a pour beside the trace and the plane below), the lines on both sides run into the via. The dashed line from the forward trace to the via is gone. A trace that ends on another trace of the net next to a signal via (a T) takes that via's GND via too.
+- **Under the whole trace**: a return that starts and ends at a via beside the trace still runs under the trace from one end to the other (the meander case).
+- A hop stays dashed only where a return line cannot reach its pin or via through the copper near the trace.
+- Every-net run time in Node: rack display 72 → 96 s, dongle 85 → 99 s. The strict audit on both test boards is still clean: no return outside its reference copper, on another net's copper or crossing it.
+
 ## [0.1.54] - 2026-11-26
 
 From Balazs: check several DC nets together. On the R-Com dongle, VBUS_R and VBUS_RAW are the same power rail, on either side of the fuse F1.

@@ -46,8 +46,13 @@ export function* leastInductancePath(a: FlowArgs): Steps<Path | null> {
   const tick = { phase: 'return path' } as const;
   const { line, s0, s1, corridor } = a;
   const piece = line.slice(s0, s1);
-  const xs = piece.map((p) => p.x);
-  const ys = piece.map((p) => p.y);
+  // The corridor also reaches to given ends off the trace (a GND pin or via a few mm away).
+  const reachTo: [Pt, Pt][] = [];
+  if (a.from) reachTo.push([line.at(s0), a.from]);
+  if (a.to) reachTo.push([line.at(s1), a.to]);
+  const spine = [...piece, ...reachTo.flat()];
+  const xs = spine.map((p) => p.x);
+  const ys = spine.map((p) => p.y);
   const minX = Math.min(...xs) - corridor;
   const minY = Math.min(...ys) - corridor;
   const nx = Math.ceil((Math.max(...xs) + corridor - minX) / CELL) + 1;
@@ -57,8 +62,8 @@ export function* leastInductancePath(a: FlowArgs): Steps<Path | null> {
 
   // The corridor: cells within `corridor` of a segment of the stretch.
   const near = new Uint8Array(nx * ny);
-  for (let k = 1; k < piece.length; k++) {
-    const [p, q] = [piece[k - 1], piece[k]];
+  const segs: [Pt, Pt][] = [...piece.slice(1).map((q, k): [Pt, Pt] => [piece[k], q]), ...reachTo];
+  for (const [p, q] of segs) {
     const x0 = Math.max(0, Math.floor((Math.min(p.x, q.x) - corridor - minX) / CELL));
     const x1 = Math.min(nx - 1, Math.ceil((Math.max(p.x, q.x) + corridor - minX) / CELL));
     const y0 = Math.max(0, Math.floor((Math.min(p.y, q.y) - corridor - minY) / CELL));
@@ -135,22 +140,20 @@ export function* leastInductancePath(a: FlowArgs): Steps<Path | null> {
     for (let i = 0; i < nx * ny; i++) if (d[i] <= m + END_SPREAD) out.push(i);
     return out;
   };
-  const sources = ends(a.from, true);
-  const targets = new Set(ends(a.to, false));
-  if (!sources.length || !targets.size) return null;
+  const head = ends(null, true);
+  const tail = ends(null, false);
+  if (!head.length || !tail.length) return null;
+  const from = a.from ? nearest(a.from) : -1;
+  const to = a.to ? nearest(a.to) : -1;
+  if ((a.from && from < 0) || (a.to && to < 0)) return null;
 
   // Image current runs under the part of the trace it mirrors: a step may not jump to another stretch
   // of the trace (across a meander), only as far along it as its distance from the trace allows.
   const follows = (i: number, j: number, l: number) => Math.abs(along[j] - along[i]) <= 2 * Math.max(off[i], off[j]) + l + JUMP_SLACK;
 
   // Dijkstra on 8 neighbours; a diagonal step needs both cells beside it.
-  const cost = new Float64Array(nx * ny).fill(Infinity);
-  const prev = new Int32Array(nx * ny).fill(-1);
-  const heap = new MinHeap();
-  for (const sIdx of sources) {
-    cost[sIdx] = 0;
-    heap.push(sIdx, 0);
-  }
+  const cost = new Float64Array(nx * ny);
+  const prev = new Int32Array(nx * ny);
   const steps: [number, number, number][] = [
     [1, 0, 1],
     [-1, 0, 1],
@@ -161,33 +164,56 @@ export function* leastInductancePath(a: FlowArgs): Steps<Path | null> {
     [-1, 1, Math.SQRT2],
     [-1, -1, Math.SQRT2],
   ];
-  let hit = -1;
-  for (let n = 0; heap.size; n++) {
-    if (n % 4096 === 0) yield tick;
-    const [i, c] = heap.pop();
-    if (c > cost[i]) continue;
-    if (targets.has(i)) {
-      hit = i;
-      break;
+  const search = function* (sources: number[], targets: Set<number>): Steps<number[] | null> {
+    cost.fill(Infinity);
+    prev.fill(-1);
+    const heap = new MinHeap();
+    for (const sIdx of sources) {
+      cost[sIdx] = 0;
+      heap.push(sIdx, 0);
     }
-    const [x, y] = [i % nx, Math.floor(i / nx)];
-    for (const [dx, dy, l] of steps) {
-      const [qx, qy] = [x + dx, y + dy];
-      if (qx < 0 || qy < 0 || qx >= nx || qy >= ny) continue;
-      const j = qy * nx + qx;
-      if (!ok[j] || (dx && dy && (!ok[y * nx + qx] || !ok[qy * nx + x])) || !follows(i, j, l * CELL)) continue;
-      const nc = c + l * CELL * 0.5 * (weight[i] + weight[j]);
-      if (nc < cost[j]) {
-        cost[j] = nc;
-        prev[j] = i;
-        heap.push(j, nc);
+    let hit = -1;
+    for (let n = 0; heap.size; n++) {
+      if (n % 4096 === 0) yield tick;
+      const [i, c] = heap.pop();
+      if (c > cost[i]) continue;
+      if (targets.has(i)) {
+        hit = i;
+        break;
+      }
+      const [x, y] = [i % nx, Math.floor(i / nx)];
+      for (const [dx, dy, l] of steps) {
+        const [qx, qy] = [x + dx, y + dy];
+        if (qx < 0 || qy < 0 || qx >= nx || qy >= ny) continue;
+        const j = qy * nx + qx;
+        if (!ok[j] || (dx && dy && (!ok[y * nx + qx] || !ok[qy * nx + x])) || !follows(i, j, l * CELL)) continue;
+        const nc = c + l * CELL * 0.5 * (weight[i] + weight[j]);
+        if (nc < cost[j]) {
+          cost[j] = nc;
+          prev[j] = i;
+          heap.push(j, nc);
+        }
       }
     }
-  }
-  if (hit < 0) return null;
+    if (hit < 0) return null;
+    const out: number[] = [];
+    for (let i = hit; i >= 0; i = prev[i]) out.push(i);
+    return out.reverse();
+  };
+  // The return runs under the trace from one end of the stretch to the other; a given end off the trace (a GND
+  // pin or via) is reached from there by the cheapest way through the copper, not by cutting the trace's course short.
   const idx: number[] = [];
-  for (let i = hit; i >= 0; i = prev[i]) idx.push(i);
-  idx.reverse();
+  const joins: number[] = [];
+  const leg = function* (sources: number[], targets: number[]): Steps<boolean> {
+    const part = yield* search(sources, new Set(targets));
+    if (!part) return false;
+    idx.push(...(idx.length ? part.slice(1) : part));
+    joins.push(idx.length - 1);
+    return true;
+  };
+  if (from >= 0 && !(yield* leg([from], head))) return null;
+  if (!(yield* leg(idx.length ? [idx[idx.length - 1]] : head, tail))) return null;
+  if (to >= 0 && !(yield* leg([idx[idx.length - 1]], [to]))) return null;
 
   // Pull the staircase into straight pieces that stay on the path's cells' copper and cost no more.
   const wAt = (p: Pt) => {
@@ -214,7 +240,7 @@ export function* leastInductancePath(a: FlowArgs): Steps<Path | null> {
   const reach = Math.round(PULL / CELL);
   for (let i = 0; i < pts.length - 1; ) {
     yield tick;
-    let j = Math.min(pts.length - 1, i + reach);
+    let j = Math.min(pts.length - 1, i + reach, joins.find((k) => k > i) ?? Infinity);
     for (; j > i + 1; j--) if (straight(pts[i], pts[j]) <= (pathCost[j] - pathCost[i]) * 1.001 + 1e-9) break;
     out.push(pts[j]);
     i = j;

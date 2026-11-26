@@ -416,6 +416,11 @@ class Context {
     return round ? { legs: [{ layer: ref.layer, path: round.path }], vias: [], inductance: inPlane } : null;
   }
 
+  copperPath(layer: number, net: string, a: Pt, b: Pt): Path | null {
+    const region = this.refCopper.get(layer)?.byNet.get(net);
+    return (region && drawnGeodesic(region, a, b, this.opts.maxDetourNodes)?.path) ?? null;
+  }
+
   copper(layer: number, exclude?: string): Paths {
     const k = `${layer}|${exclude ?? ''}`;
     let c = this.merged.get(k);
