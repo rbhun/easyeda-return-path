@@ -203,11 +203,19 @@ test('computed pour fills are fetched one at a time; a fill whose fetch hung is 
 	const ids = await hung.eda.pcb_PrimitivePoured.getAllPrimitiveId();
 	hung.eda.pcb_PrimitivePoured.get = never;
 	boardModule.apiTimeouts.callMs = 1500;
-	void ext.showReturnPath();
-	await new Promise(r => setTimeout(r, 150));
-	boardModule.apiTimeouts.callMs = 200;
-	assert.equal(storage.get('fetchingPouredSince'), `${VERSION} get:${ids[0]}`);
-	assert.match(saved(hung).at(-1)!, /read board: pcb_PrimitivePoured.get 1\/3 \(.*\)…$/);
+	const abandoned = ext.showReturnPath();
+	try {
+		await new Promise(r => setTimeout(r, 150));
+		assert.equal(storage.get('fetchingPouredSince'), `${VERSION} get:${ids[0]}`);
+		assert.match(saved(hung).at(-1)!, /read board: pcb_PrimitivePoured.get 1\/3 \(.*\)…$/);
+	}
+	finally {
+		// Finish this run before the next test swaps the editor. Left running, its timeout lands in a
+		// later test on a slow machine and clears that test's marker and log.
+		await abandoned;
+		boardModule.apiTimeouts.callMs = 200;
+	}
+	storage.set('fetchingPouredSince', `${VERSION} get:${ids[0]}`);
 
 	for (let run = 0; run < 2; run++) {
 		const next = install({ storage });

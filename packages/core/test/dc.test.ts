@@ -217,12 +217,15 @@ test('only ground pins start a return: address pins tied to GND do not; without 
     ['U1', 'TCA9548APWR', [['1', 'GND', 'A0'], ['2', 'GND', 'A1'], ['12', 'GND', 'GND'], ['21', 'GND', 'A2'], ['23', 'SDA', 'SDA'], ['24', '3V3', 'VCC']]],
     ['U2', 'TCA9548APWR', [['1', 'GND'], ['2', 'GND'], ['12', 'GND'], ['23', 'SDA']]],
     ['U3', 'QFN', [['1', 'SDA', 'SDA'], ['2', 'GND', 'GND'], ['17', 'GND', 'EP']]],
+    ['U8', 'LED', [['5', '3V3', 'VCC'], ['6', 'GND', 'NC'], ['7', 'GND', 'NC'], ['8', 'GND'], ['11', 'GND', 'GND']]],
   ]);
-  const setup = buildDcSetup(b, { rail: 'SDA', ground: 'GND', source: 'CN1', loads: ['U1', 'U2', 'U3'] });
-  const [u1, u2, u3] = setup.loads;
+  const setup = buildDcSetup(b, { rail: 'SDA', ground: 'GND', source: 'CN1', loads: ['U1', 'U2', 'U3', 'U8'] });
+  const [u1, u2, u3, u8] = setup.loads;
   assert.deepEqual(u1.groundPads.map((p) => p.pinName), ['GND']);
   assert.equal(u2.groundPads.length, 3, 'no pin names: every GND pad');
   assert.deepEqual(u3.groundPads.map((p) => p.pinName), ['GND', 'EP']);
+  assert.deepEqual(u8.groundPads.map((p) => p.pinName), ['GND'], 'an NC pad, and a ground pad with no name, do not start a return once a GND pin is known');
+  assert.ok(setup.warnings.some((w) => /U8: NC, NC, pad c4\.8 are tied to GND but carry no supply current; the return starts at GND/.test(w)), setup.warnings.join('\n'));
   assert.ok(setup.warnings.some((w) => /U1: A0, A1, A2 are tied to GND but carry no supply current; the return starts at GND/.test(w)), setup.warnings.join('\n'));
   assert.ok(setup.warnings.some((w) => /SDA does not look like a power rail/.test(w)));
   assert.deepEqual(returnPads(b.pads.filter((p) => p.componentId === 'c0'), 'GND').pads.map((p) => p.number), ['c0.2', 'c0.4']);

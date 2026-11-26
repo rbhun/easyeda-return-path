@@ -284,14 +284,14 @@ const SUPPLY_GROUND_PIN_RE = /^(?:[ADPS]?GND\w*|V(?:SS|EE)\w*|0V|E?PAD|EP\d*|THE
 const isSupplyGroundPin = (name: string) => name.split(/[\s/(),;|]+/).some((tok) => SUPPLY_GROUND_PIN_RE.test(tok));
 
 /**
- * A part's pads on the ground that carry its return current. With pin names, only ground pins
- * (GND, VSS, EP…) count, so address and strap pins tied to ground start no return; without names,
- * or when no name matches, every pad on the ground counts.
+ * A part's pads on the ground that carry its return current. A named ground pin (GND, VSS, EP…)
+ * is the return: an NC, an address pin or a pad with no name on the same net does not start one.
+ * With no named ground pin, every pad on the ground counts.
  */
 export function returnPads(pads: Pad[], ground: string): { pads: Pad[]; tied: Pad[] } {
   const on = pads.filter((p) => p.net === ground);
   const supply = on.filter((p) => p.pinName && isSupplyGroundPin(p.pinName));
-  if (!supply.length || !on.every((p) => p.pinName)) return { pads: on, tied: [] };
+  if (!supply.length) return { pads: on, tied: [] };
   return { pads: supply, tied: on.filter((p) => !supply.includes(p)) };
 }
 
@@ -504,7 +504,7 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
     const railPads = padsOf(board, c).filter(onRail);
     const { pads: groundPads, tied } = returnPads(padsOf(board, c), input.ground);
     if (tied.length)
-      warnings.push(`${c.designator}: ${tied.map((p) => p.pinName).join(', ')} ${tied.length > 1 ? 'are' : 'is'} tied to ${input.ground} but carr${tied.length > 1 ? 'y' : 'ies'} no supply current; the return starts at ${groundPads.map((p) => p.pinName).join(', ')}.`);
+      warnings.push(`${c.designator}: ${tied.map((p) => p.pinName || `pad ${p.number}`).join(', ')} ${tied.length > 1 ? 'are' : 'is'} tied to ${input.ground} but carr${tied.length > 1 ? 'y' : 'ies'} no supply current; the return starts at ${groundPads.map((p) => p.pinName || `pad ${p.number}`).join(', ')}.`);
     if (!railPads.length) warnings.push(`Load ${c.designator} has no pad on ${label}.`);
     if (!groundPads.length) warnings.push(`Load ${c.designator} has no ${input.ground} pad; its return current is not modelled.`);
     const current = currents[c.designator] ?? (rest ? restTotal / rest : 0);
