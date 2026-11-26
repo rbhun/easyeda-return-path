@@ -3,7 +3,7 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, netInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, type Board, type BoardInfo, type DcSetupInput, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, netInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, railLabel, railNetsOf, type Board, type BoardInfo, type DcSetupInput, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { boardInfo } from './board-info';
 import { carriesCurrent, drawDc } from './dc-overlay';
@@ -375,7 +375,7 @@ async function focusOn(sel: SelectedPart, ask: Ask, command: string): Promise<vo
 	// A pad on a supply net picks that rail; a ground pad or the whole part picks the rail it draws from.
 	const wanted = kind?.kind === 'power' ? pad!.net : undefined;
 	const last = lastRun();
-	let input = last?.kind === 'dc' && (wanted ? last.input.rail === wanted : nets.has(last.input.rail)) ? last.input : undefined;
+	let input = last?.kind === 'dc' && (wanted ? railNetsOf(last.input).includes(wanted) : railNetsOf(last.input).some(n => nets.has(n))) ? last.input : undefined;
 	if (!input) {
 		const rails = guessRails(board).rails;
 		const rail = wanted ?? rails.find(r => r.loads.some(l => l.componentId === comp.id))?.net ?? rails.find(r => nets.has(r.net))?.net;
@@ -398,7 +398,7 @@ async function focusOn(sel: SelectedPart, ask: Ask, command: string): Promise<vo
 	}
 	if (input.source === comp.designator) {
 		recordResult('outcome', 'source selected');
-		eda.sys_Dialog.showInformationMessage(t('${1} is the source of ${2}. Select a pad of a part it supplies.', comp.designator, input.rail), title);
+		eda.sys_Dialog.showInformationMessage(t('${1} is the source of ${2}. Select a pad of a part it supplies.', comp.designator, railLabel(input)), title);
 		return;
 	}
 	await dcFor(board, focusInput(input, comp.designator), comp.designator);
@@ -410,14 +410,15 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 	log(`DC setup: ${JSON.stringify(input)}`);
 	await checkpoint();
 	const setup = buildDcSetup(board, input);
-	log(`DC ${setup.rail}/${setup.ground}: source ${setup.source.designator}, loads ${setup.loads.map(l => `${l.designator}=${l.current} A`).join(', ')}`);
+	const rail = railLabel(setup);
+	log(`DC ${rail}/${setup.ground}: source ${setup.source.designator}, loads ${setup.loads.map(l => `${l.designator}=${l.current} A`).join(', ')}`);
 	const percent = (tick: Tick) => {
 		const f = tick.fraction ?? 0;
 		const at: Record<string, [number, number]> = {
 			'reference copper': [0, 5],
-			[`raster ${setup.rail}`]: [5, 10],
-			[`network ${setup.rail}`]: [15, 0],
-			[`solve ${setup.rail}`]: [15, 35],
+			[`raster ${rail}`]: [5, 10],
+			[`network ${rail}`]: [15, 0],
+			[`solve ${rail}`]: [15, 35],
 			[`raster ${setup.ground}`]: [50, 10],
 			[`network ${setup.ground}`]: [60, 0],
 			[`solve ${setup.ground}`]: [60, 35],
@@ -441,6 +442,7 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 		input,
 		...(focus ? { focus } : {}),
 		rail: setup.rail,
+		...(setup.railNets && setup.railNets.length > 1 ? { railNets: setup.railNets, bridges: (setup.bridges ?? []).map(b => b.designator) } : {}),
 		ground: setup.ground,
 		source: setup.source.designator,
 		loads: setup.loads.map(l => ({ designator: l.designator, current: l.current })),
@@ -464,13 +466,13 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 	const jUnit = setup.normalised ? 'A/mm per A' : 'A/mm';
 	const lines = [
 		focus
-			? t('Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.', focus, setup.rail, setup.ground, setup.source.designator)
-			: t('${1} / ${2}: source ${3}, loads ${4}.', setup.rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', ')),
+			? t('Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.', focus, rail, setup.ground, setup.source.designator)
+			: t('${1} / ${2}: source ${3}, loads ${4}.', rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', ')),
 		setup.normalised ? (focus ? t('No current given for ${1}: values are per amp of its current.', focus) : t('No load currents given: 1 A total split equally; values are per amp.')) : '',
 		...[res.supply, res.ret].filter(n => !!n).map(n => carriesCurrent(n!)
 			? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
 			: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
-		t('Streamlines: ${1} supply ${2}; ${3} return ${4} on ${5} and ${6} on other layers, with a circle where it changes layer.', setup.rail, roleColour('supply').name, setup.ground, roleColour('returnTop').name, layerName(board.stackup.copper[0].id), roleColour('returnOther').name),
+		t('Streamlines: ${1} supply ${2}; ${3} return ${4} on ${5} and ${6} on other layers, with a circle where it changes layer.', rail, roleColour('supply').name, setup.ground, roleColour('returnTop').name, layerName(board.stackup.copper[0].id), roleColour('returnOther').name),
 		t('${1} overlay marker(s).', String(drawn.markers)),
 		...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 	].filter(Boolean);
@@ -605,7 +607,7 @@ const panelHost = {
 			const net = run.hz ? t('${1} at ${2}', run.net, formatHz(run.hz)) : run.net;
 			return run.drivers?.length ? t('HF check: ${1}, driver ${2}', net, run.drivers.join(', ')) : t('HF check: ${1}', net);
 		}
-		return t('DC ${1} / ${2}, source ${3}, loads ${4}', run.input.rail, run.input.ground, run.input.source, (run.input.loads ?? []).join(', ') || '-');
+		return t('DC ${1} / ${2}, source ${3}, loads ${4}', railLabel(run.input), run.input.ground, run.input.source, (run.input.loads ?? []).join(', ') || '-');
 	},
 };
 

@@ -132,5 +132,7 @@
 	"The sample is a complete example to start from.": "The sample is a complete example to start from.",
 	"Choose the CSV file…": "Choose the CSV file…",
 	"Save the sample CSV as a template (${1})": "Save the sample CSV as a template (${1})",
-	"Sample saved as ${1}: edit it and load it here.": "Sample saved as ${1}: edit it and load it here."
+	"Sample saved as ${1}: edit it and load it here.": "Sample saved as ${1}: edit it and load it here.",
+	"${1} continues through series parts to the nets below. Ticked nets are solved with it as one rail, the parts between them taken as shorts; untick all to solve ${1} alone.": "${1} continues through series parts to the nets below. Ticked nets are solved with it as one rail, the parts between them taken as shorts; untick all to solve ${1} alone.",
+	"${1} (through ${2})": "${1} (through ${2})"
 }

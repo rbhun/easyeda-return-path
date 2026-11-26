@@ -1,7 +1,7 @@
 // DC return-current view as a standalone SVG string. Pure, no I/O. The same layers of information
 // the extension draws with indicator markers: streamlines, colour-binned density contours and the
 // bottleneck, plus (per-layer views) a binned density raster that markers cannot draw.
-import { bbox, DENSITY_LEVELS, densityBin, densityContours, dominantLayer, type Board, type DcLayerField, type DcNetResult, type DcResult, type Path, type Paths, type Pt, type Streamline } from '@returnpath/core';
+import { bbox, DENSITY_LEVELS, densityBin, densityContours, dominantLayer, railLabel, type Board, type DcLayerField, type DcNetResult, type DcResult, type Path, type Paths, type Pt, type Streamline } from '@returnpath/core';
 
 export interface DcViewOptions {
   title: string;
@@ -80,7 +80,7 @@ export function renderDc(board: Board, res: DcResult, view: DcViewOptions): stri
 
   // Pads for context.
   for (const p of board.pads) {
-    const col = p.net === setup.rail ? SUPPLY_COLOR : p.net === setup.ground ? RETURN_COLOR : '#64748b';
+    const col = (setup.railNets ?? [setup.rail]).includes(p.net) ? SUPPLY_COLOR : p.net === setup.ground ? RETURN_COLOR : '#64748b';
     el(`<path d="${d(p.shape)}" fill="${col}" fill-opacity="0.35" stroke="${col}" stroke-opacity="0.8" stroke-width="0.8"/>`);
   }
 
@@ -137,7 +137,7 @@ export function renderDc(board: Board, res: DcResult, view: DcViewOptions): stri
     el(`<text x="${x}" y="${py}" fill="${color}" font-size="${size}"${bold ? ' font-weight="bold"' : ''}>${esc(t)}</text>`);
     py += size + 6;
   };
-  text(`DC loop: ${setup.rail} / ${setup.ground}`, 16, '#e5e7eb', true);
+  text(`DC loop: ${railLabel(setup)} / ${setup.ground}`, 16, '#e5e7eb', true);
   text(`Source: ${setup.source.designator}`);
   text(`Loads: ${setup.loads.map((l) => `${l.designator} ${setup.normalised ? `${Math.round(l.current * 100)} %` : `${(l.current * 1000).toFixed(0)} mA`}`).join(', ')}`);
   if (setup.normalised) text('No load currents given: 1 A total, split equally.', 11, '#94a3b8');
@@ -151,7 +151,7 @@ export function renderDc(board: Board, res: DcResult, view: DcViewOptions): stri
     py += 4;
   }
   py += 6;
-  text(view.net ? 'Density bins (raster and contours)' : `Density contours (${setup.rail} dashed, ${setup.ground} solid)`, 14, '#e5e7eb', true);
+  text(view.net ? 'Density bins (raster and contours)' : `Density contours (${railLabel(setup)} dashed, ${setup.ground} solid)`, 14, '#e5e7eb', true);
   for (const { net, field } of shown) {
     const scale = field.peak?.j || net.fullScale;
     text(`${net.net} on ${layerName(field.layer)} (100 % = ${scale.toFixed(3)} ${unit})`, 11, '#94a3b8');
@@ -163,7 +163,7 @@ export function renderDc(board: Board, res: DcResult, view: DcViewOptions): stri
   }
   py += 6;
   text('Legend', 14, '#e5e7eb', true);
-  for (const [color, t, dash] of [[SUPPLY_COLOR, `${setup.rail} streamlines, source → loads`, false], [RETURN_COLOR, `${setup.ground} streamlines, loads → source`, false], ['#94a3b8', 'dashed: streamline on another layer', true]] as const) {
+  for (const [color, t, dash] of [[SUPPLY_COLOR, `${railLabel(setup)} streamlines, source → loads`, false], [RETURN_COLOR, `${setup.ground} streamlines, loads → source`, false], ['#94a3b8', 'dashed: streamline on another layer', true]] as const) {
     el(`<line x1="${px + 18}" y1="${py - 4}" x2="${px + 40}" y2="${py - 4}" stroke="${color}" stroke-width="2.5" ${dash ? 'stroke-dasharray="5 3"' : ''}/>`);
     text(t, 11, '#cbd5e1', false, px + 48);
   }

@@ -8,7 +8,10 @@ import { runAsync, runSync, type RunOptions, type Steps } from '../budget.js';
 import { buildReferenceCopperSteps, type LayerCopper } from '../refcopper.js';
 import { MULTI_LAYER, type Board, type Pad, type Pt } from '../types.js';
 import { cellCentre, cellOf, inGrid, padCells, rasterNet, type Grid } from './raster.js';
-import type { DcSetup } from './rails.js';
+import type { DcBridge, DcSetup } from './rails.js';
+
+/** Conductance of a part joining two nets of one rail, S (1 mΩ: a short next to the copper). */
+const BRIDGE_S = 1000;
 
 export interface DcOptions {
   /** Raster cell, mm. Default: picked from maxNodes. */
@@ -83,6 +86,8 @@ export interface DcNetResult {
   drop: number;
   /** Loads with no copper path to the source on this net. */
   unconnected: string[];
+  /** Parts joining the nets of a rail of several nets: each side's pad cells per layer id, and the side's centre. */
+  bridges: { designator: string; sides: { net: string; at: Pt; cells: Map<number, number[]> }[] }[];
   nodes: number;
   iterations: number;
   residual: number;
@@ -115,7 +120,7 @@ function copperThickness(board: Board, opts: DcOptions, warnings: string[]): Map
 }
 
 function chooseGrid(board: Board, setup: DcSetup, opts: DcOptions): Grid {
-  const nets = new Set([setup.rail, setup.ground]);
+  const nets = new Set([...(setup.railNets ?? [setup.rail]), setup.ground]);
   const parts = [
     ...board.outline,
     ...board.tracks.filter((t) => nets.has(t.net)).map((t) => [t.a, t.b]),
@@ -161,13 +166,13 @@ export function* solveDcSteps(board: Board, setup: DcSetup, options: Partial<DcO
   yield { phase: 'reference copper', fraction: 0 };
   const refCopper = yield* buildReferenceCopperSteps(board, { clearance: opts.clearance });
 
-  const solveNet = (net: string, role: 'supply' | 'return'): Steps<DcNetResult> => {
+  const solveNet = (nets: string[], role: 'supply' | 'return'): Steps<DcNetResult> => {
     const sourcePads = role === 'supply' ? setup.source.railPads : setup.source.groundPads;
     const loads = setup.loads.map((l) => ({ designator: l.designator, current: l.current, pads: role === 'supply' ? l.railPads : l.groundPads }));
-    return solveNetField(board, grid, refCopper, thickness, net, role, sourcePads, loads, opts);
+    return solveNetField(board, grid, refCopper, thickness, nets, role, sourcePads, loads, opts, role === 'supply' ? setup.bridges ?? [] : []);
   };
-  const supply = yield* solveNet(setup.rail, 'supply');
-  const ret = setup.source.groundPads.length ? yield* solveNet(setup.ground, 'return') : undefined;
+  const supply = yield* solveNet(setup.railNets ?? [setup.rail], 'supply');
+  const ret = setup.source.groundPads.length ? yield* solveNet([setup.ground], 'return') : undefined;
   for (const r of [supply, ret]) {
     if (!r) continue;
     for (const u of r.unconnected) warnings.push(`${u} has no copper path to ${setup.source.designator} on ${r.net}; left out.`);
@@ -181,19 +186,26 @@ function* solveNetField(
   g: Grid,
   refCopper: Map<number, LayerCopper>,
   thickness: Map<number, number>,
-  net: string,
+  nets: string[],
   role: 'supply' | 'return',
   sourcePads: Pad[],
   loads: { designator: string; current: number; pads: Pad[] }[],
   opts: DcOptions,
+  bridgeParts: DcBridge[] = [],
 ): Steps<DcNetResult> {
   const { copper, dielectrics } = board.stackup;
   const L = copper.length;
   const NC = g.nx * g.ny;
+  const net = nets.join(' + ');
   const weights: Float32Array[] = [];
   for (const [li, l] of copper.entries()) {
     yield { phase: `raster ${net}`, fraction: li / L };
-    weights.push(rasterNet(board, g, net, l.id, refCopper.get(l.id)?.byNet.get(net)));
+    const w = rasterNet(board, g, nets[0], l.id, refCopper.get(l.id)?.byNet.get(nets[0]));
+    for (const n of nets.slice(1)) {
+      const more = rasterNet(board, g, n, l.id, refCopper.get(l.id)?.byNet.get(n));
+      for (let c = 0; c < NC; c++) if (more[c] > w[c]) w[c] = more[c];
+    }
+    weights.push(w);
   }
   yield { phase: `network ${net}` };
 
@@ -233,8 +245,8 @@ function* solveNetField(
   const inPlaneEdges = ea.length;
 
   const barrels: Barrel[] = [
-    ...board.vias.filter((v) => v.net === net).map((v) => ({ id: v.id, at: v.at, diameter: v.drill > 0 ? v.drill : v.diameter / 2 })),
-    ...board.pads.filter((p) => p.net === net && p.layer === MULTI_LAYER && p.holeDiameter > 0).map((p) => ({ id: p.id, at: p.at, diameter: p.holeDiameter })),
+    ...board.vias.filter((v) => nets.includes(v.net)).map((v) => ({ id: v.id, at: v.at, diameter: v.drill > 0 ? v.drill : v.diameter / 2 })),
+    ...board.pads.filter((p) => nets.includes(p.net) && p.layer === MULTI_LAYER && p.holeDiameter > 0).map((p) => ({ id: p.id, at: p.at, diameter: p.holeDiameter })),
   ];
   const barrelEdges: { barrel: number; e: number; upper: number; lower: number }[] = [];
   barrels.forEach((b, bi) => {
@@ -272,6 +284,24 @@ function* solveNetField(
     }
     return out;
   };
+  // A part joining two nets of the rail: a short from the pads on one net to those on the next.
+  const bridges: DcNetResult['bridges'] = [];
+  for (const bp of bridgeParts) {
+    const sides = [...new Set(bp.pads.map((p) => p.net))].map((n) => {
+      const pads = bp.pads.filter((p) => p.net === n);
+      const at = { x: pads.reduce((sum, p) => sum + p.at.x, 0) / pads.length, y: pads.reduce((sum, p) => sum + p.at.y, 0) / pads.length };
+      return { net: n, at, cells: terminalCells(pads) };
+    });
+    const nodeOfSide = (side: (typeof sides)[number]) => {
+      for (const [layer, cs] of side.cells) for (const c of cs) return nodeOf[layerIdx.get(layer)!][c];
+      return -1;
+    };
+    const ends = sides.map(nodeOfSide);
+    if (ends.filter((n) => n >= 0).length < 2) continue;
+    for (let k = 1; k < ends.length; k++) if (ends[0] >= 0 && ends[k] >= 0) edge(ends[0], ends[k], BRIDGE_S);
+    bridges.push({ designator: bp.designator, sides });
+  }
+
   const fixed = new Uint8Array(N);
   const sourceCells = new Map<number, Set<number>>();
   for (const [layer, cells] of terminalCells(sourcePads)) {
@@ -478,6 +508,7 @@ function* solveNetField(
   for (const [layer, cells] of sourceCells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
   for (const lc of loadCells) for (const [layer, cells] of lc.cells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
   for (const v of vias) if (v.cell >= 0) for (let li = 0; li < L; li++) markAround(li, v.cell);
+  for (const br of bridges) for (const side of br.sides) for (const [layer, cells] of side.cells) for (const c of cells) markAround(layerIdx.get(layer)!, c);
   let bottleneck: DcNetResult['bottleneck'];
   let maxAny = 0;
   for (let li = 0; li < L; li++) {
@@ -506,6 +537,7 @@ function* solveNetField(
     fullScale: bottleneck?.j || maxAny || 1,
     drop,
     unconnected,
+    bridges,
     nodes: N,
     iterations: it,
     residual: res,

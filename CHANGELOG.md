@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.54] - 2026-11-26
+
+From Balazs: check several DC nets together. On the R-Com dongle, VBUS_R and VBUS_RAW are the same power rail, on either side of the fuse F1.
+
+- **A rail can span several nets.** When the rail you check continues through a two-pad series part (fuse, ferrite bead, inductor, diode or resistor) to another power-like net, the DC wizard lists those nets. Nets further along are listed too, for example VBUS_R → F1 → VBUS_RAW → D1 → VBUS. They are ticked by default, and the next run on the same rail remembers your choice. Ticked nets are solved as one rail named "VBUS_R + VBUS_RAW", and the page does not appear for rails without such neighbours.
+- **The parts between the nets are taken as shorts (1 mΩ)**, so the drop shown is the copper's alone. The result says so ("F1 joins VBUS_R + VBUS_RAW, taken as a short: its own drop is not included"). They are not loads. The source and loads are offered from every net of the rail.
+- **The streamline runs through the part**, drawn straight from one of its pads to the other, so a load beyond the fuse gets a line back to the source.
+- CLI: `--dc VBUS_R,VBUS_RAW` checks the nets together; the report lists `railNets` and `bridges`.
+
 ## [0.1.53] - 2026-11-26
 
 HF check: each return is one unbroken line, where the current actually flows.

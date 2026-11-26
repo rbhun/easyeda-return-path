@@ -11,6 +11,9 @@ import {
   looksLikePowerNet,
   pairGround,
   parseCurrents,
+  railBridges,
+  railLabel,
+  railNeighbours,
   railVoltage,
   rect,
   returnPads,
@@ -288,6 +291,38 @@ test('drawn streamlines: one per load, later ones end where they meet an earlier
     return Math.abs(Math.atan2(Math.sin(t), Math.cos(t))) * (180 / Math.PI);
   });
   assert.ok(Math.max(...turns) < 40, `sharpest turn ${Math.max(...turns).toFixed(0)}° over 0.25 mm`);
+});
+
+test('a rail of two nets joined by a fuse: solved as one, the line runs through the fuse to the load beyond it', () => {
+  // VBUS_R from the connector to the fuse, VBUS_RAW from the fuse to the load; the copper of the two nets does not touch.
+  const comp = (id: string, designator: string, pads: Pad[]): Component => ({ id, designator, at: pads[0].at, rotation: 0, layer: 1, padIds: pads.map((p) => p.id) });
+  const j1 = [pad('j1.1', 'VBUS_R', 1, 0.6, 2, 0.8, 0.8, 'j1'), pad('j1.2', 'GND', 1, 0.6, 4.5, 0.8, 0.8, 'j1')];
+  const f1 = [pad('f1.1', 'VBUS_R', 1, 9.4, 2, 0.8, 0.8, 'f1'), pad('f1.2', 'VBUS_RAW', 1, 11.1, 2, 0.8, 0.8, 'f1')];
+  const u1 = [pad('u1.1', 'VBUS_RAW', 1, 19.4, 2, 0.8, 0.8, 'u1'), pad('u1.2', 'GND', 1, 19.4, 4.5, 0.8, 0.8, 'u1')];
+  const b = board(1, {
+    pads: [...j1, ...f1, ...u1],
+    components: [comp('j1', 'J1', j1), comp('f1', 'F1', f1), comp('u1', 'U1', u1)],
+    pours: [pour('VBUS_R', 1, [rect(5, 2, 10, 3)]), pour('VBUS_RAW', 1, [rect(15.25, 2, 9.5, 3)]), pour('GND', 1, [rect(10, 4.5, 20, 1)])],
+    nets: ['VBUS_R', 'VBUS_RAW', 'GND'],
+  });
+  assert.deepEqual(railNeighbours(b, 'VBUS_R'), [{ net: 'VBUS_RAW', via: 'F1' }]);
+  assert.deepEqual(buildDcSetup(b, { rail: 'VBUS_R', ground: 'GND', source: 'J1' }).loads.map((l) => l.designator), [], 'VBUS_R alone: the load is beyond the fuse');
+
+  const setup = buildDcSetup(b, { rail: 'VBUS_R', railNets: ['VBUS_RAW'], ground: 'GND', source: 'J1' });
+  assert.equal(railLabel(setup), 'VBUS_R + VBUS_RAW');
+  assert.deepEqual(setup.loads.map((l) => l.designator), ['U1'], 'the fuse joins the nets; it is no load');
+  assert.deepEqual(railBridges(b, setup.railNets!).map((x) => x.designator), ['F1']);
+  assert.ok(setup.warnings.some((w) => /F1 joins VBUS_R \+ VBUS_RAW, taken as a short/.test(w)));
+  const res = solveDc(b, setup, { cell: 0.2 });
+  assert.equal(res.supply.net, 'VBUS_R + VBUS_RAW');
+  assert.deepEqual(res.supply.unconnected, []);
+  // Copper only: 9 mm + 8.6 mm of 3 mm wide 35 µm copper at 1 A, about 3 mΩ.
+  assert.ok(res.supply.drop > 0.002 && res.supply.drop < 0.005, `drop ${(res.supply.drop * 1000).toFixed(2)} mV`);
+  const [line] = traceStreamlines(res.grid, res.supply, DRAWN_STREAMS);
+  assert.ok(line.complete, 'the line reaches the connector');
+  const pts = line.segments.flatMap((sg) => sg.pts);
+  for (const fp of f1) assert.ok(pts.some((q) => Math.hypot(q.x - fp.at.x, q.y - fp.at.y) < 0.3), `through F1 pad ${fp.id}`);
+  assert.ok(Math.hypot(pts[0].x - 0.6, pts[0].y - 2) < 0.6 && Math.hypot(pts.at(-1)!.x - 19.4, pts.at(-1)!.y - 2) < 0.6, 'from the connector to the load');
 });
 
 test('focusInput: one part of the rail, with its own current when one was given', () => {
