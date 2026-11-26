@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { unzipSync, strFromU8 } from 'fflate';
-import { analyzeNet, area, buildReferenceCopper, dist } from '@returnpath/core';
+import { analyzeNet, area, buildReferenceCopper, dist, guessDrivers, pinRole } from '@returnpath/core';
 import { parseEasyEdaPcb } from '../src/easyeda/parse.js';
 import { buildEpro } from '../src/synth/make-board.js';
 
@@ -107,4 +107,33 @@ test('2-layer coplanar return: drawn beside the trace; parts without a ground pa
   const ys = plane.flatMap((t) => t.pts.filter((p) => p.x > 15 && p.x < 50).map((p) => p.y - 10));
   assert.ok(ys.some((d) => d > 0.2 && d < 0.6) && ys.some((d) => d < -0.2 && d > -0.6), `coplanar return beside the trace on both sides: ${ys}`);
   assert.deepEqual(an.findings.filter((f) => f.kind === 'loop-closure').map((f) => f.severity), ['warn', 'warn']);
+});
+
+test('driver loop: the rising edge returns through the nearest decap into the driver supply pin', () => {
+  const b = boardFrom('demo', 'object');
+  const an = analyzeNet(b, 'CLK', { drivers: ['U1'] });
+  const f = an.findings.filter((x) => x.kind === 'driver-loop');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].severity, 'warn', 'between the 4 mm and 10 mm thresholds');
+  assert.match(f[0].message, /into U1 pad 2 \(GND\); the rising edge through decap C1 into U1 pad 3 \(3V3\), 8\.55 mm/);
+  const supply = an.returnPath!.jumps.filter((j) => j.kind === 'supply');
+  assert.equal(supply.length, 2, 'ground pin → decap, decap → supply pin');
+  assert.deepEqual(an.returnPath!.drivers.map((d) => d.decap?.component.designator), ['C1']);
+  const strict = analyzeNet(b, 'CLK', { drivers: ['U1'], driverDecap: { good: 4, warn: 6 } });
+  assert.equal(strict.findings.find((x) => x.message.startsWith('U1 (driver)'))!.severity, 'error');
+  assert.ok(!analyzeNet(b, 'CLK').findings.some((x) => x.message.includes('(driver)')), 'no driver, no driver loop');
+});
+
+test('driver guess from pin names: a named output wins, a bus driven from either end stays a question', () => {
+  const b = boardFrom('demo', 'object');
+  const ic = (d: string) => b.components.find((c) => c.designator === d)!.id;
+  const sig = (d: string) => b.pads.find((p) => p.net === 'CLK' && p.componentId === ic(d))!;
+  const none = guessDrivers(b, 'CLK');
+  assert.deepEqual([none.candidates.map((c) => c.designator), none.confident], [['U1', 'U2'], false], 'no pin names');
+  sig('U1').pinName = 'USART1_TX';
+  sig('U2').pinName = 'RXD';
+  assert.deepEqual([guessDrivers(b, 'CLK').drivers, guessDrivers(b, 'CLK').confident], [['U1'], true]);
+  assert.equal(pinRole('SDA/MOSI').role, 'bidirectional', 'a shared pin is not taken as a driver');
+  for (const x of [...b.pads, ...b.tracks]) if (x.net === 'CLK') x.net = 'I2C_SDA';
+  assert.equal(guessDrivers(b, 'I2C_SDA').confident, false, 'an I2C net is driven from either end whatever the pins say');
 });

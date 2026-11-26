@@ -140,7 +140,7 @@ test('every API call of the board read is logged before it is made', async () =>
 	await ext.showReturnPath();
 	const calls = saved(mock).map(l => /read board: (pcb_\w+\.\w+)…$/.exec(l)?.[1]).filter(Boolean);
 	assert.ok(saved(mock).some(l => /read board: pcb_PrimitivePoured.get 1\/3 \(.*\)…$/.test(l)));
-	assert.deepEqual(calls, ['pcb_Layer.getStackup', 'pcb_PrimitiveLine.getAll', 'pcb_PrimitiveArc.getAll', 'pcb_PrimitiveVia.getAll', 'pcb_PrimitivePad.getAll', 'pcb_PrimitiveComponent.getAll', 'pcb_PrimitiveFill.getAll', 'pcb_PrimitivePoured.getAllPrimitiveId', 'pcb_PrimitivePour.getAll']);
+	assert.deepEqual(calls, ['pcb_Layer.getStackup', 'pcb_PrimitiveLine.getAll', 'pcb_PrimitiveArc.getAll', 'pcb_PrimitiveVia.getAll', 'pcb_PrimitivePad.getAll', 'pcb_PrimitiveComponent.getAll', 'pcb_PrimitiveFill.getAll', 'pcb_PrimitivePoured.getAllPrimitiveId', 'pcb_PrimitivePour.getAll', 'pcb_Net.getNetlist']);
 });
 
 test('log writes that never answer are switched off and the run still finishes', async () => {

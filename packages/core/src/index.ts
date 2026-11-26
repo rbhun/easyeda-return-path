@@ -6,5 +6,7 @@ export * from './refcopper.js';
 export * from './detour.js';
 export * from './analyze.js';
 export * from './returnpath.js';
+export * from './driver.js';
 export * from './easyeda-polygon.js';
 export * from './dc/index.js';
+export * from './stackup.js';

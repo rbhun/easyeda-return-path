@@ -38,5 +38,11 @@
 	"Hops (via, decap, cap, pin)": "跳转（过孔、去耦、电容、引脚）",
 	"Gaps and bottleneck": "缝隙与瓶颈",
 	"±3h band edges": "±3h 带边界",
-	"This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.": "此版本的 EasyEDA 未能打开面板窗口。Return Path 菜单项无需面板即可使用；详情见保存的日志。"
+	"This EasyEDA version did not open the panel window. The Return Path menu items work without it; the saved log has the details.": "此版本的 EasyEDA 未能打开面板窗口。Return Path 菜单项无需面板即可使用；详情见保存的日志。",
+	"Driver: not chosen, so only the pin at each end closes the loop.": "未选择驱动器，因此仅由两端的引脚闭合回路。",
+	"All of them (driven from either end)": "全部（可从任一端驱动）",
+	"None: skip the driver loop": "无：跳过驱动器回路",
+	"Which part drives ${1}? Its supply pins and decap close the loop for the edge that does not return straight into its ground pin.": "哪个器件驱动 ${1}？对于不直接回到其地引脚的那个边沿，由其电源引脚和去耦电容闭合回路。",
+	"Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.": "驱动器：${1}。其另一边沿以${2}虚线绘制：从其地引脚经去耦电容到其电源引脚。",
+	"Show for Selected Net: ${1}, driver ${2}": "对所选网络显示：${1}，驱动器 ${2}"
 }

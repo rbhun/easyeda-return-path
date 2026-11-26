@@ -30,15 +30,27 @@ function epro2(): string {
     line({ type: 'COMPONENT', id: 'c1' }, { layerId: 1, x: 1000, y: -500, angle: 0, attrs: {} }),
     line({ type: 'ATTR', id: 'a1' }, { parentId: 'c1', key: 'Footprint', value: 'fp1' }),
     line({ type: 'ATTR', id: 'a2' }, { parentId: 'c1', key: 'Designator', value: 'U1' }),
+    line({ type: 'ATTR', id: 'a3' }, { parentId: 'c1', key: 'Device', value: 'dev1' }),
     line({ type: 'PAD_NET', id: '["PAD_NET","c1","1","e1"]' }, { padNet: 'GND' }),
   ];
   const footprint = [
     line({ type: 'DOCHEAD', ticket: 2 }, { docType: 'FOOTPRINT', uuid: 'fp1' }),
     line({ type: 'PAD', id: 'e1' }, { netName: '', layerId: 1, num: '1', centerX: 0, centerY: 0, padAngle: 0, hole: null, defaultPad: { padType: 'RECT', width: 40, height: 20 } }),
   ];
+  // Pin names live in the symbol, reached through the component's device.
+  const device = [
+    line({ type: 'DOCHEAD', ticket: 3 }, { docType: 'DEVICE', uuid: 'dev1' }),
+    line({ type: 'META', id: 'META' }, { attributes: { Symbol: 'sym1', Footprint: 'fp1' } }),
+  ];
+  const symbol = [
+    line({ type: 'DOCHEAD', ticket: 4 }, { docType: 'SYMBOL', uuid: 'sym1' }),
+    line({ type: 'PIN', id: 'pin1' }, { x: 0, y: 0 }),
+    line({ type: 'ATTR', id: 'pa1' }, { parentId: 'pin1', key: 'Pin Number', value: '1' }),
+    line({ type: 'ATTR', id: 'pa2' }, { parentId: 'pin1', key: 'Pin Name', value: 'GND' }),
+  ];
   const dir = mkdtempSync(join(tmpdir(), 'epro2-'));
   const file = join(dir, 'board.epro2');
-  writeFileSync(file, zipSync({ 'project2.json': strToU8('{}'), 'board.epru': strToU8([...footprint, ...pcb].join('\n')) }));
+  writeFileSync(file, zipSync({ 'project2.json': strToU8('{}'), 'board.epru': strToU8([...footprint, ...device, ...symbol, ...pcb].join('\n')) }));
   return file;
 }
 
@@ -55,4 +67,5 @@ test('.epro2 (one .epru, object form): layers in use, tracks, 10 mil pour fills 
   assert.equal(pad.net, 'GND');
   assert.ok(Math.abs(area(pad.shape) - 40 * 20 * 0.0254 ** 2) < 1e-6);
   assert.equal(b.components[0].designator, 'U1');
+  assert.equal(pad.pinName, 'GND', 'pin name from the symbol of the device');
 });

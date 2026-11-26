@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Resvg } from '@resvg/resvg-js';
-import { AnalysisAborted, analyzeNet, guessRails, hfApplicability, type Analysis, type Board } from '@returnpath/core';
+import { AnalysisAborted, analyzeNet, guessDrivers, guessRails, hfApplicability, type Analysis, type Board } from '@returnpath/core';
 import { dcReport, dcViews, describeGuess, runDc } from './dc.js';
 import { loadBoard } from './easyeda/load.js';
 import { renderOverlay } from './render/svg.js';
@@ -26,6 +26,7 @@ const { values, positionals } = parseArgs({
     loads: { type: 'string' },
     current: { type: 'string' },
     cell: { type: 'string' },
+    driver: { type: 'string' },
     force: { type: 'boolean', default: false },
     verbose: { type: 'boolean', short: 'v', default: false },
     help: { type: 'boolean', short: 'h', default: false },
@@ -35,7 +36,7 @@ const { values, positionals } = parseArgs({
 const file = positionals[0];
 if (values.help || !file) {
   console.log(`Usage: returnpath <board.epro|board.epro2|board.epcb> --net CLK [--out dir] [--name prefix] [--png]
-       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets] [--force] [--verbose]
+       [--clearance mm] [--phys-unit auto|mil|mm] [--pcb name] [--list-nets] [--driver U1[,U2]] [--force] [--verbose]
        returnpath <board> --list-rails
        returnpath <board> --dc 3V3 [--ground GND] [--source U1] [--loads U2,U3] [--current U2=0.15,U3=20mA]
        [--cell mm] [--out dir] [--name prefix] [--png]`);
@@ -86,10 +87,16 @@ if (!scope.ok && !values.force) {
   console.error(`${scope.message}\nCLI: returnpath <board> --dc <rail>. Pass --force to run the high-frequency check anyway.`);
   process.exit(2);
 }
+const guess = guessDrivers(board, net);
+const drivers = values.driver ? values.driver.split(',').map((d) => d.trim()).filter(Boolean) : guess.confident ? guess.drivers : [];
+console.log(`driver candidates: ${guess.candidates.map((c) => `${c.designator} (${c.role}: ${c.why})`).join('; ') || 'none'}`);
+if (values.driver) console.log(`driver: ${drivers.join(', ')} (from --driver)`);
+else if (guess.confident) console.log(`driver: ${drivers.join(', ')} (guessed)`);
+else console.log('driver: not clear from the pin names; pass --driver U1 (or U1,U2 for both directions) to trace the driver supply loop');
 const phaseMs = new Map<string, number>();
 let analysis: Analysis;
 try {
-  analysis = analyzeNet(board, net, values.clearance ? { clearance: Number(values.clearance) } : {}, {
+  analysis = analyzeNet(board, net, { ...(values.clearance ? { clearance: Number(values.clearance) } : {}), drivers }, {
     timeBudgetMs: 120_000,
     onPhase: (_p, prev, ms) => prev && phaseMs.set(prev, (phaseMs.get(prev) ?? 0) + ms),
   });
