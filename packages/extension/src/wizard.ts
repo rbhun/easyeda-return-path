@@ -16,6 +16,8 @@ export interface Ask {
 	select: (title: string, prompt: string, options: Option[], dflt?: string) => Promise<string | undefined>;
 	multi: (title: string, prompt: string, options: Option[], dflt: string[]) => Promise<string[] | undefined>;
 	input: (title: string, prompt: string, value: string) => Promise<string | undefined>;
+	/** One current per load (`150mA`, `0.02`), prefilled with `values`; resolves `U2=150mA, U3=0.02`, empty when every field is cleared. */
+	currents: (title: string, prompt: string, loads: Option[], values: string[]) => Promise<string | undefined>;
 	/** True when the user accepts with the `ok` button. */
 	confirm: (title: string, prompt: string, ok: string) => Promise<boolean>;
 	/** Ends the questions: closes the wizard window, if one is open. */
@@ -36,6 +38,7 @@ export function loggedAsk(ask: Ask): Ask {
 		select: (title, prompt, options, dflt) => around(`${prompt} (${options.length} options)`, () => ask.select(title, prompt, options, dflt)),
 		multi: (title, prompt, options, dflt) => around(`${prompt} (${options.length} options)`, () => ask.multi(title, prompt, options, dflt)),
 		input: (title, prompt, value) => around(prompt, () => ask.input(title, prompt, value)),
+		currents: (title, prompt, loads, values) => around(`${prompt} (${loads.length} loads)`, () => ask.currents(title, prompt, loads, values)),
 		confirm: (title, prompt, ok) => around(prompt, () => ask.confirm(title, prompt, ok)),
 		close: () => ask.close(),
 	};
@@ -78,6 +81,15 @@ export function dialogAsk(): Ask {
 				eda.sys_Dialog.showInputDialog(prompt, undefined, title, 'text', value, undefined, v => resolve(v == null ? undefined : String(v)));
 			});
 		},
+		currents: async (title, prompt, loads, values) => {
+			const v = await askInWindow('currents', title, prompt, loads, values);
+			if (v !== null)
+				return typeof v === 'string' ? v : undefined;
+			const text = currentsText(loads.map(l => l.value), values);
+			return new Promise((resolve) => {
+				eda.sys_Dialog.showInputDialog(prompt, undefined, title, 'text', text, undefined, v => resolve(v == null ? undefined : String(v)));
+			});
+		},
 		confirm: async (title, prompt, ok) => {
 			const v = await askInWindow('confirm', title, prompt, [], '', ok);
 			if (v !== null)
@@ -90,6 +102,18 @@ export function dialogAsk(): Ask {
 	};
 }
 
+/** `U2=150mA, U3=0.02` from designators and their current fields; empty fields are left out. */
+export function currentsText(designators: string[], values: string[]): string {
+	return designators.map((d, i) => [d, (values[i] ?? '').replace(/\s+/g, '')] as const).filter(([, v]) => v).map(([d, v]) => `${d}=${v}`).join(', ');
+}
+
+/** Current a load is prefilled with when no earlier run gave it one, A. */
+export const DEFAULT_LOAD_CURRENT = 0.1;
+
+function currentField(a: number): string {
+	return a < 1 ? `${+(a * 1000).toFixed(3)}mA` : `${+a.toFixed(4)}`;
+}
+
 export interface WizardResult {
 	input: DcSetupInput;
 	/** Every confirmed rail with its ground. */
@@ -97,7 +121,8 @@ export interface WizardResult {
 }
 
 /** Runs the wizard; undefined when the user cancels or there is nothing to solve. */
-export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string, railGiven = false): Promise<WizardResult | undefined> {
+/** `previous`: the last DC run's input; its load currents prefill the currents page when the same rail is solved. */
+export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string, railGiven = false, previous?: DcSetupInput): Promise<WizardResult | undefined> {
 	const title = t('DC return current');
 	log('wizard: guessing rails…');
 	await checkpoint();
@@ -171,7 +196,10 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	if (!loads?.length)
 		return undefined;
 	const designator = (id: string) => board.components.find(c => c.id === id)?.designator ?? id;
-	const currentText = await ask.input(title, t('Load currents, e.g. ${1}. Leave empty to split 1 A equally and show normalised density.', loads.slice(0, 2).map((id, i) => `${designator(id)}=${i ? '20mA' : '0.15'}`).join(', ')), '');
+	const known = previous?.rail === rail ? previous.currents ?? {} : {};
+	const loadRows = loads.map(id => ({ value: designator(id), label: loadOptions.find(o => o.value === id)?.label ?? designator(id) }));
+	const values = loadRows.map(o => currentField(known[o.value] ?? DEFAULT_LOAD_CURRENT));
+	const currentText = await ask.currents(title, t('Current of each load: 150mA, or 0.15 for amps. Prefilled with ${1}, or with the last run\'s value on this rail. Clear every field to split 1 A equally and show normalised density.', currentField(DEFAULT_LOAD_CURRENT)), loadRows, values);
 	if (currentText === undefined)
 		return undefined;
 

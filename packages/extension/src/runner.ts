@@ -415,7 +415,7 @@ export interface StepRunOptions {
  */
 export async function runSteps<T>(steps: Steps<T>, o: StepRunOptions): Promise<T> {
 	if (running)
-		throw new AnalysisAborted('cancelled', t('${1} is still running. Cancel it first with Cancel in the Return Path panel.', running.title));
+		throw new AnalysisAborted('cancelled', t('${1} is still running. Cancel it first: the Selected trace button turns into Cancel while an analysis runs.', running.title));
 	const signal = { aborted: false };
 	running = { title: o.title, signal };
 	const bar = (eda as unknown as { sys_LoadingAndProgressBar?: { showProgressBar: (p?: number, title?: string) => void; destroyProgressBar: () => void } }).sys_LoadingAndProgressBar;

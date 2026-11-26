@@ -55,10 +55,23 @@ test('a power net is not run through the high-frequency check: hint, then the DC
 
 	const accept = install(createMockEda(board, '3V3', [], (d: DialogCall) => (d.kind === 'confirm' ? true : d.dflt)));
 	await ext.runReturnPath(dialogAsk());
-	assert.deepEqual(accept.dialogs.map(d => d.kind), ['confirm', 'select', 'multi', 'input'], 'the selected rail is not asked for again: source, loads, currents');
+	assert.deepEqual(accept.dialogs.map(d => d.kind), ['confirm', 'select', 'multi', 'currents'], 'the selected rail is not asked for again: source, loads, currents');
 	assert.match(accept.dialogs[1].prompt, /active source of 3V3/);
 	assert.ok(accept.markers.length > 0);
 	assert.match(accept.messages.at(-1)!, /3V3 \/ GND: source U1/);
+});
+
+test('Selected trace: a power rail goes straight to the DC wizard, a signal net to the HF check', async () => {
+	const board = load(buildDcEpro());
+	const rail = install(createMockEda(board, '3V3'));
+	await ext.showForSelectedTrace();
+	assert.deepEqual(rail.dialogs.map(d => d.kind), ['select', 'multi', 'currents'], 'no "Open DC view?" question, and the rail is not asked for');
+	assert.match(rail.messages.at(-1)!, /^3V3 \/ GND: source U1/);
+
+	const signal = install(createMockEda(load(buildEpro('demo', 'object')), 'CLK'));
+	await ext.showForSelectedTrace();
+	assert.ok(signal.dialogs.every(d => d.kind !== 'confirm'));
+	assert.match(signal.messages.at(-1)!, /^CLK: \d+ finding/);
 });
 
 test('an error ends in a dialog and an error entry with its stack in the log', async () => {

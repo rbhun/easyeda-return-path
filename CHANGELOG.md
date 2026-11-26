@@ -2,6 +2,23 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.33] - 2026-11-26
+
+Numbered above 0.1.32, main's version.
+
+From Balazs, after 0.1.32: put a Selected trace button back where Cancel is, prefill the currents of all loads, and drop the result window now that results are in the panel.
+
+- **Selected trace** button in the panel, where Cancel was. It runs the check that fits the selected track, via or pad: the HF check for a signal net, and for a power rail the DC check straight away (no "Open DC view?" question, rail taken from the selection). While an analysis runs, the same button reads **Cancel** and stops it.
+- **Load currents, prefilled.** The currents question is now a page of its own in the wizard window, with one field per ticked load:
+  - each field is prefilled with 100 mA, or with the current the last run on the same rail gave that load;
+  - an **All loads** field sets every one at once;
+  - a value that cannot be read is outlined in red and OK stays disabled until it is fixed;
+  - clearing every field still splits 1 A equally and shows the result per amp.
+
+  With the defaults, a DC run now reports absolute drops (mV) instead of per-amp values (mV/A). The system-dialog fallback gets the same prefilled text (`U2=100mA, U3=100mA`).
+- **No result window.** A finished analysis shows its result only in the panel. The panel opens for it unless the user closed it; then a notice says the result is there.
+- Tests: Selected trace on a rail and on a signal net, the prefilled currents from the last run, and clearing every field. The mock reads results from the panel instead of from the result dialog.
+
 ## [0.1.32] - 2026-11-26
 
 Numbered above 0.1.31 on main. First opened as 0.1.29; renumbered after #12 (0.1.30) and #10 (0.1.31) merged.

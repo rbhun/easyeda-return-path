@@ -10,7 +10,7 @@
 	"No analysis is running.": "没有正在运行的分析。",
 	"Error": "错误",
 	"Details are in the log panel (bottom panel, shortcut S, Log tab).": "详细信息见日志面板（底部面板，快捷键 S，日志页）。",
-	"${1} is still running. Cancel it first with Cancel in the Return Path panel.": "${1} 仍在运行。请先在回流路径面板中点击“取消”。",
+	"${1} is still running. Cancel it first: the Selected trace button turns into Cancel while an analysis runs.": "${1} 仍在运行。请先取消：分析运行时，“所选走线”按钮会变为“取消”。",
 	"Saved log": "保存的日志",
 	"The full log is also written to: ${1}": "完整日志同时写入：${1}",
 	"To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.": "如需将日志同时写入文件，请在 高级 > 扩展管理器 中为本扩展开启“外部交互”权限。",
@@ -48,5 +48,8 @@
 	"Select all": "全选",
 	"OK": "确定",
 	"${1} of ${2} selected": "已选 ${1} / ${2}",
-	"Step ${1} of ${2}": "第 ${1} 步，共 ${2} 步"
+	"Step ${1} of ${2}": "第 ${1} 步，共 ${2} 步",
+	"All loads": "所有负载",
+	"Apply": "应用",
+	"${1}: done; open the Return Path panel to see the result.": "${1}：完成；打开回流路径面板查看结果。"
 }

@@ -10,7 +10,7 @@ export const WIZARD_HTML = '/iframe/wizard.html';
 export const TOPIC_WIZARD_ASK = 'returnpath.wizard.ask';
 export const TOPIC_WIZARD_REPLY = 'returnpath.wizard.reply';
 
-export type WizardKind = 'select' | 'multi' | 'input' | 'confirm';
+export type WizardKind = 'select' | 'multi' | 'input' | 'confirm' | 'currents';
 
 export type WizardReply =
 	| { cmd: 'hello' }
@@ -24,11 +24,11 @@ export interface WizardQuestion {
 	title: string;
 	prompt: string;
 	options: Option[];
-	/** Chosen value(s) of select and multi, the text of input. */
+	/** Chosen value(s) of select and multi, the text of input, one current per option for currents. */
 	value: string | string[];
 	/** Label of the OK button. */
 	ok: string;
-	labels: { all: string; cancel: string; count: string; step: string };
+	labels: { all: string; cancel: string; count: string; step: string; setAll: string; apply: string };
 }
 
 /** How long the page has to say hello before the system dialogs are used instead. */
@@ -139,7 +139,7 @@ export async function askInWindow(kind: WizardKind, title: string, prompt: strin
 		options,
 		value,
 		ok: ok ?? t('OK'),
-		labels: { all: t('Select all'), cancel: t('Cancel'), count: t('${1} of ${2} selected'), step: t('Step ${1} of ${2}') },
+		labels: { all: t('Select all'), cancel: t('Cancel'), count: t('${1} of ${2} selected'), step: t('Step ${1} of ${2}'), setAll: t('All loads'), apply: t('Apply') },
 	};
 	return new Promise((resolve) => {
 		const finish = (v: string | string[] | boolean | undefined) => {

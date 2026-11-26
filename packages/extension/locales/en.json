@@ -20,13 +20,13 @@
 	"Step 4/5: active source of ${1}. ${2}": "Step 4/5: active source of ${1}. ${2}",
 	"Other candidate sources are left out of the solve.": "Other candidate sources are left out of the solve.",
 	"Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.": "Step 5/5: loads on ${1}. Decaps carry no DC and other candidate sources are left out unless you tick them.",
-	"Load currents, e.g. ${1}. Leave empty to split 1 A equally and show normalised density.": "Load currents, e.g. ${1}. Leave empty to split 1 A equally and show normalised density.",
+	"Current of each load: 150mA, or 0.15 for amps. Prefilled with ${1}, or with the last run's value on this rail. Clear every field to split 1 A equally and show normalised density.": "Current of each load: 150mA, or 0.15 for amps. Prefilled with ${1}, or with the last run's value on this rail. Clear every field to split 1 A equally and show normalised density.",
 	"Cancel": "Cancel",
 	"Open DC view": "Open DC view",
 	"No analysis is running.": "No analysis is running.",
 	"Error": "Error",
 	"Details are in the log panel (bottom panel, shortcut S, Log tab).": "Details are in the log panel (bottom panel, shortcut S, Log tab).",
-	"${1} is still running. Cancel it first with Cancel in the Return Path panel.": "${1} is still running. Cancel it first with Cancel in the Return Path panel.",
+	"${1} is still running. Cancel it first: the Selected trace button turns into Cancel while an analysis runs.": "${1} is still running. Cancel it first: the Selected trace button turns into Cancel while an analysis runs.",
 	"Saved log": "Saved log",
 	"The full log is also written to: ${1}": "The full log is also written to: ${1}",
 	"To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.": "To have the log written to a file as well, allow \"External Interaction\" for this extension in Advanced > Extension Manager.",
@@ -68,5 +68,8 @@
 	"Select all": "Select all",
 	"OK": "OK",
 	"${1} of ${2} selected": "${1} of ${2} selected",
-	"Step ${1} of ${2}": "Step ${1} of ${2}"
+	"Step ${1} of ${2}": "Step ${1} of ${2}",
+	"All loads": "All loads",
+	"Apply": "Apply",
+	"${1}: done; open the Return Path panel to see the result.": "${1}: done; open the Return Path panel to see the result."
 }

@@ -70,6 +70,11 @@
 				font: inherit;
 			}
 			.muted { color: var(--muted); }
+			.current { display: flex; align-items: center; gap: 8px; padding: 3px 8px; }
+			.current span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.current input[type="text"] { flex: 0 0 96px; width: 96px; padding: 3px 6px; text-align: right; }
+			.current input.bad { border-color: #e5484d; }
+			.current button { min-width: 0; padding: 3px 10px; }
 			footer { display: flex; justify-content: flex-end; gap: 6px; flex: 0 0 auto; }
 			button {
 				min-width: 84px;
@@ -181,6 +186,37 @@
 						valid = function () { return !!read(); };
 						var checked = r.boxes.filter(function (x) { return x.checked; })[0];
 						if (checked) { focus = checked; setTimeout(function () { checked.scrollIntoView({ block: 'nearest' }); }); }
+					} else if (q.kind === 'currents') {
+						var ok = /^(\d+\.?\d*|\.\d+)(m?A?)$/i;
+						var fields = [];
+						var check = function () {
+							fields.forEach(function (f) { var v = f.value.replace(/\s+/g, ''); f.classList.toggle('bad', !!v && !ok.test(v)); });
+							refresh();
+						};
+						var all = el('input', { type: 'text', spellcheck: false, placeholder: q.value[0] || '' });
+						var apply = el('button', { type: 'button', textContent: q.labels.apply });
+						apply.onclick = function () {
+							if (!all.value.trim()) return;
+							fields.forEach(function (f) { f.value = all.value.trim(); });
+							check();
+						};
+						all.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.stopPropagation(); apply.click(); } });
+						body.appendChild(el('div', { className: 'current' }, [el('span', { className: 'muted', textContent: q.labels.setAll }), all, apply]));
+						var ul = el('ul', { role: 'group' });
+						q.options.forEach(function (o, i) {
+							var f = el('input', { type: 'text', value: q.value[i] || '', spellcheck: false });
+							f.setAttribute('aria-label', o.label);
+							f.addEventListener('input', check);
+							fields.push(f);
+							ul.appendChild(el('li', { className: 'current' }, [el('span', { textContent: o.label, title: o.label }), f]));
+						});
+						body.appendChild(ul);
+						read = function () {
+							return q.options.map(function (o, i) { var v = fields[i].value.replace(/\s+/g, ''); return v ? o.value + '=' + v : ''; }).filter(Boolean).join(', ');
+						};
+						valid = function () { return fields.every(function (f) { return !f.classList.contains('bad'); }); };
+						if (fields[0]) focus = fields[0];
+						check();
 					} else if (q.kind === 'input') {
 						var input = el('input', { type: 'text', value: q.value, spellcheck: false });
 						body.appendChild(input);

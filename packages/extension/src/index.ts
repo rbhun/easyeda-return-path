@@ -76,7 +76,12 @@ async function recorded(command: string, title: string, fn: () => Promise<void>)
 	}
 }
 
-export async function runReturnPath(ask: Ask): Promise<void> {
+/** The panel's Selected trace: the check that fits the selection, HF for a signal net and DC, without asking first, for a power rail. */
+export async function showForSelectedTrace(): Promise<void> {
+	await runReturnPath(dialogAsk(), true);
+}
+
+export async function runReturnPath(ask: Ask, dcWithoutAsking = false): Promise<void> {
 	const title = t('Return path');
 	await recorded('Show for Selected Net', title, async () => {
 		await showPanelForRun();
@@ -86,11 +91,11 @@ export async function runReturnPath(ask: Ask): Promise<void> {
 			eda.sys_Dialog.showInformationMessage(t('Select a track, via or pad of the net to analyse.'), title);
 			return;
 		}
-		await hfFor(net, ask);
+		await hfFor(net, ask, undefined, dcWithoutAsking);
 	}).finally(ask.close);
 }
 
-async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<void> {
+async function hfFor(net: string, ask: Ask, storedDrivers?: string[], dcWithoutAsking = false): Promise<void> {
 	const title = t('Return path');
 	log(`Show for Selected Net: ${net} (v${extensionConfig.version})`);
 	// The name check needs no board, so power and ground nets are turned away before the read.
@@ -107,7 +112,7 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<v
 			eda.sys_Dialog.showInformationMessage(scope.message!, title);
 			return;
 		}
-		if (await loggedAsk(ask).confirm(title, scope.message!, t('Open DC view')))
+		if (dcWithoutAsking || await loggedAsk(ask).confirm(title, scope.message!, t('Open DC view')))
 			await runDcReturn(ask, scope.kind === 'power' ? net : undefined, scope.kind === 'power');
 		return;
 	}
@@ -174,7 +179,8 @@ export async function runDcReturn(ask: Ask, preferredRail?: string, railGiven = 
 		const board = await timed('read board', readBoard, boardSizes);
 		await addPinNames(board);
 		recordResult('board', boardSizes(board));
-		const wiz = await runDcWizard(board, loggedAsk(ask), rail, railGiven);
+		const last = lastRun();
+		const wiz = await runDcWizard(board, loggedAsk(ask), rail, railGiven, last?.kind === 'dc' ? last.input : undefined);
 		await ask.close();
 		if (!wiz) {
 			recordResult('outcome', 'wizard closed');
@@ -347,8 +353,8 @@ export async function showPanel(): Promise<void> {
 }
 
 const panelHost = {
-	run: async (cmd: 'hf' | 'dc' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder') => {
-		const actions = { hf: showReturnPath, dc: showDcReturn, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis(), log: showSavedLog, runFolder: setRunFolder };
+	run: async (cmd: 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder') => {
+		const actions = { hf: showReturnPath, dc: showDcReturn, trace: showForSelectedTrace, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis(), log: showSavedLog, runFolder: setRunFolder };
 		await actions[cmd]();
 	},
 	lastRunLabel: () => {

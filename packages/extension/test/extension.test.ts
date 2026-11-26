@@ -100,7 +100,7 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 
 	driver = 'U1';
 	const done = await hf();
-	assert.equal(mock.messages.length, 0, 'no modal result dialog while the panel is open');
+	assert.equal(mock.infoDialogs.length, 0, 'no modal result dialog');
 	assert.ok(done.result.lines.includes('Driver: U1. Its other edge is drawn dashed yellow from its ground pin through the decap to its supply pin.'), done.result.lines.join('\n'));
 	assert.ok(done.result.lines.some((l: string) => /^\[warn\] U1 \(driver\): .* decap C1 into U1 pad 3 \(3V3\)/.test(l)));
 	assert.equal(done.lastRun, 'HF check: CLK, driver U1');
