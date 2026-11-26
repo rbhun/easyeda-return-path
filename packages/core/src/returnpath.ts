@@ -57,6 +57,8 @@ export interface CopperProbe {
   pourBeside(p: Pt, n: Pt, halfWidth: number, layer: number, net: string, maxGap: number, ownBlocks?: boolean): { d: number; net: string } | null;
   /** The chain's return from a to b in `net` copper: round through it or through vias, whichever adds less loop inductance. */
   returnRoute(c: ChainResult, net: string, a: Pt, b: Pt): ReturnRoute | null;
+  /** Path from a to b through `net` copper on a layer, around every hole, or null. */
+  copperPath(layer: number, net: string, a: Pt, b: Pt): Path | null;
 }
 
 /** Sampling step of the drawn return, and how far inside the pour edge a coplanar return is drawn, mm. */
@@ -68,10 +70,17 @@ const MIN_RUN = 0.3;
 const TAKE_OVER = 3;
 /** How much further than the trace's half width (plus the widest coplanar gap) the return is looked for, mm. */
 const FLOW_MARGIN = 1;
+/** How far from the end of a trace the copper its return starts in is looked for, mm. */
+const ANCHOR_REACH = 1.5;
+/** How far along another trace of the net, from a chain's end, the via it reaches may be, mm. */
+const T_REACH = 1;
+/** How far from a pin on another layer than the return the GND via it goes through may be, mm. */
+const PIN_VIA_REACH = 6;
 /** Most joins routed through the copper per net; past it the line breaks. */
 const MAX_ROUTED_JOINS = 60;
 
 const dot = (a: Pt, b: Pt) => a.x * b.x + a.y * b.y;
+const ptKey = (p: Pt) => `${Math.round(p.x * 1000)},${Math.round(p.y * 1000)}`;
 
 const unitNormal = (a: Pt, b: Pt): Pt => {
   const d = sub(b, a);
@@ -105,6 +114,86 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
   const trackById = new Map(board.tracks.map((t) => [t.id, t]));
   const ownVias = board.vias.filter((v) => v.net === net);
 
+  // Loop closure: where the trace ends on (or passes through) a part's pad, the return leaves the reference copper
+  // through that part's pin on the reference net (ground, or the supply for a VCC-referenced trace).
+  const seen = new Set<string>();
+  const endNets = new Map<string, string>();
+  const pinOf = new Map<string, Pad | null>();
+  /** Per chain, the pins its return leaves the copper through: at an end (s = 0 or its length) or where it passes through a pad. */
+  const closures = new Map<ChainResult, { s: number; pin: Pad }[]>();
+  const close = (c: ChainResult, s: number, pin: Pad) => closures.set(c, [...(closures.get(c) ?? []), { s, pin }]);
+  for (const c of chains) {
+    if (!c.ref) continue;
+    const L = new Polyline(c.chain.pts).length;
+    const ends: [Pt, Pt, Pad | undefined, number][] = [
+      [c.chain.pts[0], c.chain.pts[1], undefined, 0],
+      [c.chain.pts[c.chain.pts.length - 1], c.chain.pts[c.chain.pts.length - 2], undefined, L],
+    ];
+    // A part the trace passes through on the way (a connector pin with a pull-up beyond it) closes the loop there too.
+    const line = new Polyline(c.chain.pts);
+    for (const pd of board.pads) {
+      if (pd.net !== net || !pd.componentId || (pd.layer !== c.chain.layer && pd.layer !== MULTI_LAYER)) continue;
+      const s = line.project(pd.at);
+      if (s < 0.05 || s > line.length - 0.05 || distToPaths(line.at(s), pd.shape) > 0.05) continue;
+      const comp = board.components.find((x) => x.id === pd.componentId);
+      if (!comp || isPassive(comp)) continue;
+      ends.push([line.at(s), line.at(s < line.length / 2 ? Math.min(line.length, s + 1) : Math.max(0, s - 1)), pd, s]);
+    }
+    for (const [end, inward, onPad, at] of ends) {
+      if (!onPad && ownVias.some((v) => dist(v.at, end) <= v.diameter / 2 + 0.01)) continue;
+      const pad = onPad ?? padAt(board, end, net, c.chain.layer);
+      if (!pad?.componentId) continue;
+      if (seen.has(pad.id)) {
+        const pin = pinOf.get(pad.id);
+        if (pin) close(c, at, pin);
+        continue;
+      }
+      seen.add(pad.id);
+      const comp = board.components.find((x) => x.id === pad.componentId);
+      // Single-pad parts are test points or labels: the net just ends there.
+      if (!comp || comp.padIds.length < 2) continue;
+      // The reference net under the trace just before it reaches the pad (the pad's own antipad hides it at the pad).
+      const step = Math.min(dist(end, inward), Math.max(0.5, 3 * c.ref.h));
+      const probeAt = add(end, mul(sub(inward, end), step / (dist(end, inward) || 1)));
+      const coplanar = c.ref.coplanar;
+      const halfWidth = (trackById.get(c.chain.trackIds[0])?.width ?? 0.2) / 2;
+      const sides = coplanar ? [1, -1].map((k) => add(probeAt, mul(unitNormal(end, inward), k * (halfWidth + 1.5 * c.ref!.h + 0.05)))) : [probeAt];
+      const endNet = sides.map((p) => probe.netAt(p, c.ref!.layer, coplanar ? net : undefined)).find(Boolean) ?? c.refNets[0] ?? null;
+      const candidates = board.pads.filter((p) => p.componentId === comp.id && p.id !== pad.id && p.net && (p.net === endNet || (!endNet && c.refNets.includes(p.net))));
+      const pin = candidates.sort((a, b) => dist(a.at, pad.at) - dist(b.at, pad.at))[0];
+      const where = `${comp.designator} pad ${pad.number}`;
+      if (endNet && !endNets.has(comp.designator)) endNets.set(comp.designator, endNet);
+      pinOf.set(pad.id, pin ?? null);
+      if (pin) {
+        close(c, at, pin);
+        const d = dist(pin.at, pad.at);
+        jumps.push({ kind: 'pin', from: pad.at, to: pin.at, label: `${comp.designator}.${pin.number}`, distance: d, severity: 'ok' });
+        findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the return leaves ${pin.net} copper through ${comp.designator} pad ${pin.number} (${pin.net}), ${d.toFixed(2)} mm from the signal pad`, at: pad.at });
+      } else if (isPassive(comp) || /^[XY]\d/i.test(comp.designator)) {
+        findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the signal continues through ${comp.designator} onto another net, and its return goes on with it (not traced past ${comp.designator})`, at: pad.at });
+      } else {
+        findings.push({ severity: 'warn', kind: 'loop-closure', message: `${where}: ${comp.designator} has no pad on ${endNet ?? 'the reference net'}, so the return path cannot close at this end`, at: pad.at });
+      }
+    }
+  }
+
+  // Where each end of a chain's return goes: the GND pin of the part it ends on, the GND via where it changes
+  // layer, the via between a pour beside the trace and the plane, or else the copper nearest the end.
+  type Anchor = { at: Pt; leg?: { layer: number; path: Path; pin: Pt } };
+  const cutViaAt = new Map(chains.filter((c) => c.chain.cut?.[0] && c.chain.cutVia).map((c) => [ptKey(c.chain.pts[0]), c.chain.cutVia!.at]));
+  // A chain that ends where it meets another (a T) reaches the via on that one's line as well.
+  const onOneLine = (p: Pt, q: Pt) => chains.some((o) => [p, q].every((r) => o.chain.pts.slice(1).some((b, i) => distPointSeg(r, o.chain.pts[i], b) <= 0.01)));
+  const changeVia = (p: Pt, layer: number): Pt | null => {
+    for (const v of vias)
+      if (dist(v.via.at, p) <= v.via.diameter / 2 + 0.01 || (dist(v.via.at, p) <= T_REACH && onOneLine(p, v.via.at)))
+        for (const t of v.transitions) if (t.kind === 'stitching-via' && t.target && (t.fromLayer === layer || t.toLayer === layer)) return t.target.at;
+    return null;
+  };
+  const nearestCopper = new Map<string, Pt | null>();
+  const anchors = new Set<string>();
+  const missed = new Set<string>();
+  const reached = new Set<string>();
+
   let routedJoins = 0;
   for (const [ci, c] of chains.entries()) {
     yield { phase: 'return path', fraction: ci / chains.length };
@@ -124,6 +213,53 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       return true;
     };
     const draw = (layer: number, pts: Path, detour?: boolean) => traces.push({ layer, signalLayer: c.chain.layer, pts, ...(detour ? { detour } : {}) });
+    const solid = (q: Pt) => inCopper(q) && [0, 1, 2, 3].every((k) => inCopper(add(q, mul({ x: Math.cos((k * Math.PI) / 2), y: Math.sin((k * Math.PI) / 2) }, STEP))));
+    const copperNear = (p: Pt): Pt | null => {
+      const k = `${ref.layer}|${ptKey(p)}`;
+      if (!nearestCopper.has(k)) {
+        let found: Pt | null = null;
+        for (let r = 0; r <= ANCHOR_REACH && !found; r += STEP)
+          for (let i = 0; i < (r ? 32 : 1) && !found; i++) {
+            const q = add(p, mul({ x: Math.cos((i * Math.PI) / 16), y: Math.sin((i * Math.PI) / 16) }, r));
+            if (solid(q)) found = q;
+          }
+        nearestCopper.set(k, found);
+      }
+      return nearestCopper.get(k)!;
+    };
+    // A pin on the reference layer (or through-hole) takes the return itself; one on another layer through the GND via
+    // nearest the way from the trace to it, and that layer's copper from there.
+    const pinAnchor = (pin: Pad, from: Pt): Anchor | null => {
+      if (pin.layer === ref.layer || pin.layer === MULTI_LAYER) return { at: pin.at };
+      const stops = [...board.vias.filter((v) => v.net === pin.net).map((v) => v.at), ...board.pads.filter((p) => p.net === pin.net && p.layer === MULTI_LAYER).map((p) => p.at)]
+        .filter((v) => dist(v, pin.at) <= PIN_VIA_REACH && solid(v))
+        .sort((u, v) => dist(from, u) + dist(u, pin.at) - (dist(from, v) + dist(v, pin.at)))
+        .slice(0, 3);
+      for (const v of stops) {
+        const path = probe.copperPath(pin.layer, pin.net, v, pin.at);
+        if (path) return { at: v, leg: { layer: pin.layer, path, pin: pin.at } };
+      }
+      return null;
+    };
+    const anchorAt = (s: number): Anchor | null => {
+      const p = line.at(s);
+      const pin = closures.get(c)?.find((x) => Math.abs(x.s - s) < 1e-6)?.pin;
+      const viaPin = pin && pinAnchor(pin, p);
+      if (viaPin) return viaPin;
+      if (pin) missed.add(ptKey(pin.at));
+      const change = changeVia(p, c.chain.layer) ?? cutViaAt.get(ptKey(p));
+      if (change && solid(change)) return { at: change };
+      if (change) missed.add(ptKey(change));
+      const near = copperNear(p);
+      return near && { at: near };
+    };
+    const legs: Anchor[] = [];
+    const got = new Set<string>();
+    const arrive = (a: Anchor | null) => {
+      if (!a) return;
+      reached.add(ptKey(a.at));
+      if (a.leg) legs.push(a);
+    };
 
     // The return is one line: each piece starts where the last one ended. A short step through the
     // copper joins them straight; anything else takes the way that adds least loop inductance.
@@ -151,21 +287,30 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
     // in a coplanar pour. Each candidate side gives runs of points joined through copper.
     const piece = function* (s0: number, s1: number, to: Pt | null): Steps<void> {
       if (s1 - s0 < 1e-6) return;
-      const flow = yield* leastInductancePath({
-        inCopper,
-        line,
-        s0,
-        s1,
-        halfWidth,
-        h: ref.coplanar ? 0 : ref.h,
-        corridor: halfWidth + (ref.coplanar ? maxGap : 0) + FLOW_MARGIN,
-        from: end,
-        to,
-      });
+      const flowFrom = (from: Pt | null, until: Pt | null) =>
+        leastInductancePath({
+          inCopper,
+          line,
+          s0,
+          s1,
+          halfWidth,
+          h: ref.coplanar ? 0 : ref.h,
+          corridor: halfWidth + (ref.coplanar ? maxGap : 0) + FLOW_MARGIN,
+          from,
+          to: until,
+        });
+      let flow = yield* flowFrom(end, to);
+      // An anchor the copper near the trace does not reach is left to its hop: the return is drawn under the trace alone.
+      if (!flow && end && anchors.has(ptKey(end))) end = null;
+      if (!flow && (!end || (to && anchors.has(ptKey(to))))) flow = yield* flowFrom(end, null);
+      if (!flow && end) flow = yield* flowFrom(null, null);
       if (flow && flow.length > 1) {
         end = null;
-        draw(ref.layer, straighten(flow));
+        const pulled = straighten(flow);
+        if (pulled.slice(1).some((p, i) => dist(p, pulled[i]) > 0.01)) draw(ref.layer, pulled);
+        got.add(ptKey(flow[0]));
         end = flow[flow.length - 1];
+        got.add(ptKey(end));
         return;
       }
       const k = Math.max(1, Math.ceil((s1 - s0) / STEP));
@@ -251,8 +396,30 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       for (const pts of [head, ...own.map((r) => r.pts), tail]) if (pts && pts.length > 1 && dist(pts[0], pts[pts.length - 1]) >= MIN_RUN) lay(ref.layer, straighten(pts));
     };
 
+    // Pins the trace passes through close the loop there: the return of each side runs into the pin.
+    const mids = (closures.get(c) ?? [])
+      .filter((x) => x.s > 1e-6 && x.s < L - 1e-6)
+      .map((x) => {
+        const anchor = pinAnchor(x.pin, line.at(x.s));
+        if (!anchor) missed.add(ptKey(x.pin.at));
+        return { s: x.s, anchor };
+      });
+    const first = anchorAt(0);
+    const last = anchorAt(L);
+    for (const a of [first, last, ...mids.map((m) => m.anchor)]) if (a) anchors.add(ptKey(a.at));
+    end = first?.at ?? null;
     let s = 0;
-    for (const g of breaks) {
+    const events = [...breaks.map((g) => ({ s: g.s0, g })), ...mids.map((m) => ({ s: m.s, m }))].sort((a, b) => a.s - b.s);
+    for (const e of events) {
+      if ('m' in e) {
+        if (!e.m.anchor) continue;
+        yield* piece(s, e.s, e.m.anchor.at);
+        if (got.has(ptKey(e.m.anchor.at))) arrive(e.m.anchor);
+        end = e.m.anchor.at;
+        s = e.s;
+        continue;
+      }
+      const g = e.g;
       yield* piece(s, g.s0, g.viaRoute?.legs.find((leg) => leg.path.length > 1)?.path[0] ?? (g.detour ? (g.drawn ?? g.detour.path)[0] : null));
       s = g.s1;
       if (g.viaRoute) {
@@ -273,7 +440,15 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
         }
       }
     }
-    yield* piece(s, L, null);
+    yield* piece(s, L, last?.at ?? null);
+    for (const a of [first, last, ...mids.map((m) => m.anchor)]) if (a && !got.has(ptKey(a.at))) missed.add(ptKey(a.at));
+    for (const a of [first, last]) if (a && got.has(ptKey(a.at))) arrive(a);
+    for (const k of got) reached.add(k);
+    for (const a of legs) {
+      draw(a.leg!.layer, a.leg!.path);
+      reached.add(ptKey(a.leg!.pin));
+      jumps.push({ kind: 'via', from: a.at, to: a.at, label: `${probe.netAt(a.at, ref.layer) ?? ''} via`.trim(), distance: 0, severity: 'ok' });
+    }
   }
 
   // Where the return moves between a pour beside the trace and the plane below, it goes through a via.
@@ -288,56 +463,8 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       if (t.target && t.distance !== undefined)
         jumps.push({ kind: t.kind === 'decap' ? 'decap' : 'via', from: v.via.at, to: t.target.at, label: t.target.label, distance: t.distance, severity: t.severity });
 
-  // Loop closure: where the trace ends on (or passes through) a part's pad, the return leaves the reference copper
-  // through that part's pin on the reference net (ground, or the supply for a VCC-referenced trace).
-  const seen = new Set<string>();
-  const endNets = new Map<string, string>();
-  for (const c of chains) {
-    if (!c.ref) continue;
-    const ends: [Pt, Pt, Pad | undefined][] = [
-      [c.chain.pts[0], c.chain.pts[1], undefined],
-      [c.chain.pts[c.chain.pts.length - 1], c.chain.pts[c.chain.pts.length - 2], undefined],
-    ];
-    // A part the trace passes through on the way (a connector pin with a pull-up beyond it) closes the loop there too.
-    const line = new Polyline(c.chain.pts);
-    for (const pd of board.pads) {
-      if (pd.net !== net || !pd.componentId || (pd.layer !== c.chain.layer && pd.layer !== MULTI_LAYER)) continue;
-      const s = line.project(pd.at);
-      if (s < 0.05 || s > line.length - 0.05 || distToPaths(line.at(s), pd.shape) > 0.05) continue;
-      const comp = board.components.find((x) => x.id === pd.componentId);
-      if (!comp || isPassive(comp)) continue;
-      ends.push([line.at(s), line.at(s < line.length / 2 ? Math.min(line.length, s + 1) : Math.max(0, s - 1)), pd]);
-    }
-    for (const [end, inward, onPad] of ends) {
-      if (!onPad && ownVias.some((v) => dist(v.at, end) <= v.diameter / 2 + 0.01)) continue;
-      const pad = onPad ?? padAt(board, end, net, c.chain.layer);
-      if (!pad?.componentId || seen.has(pad.id)) continue;
-      seen.add(pad.id);
-      const comp = board.components.find((x) => x.id === pad.componentId);
-      // Single-pad parts are test points or labels: the net just ends there.
-      if (!comp || comp.padIds.length < 2) continue;
-      // The reference net under the trace just before it reaches the pad (the pad's own antipad hides it at the pad).
-      const step = Math.min(dist(end, inward), Math.max(0.5, 3 * c.ref.h));
-      const probeAt = add(end, mul(sub(inward, end), step / (dist(end, inward) || 1)));
-      const coplanar = c.ref.coplanar;
-      const halfWidth = (trackById.get(c.chain.trackIds[0])?.width ?? 0.2) / 2;
-      const sides = coplanar ? [1, -1].map((k) => add(probeAt, mul(unitNormal(end, inward), k * (halfWidth + 1.5 * c.ref!.h + 0.05)))) : [probeAt];
-      const endNet = sides.map((p) => probe.netAt(p, c.ref!.layer, coplanar ? net : undefined)).find(Boolean) ?? c.refNets[0] ?? null;
-      const candidates = board.pads.filter((p) => p.componentId === comp.id && p.id !== pad.id && p.net && (p.net === endNet || (!endNet && c.refNets.includes(p.net))));
-      const pin = candidates.sort((a, b) => dist(a.at, pad.at) - dist(b.at, pad.at))[0];
-      const where = `${comp.designator} pad ${pad.number}`;
-      if (endNet && !endNets.has(comp.designator)) endNets.set(comp.designator, endNet);
-      if (pin) {
-        const d = dist(pin.at, pad.at);
-        jumps.push({ kind: 'pin', from: pad.at, to: pin.at, label: `${comp.designator}.${pin.number}`, distance: d, severity: 'ok' });
-        findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the return leaves ${pin.net} copper through ${comp.designator} pad ${pin.number} (${pin.net}), ${d.toFixed(2)} mm from the signal pad`, at: pad.at });
-      } else if (isPassive(comp) || /^[XY]\d/i.test(comp.designator)) {
-        findings.push({ severity: 'ok', kind: 'loop-closure', message: `${where}: the signal continues through ${comp.designator} onto another net, and its return goes on with it (not traced past ${comp.designator})`, at: pad.at });
-      } else {
-        findings.push({ severity: 'warn', kind: 'loop-closure', message: `${where}: ${comp.designator} has no pad on ${endNet ?? 'the reference net'}, so the return path cannot close at this end`, at: pad.at });
-      }
-    }
-  }
+  // A hop whose end the drawn return reaches is no longer a jump through the air: only its end is marked.
+  for (const j of jumps) if ((j.kind === 'pin' || j.kind === 'via') && reached.has(ptKey(j.to)) && !missed.has(ptKey(j.to))) j.from = j.to;
 
   const drivers: DriverLoop[] = [];
   for (const d of opts.drivers ?? []) {

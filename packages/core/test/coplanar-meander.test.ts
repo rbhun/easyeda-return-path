@@ -48,11 +48,15 @@ test('a meander in a wider pour clearance returns in the plane under it, through
   const hops = an.returnPath.jumps.filter((j) => j.kind === 'via');
   assert.equal(hops.length, 2, 'into the plane and back out');
   assert.ok(hops.every((j) => j.to.x === 15.75 && j.to.y === 12.3), 'through the GND via beside the meander');
+  assert.ok(hops.every((j) => j.from === j.to), 'the drawn return runs into the via: no line through the air to it');
   // Every return is tagged with its signal trace's layer; on the plane it runs on the trace, in the pour beside it.
   assert.ok(an.returnPath.traces.every((t) => t.signalLayer === (t.pts.every((p) => p.x > 37.5) ? 1 : 2)));
   const onPlane = an.returnPath.traces.filter((t) => t.layer === 1);
   // The plane is 1.5 mm below a meander 0.6 mm tall: the image current follows the meander's course, not each loop.
-  assert.ok(onPlane.length > 0 && onPlane.every((t) => t.pts.every((p) => tracksDist(p) < 0.25)), 'the plane return lies under the meander');
+  // It comes from the GND via to one end of the meander and goes back to it from the other.
+  const atVia = (p: { x: number; y: number }) => Math.hypot(p.x - 15.75, p.y - 12.3) < 0.1;
+  assert.ok(onPlane.length > 0 && onPlane.every((t) => atVia(t.pts[0]) && atVia(t.pts[t.pts.length - 1])), 'the plane return starts and ends at the via');
+  assert.ok(onPlane.every((t) => t.pts.every((p) => atVia(p) || tracksDist(p) < 0.25)), 'the plane return lies under the meander');
   const xs = onPlane.flatMap((t) => t.pts.map((p) => p.x));
   assert.ok(Math.min(...xs) < 15 && Math.max(...xs) > 16.5, 'from one end of the meander to the other');
   const beside = an.returnPath.traces.filter((t) => t.layer === 2 && t.pts.every((p) => p.x < 37));
@@ -133,6 +137,8 @@ test('a connector pin the trace passes through closes the loop through its own g
   const an = analyzeNet(board, 'SIG', { drivers: ['J1'] });
   const pin = an.returnPath.jumps.find((j) => j.kind === 'pin' && j.label === 'J1.2');
   assert.ok(pin, an.returnPath.jumps.map((j) => `${j.kind} ${j.label}`).join(', '));
-  assert.deepEqual([pin.from, pin.to], [{ x: 10, y: 10 }, { x: 10, y: 12 }]);
+  assert.deepEqual([pin.from, pin.to], [{ x: 10, y: 12 }, { x: 10, y: 12 }], 'the return runs into the ground pin: only the pin is marked');
+  const into = an.returnPath.traces.filter((t) => [t.pts[0], t.pts[t.pts.length - 1]].some((p) => p.x === 10 && p.y === 12));
+  assert.equal(into.length, 2, 'the return from each side of the pin ends in its ground pin');
   assert.ok(!an.findings.some((f) => f.kind === 'driver-loop' && /not at an end/.test(f.message)), 'J1 can be the driver');
 });
