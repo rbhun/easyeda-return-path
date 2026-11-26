@@ -179,7 +179,7 @@ async function resolveLogPath(): Promise<string | null> {
 	else {
 		const chosen = chosenRunFolder();
 		if (!chosen) {
-			logProblem = `${docs.reason}; choose a Run folder in the panel to have the log written there`;
+			logProblem = `${docs.reason}; choose Return Path > Run Folder to have the log written there`;
 			log(`log file not written: ${logProblem}`, 'warn');
 			return null;
 		}
@@ -435,7 +435,7 @@ export async function endRun(): Promise<string | null> {
 		const folder = await runFolderStatus();
 		if (folder.dir === null) {
 			const askable = !!folder.askable;
-			log(`run files not written: ${folder.reason}${askable ? '; choose a Run folder in the panel to have them written there' : ''}`, 'warn');
+			log(`run files not written: ${folder.reason}${askable ? '; choose Return Path > Run Folder to have them written there' : ''}`, 'warn');
 			unwritten = { base: run.base, log: logText, results: resultsText, reason: folder.reason, askable };
 			return null;
 		}

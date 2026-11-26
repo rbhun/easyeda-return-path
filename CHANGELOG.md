@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.39] - 2026-11-26
+
+From Balazs: the run folder is a basic setting, so it belongs in the menu, not the panel; the panel's Log button duplicates the menu's Show Saved Log.
+
+- **Return Path → Run Folder...** in the menu, between Open Panel and Show Saved Log. It does what the panel's **Run folder…** button did.
+- The panel's **Log…** and **Run folder…** buttons are removed. The saved log stays at **Return Path → Show Saved Log...**.
+- When the run files or the log file cannot be written, the log line now points at Return Path > Run Folder.
+
 ## [0.1.38] - 2026-11-26
 
 From Balazs, with a screenshot of the HF check speed page showing `${1} (edges ≈ ${2} ns)`: put the speed selector on the "Net to check" page after each net's length, prefilled with the usual speed for that kind of line, and give the wizard a Back button.

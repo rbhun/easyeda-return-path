@@ -425,8 +425,8 @@ export async function showPanel(): Promise<void> {
 }
 
 const panelHost = {
-	run: async (cmd: 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel' | 'log' | 'runFolder') => {
-		const actions = { hf: showReturnPath, dc: showDcReturn, trace: showForSelectedTrace, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis(), log: showSavedLog, runFolder: setRunFolder };
+	run: async (cmd: 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel') => {
+		const actions = { hf: showReturnPath, dc: showDcReturn, trace: showForSelectedTrace, rerun: rerunAnalysis, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis() };
 		await actions[cmd]();
 	},
 	lastRunKind: () => lastRun()?.kind,

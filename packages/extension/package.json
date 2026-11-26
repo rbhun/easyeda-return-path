@@ -1,6 +1,6 @@
 {
   "name": "@returnpath/extension",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "description": "EasyEDA Pro extension: return-path overlay for the selected net",
   "private": true,
   "type": "module",
@@ -15,11 +15,11 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@returnpath/core": "0.1.38"
+    "@returnpath/core": "0.1.39"
   },
   "devDependencies": {
     "@jlceda/pro-api-types": "^0.4.30",
-    "@returnpath/cli": "0.1.38",
+    "@returnpath/cli": "0.1.39",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^26.6.10",
     "@types/ws": "^8.5.13",
