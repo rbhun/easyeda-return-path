@@ -9,7 +9,7 @@ import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet } from './eda-board';
 import { clearOverlay, drawAnalysis, toggleOverlay } from './overlay';
 import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, report, shareLastRun, sharedLastRun } from './panel';
-import { boardSizes, cancelRunning, checkpoint, guarded, log, logFilePath, logStartup, readStored, runSteps, savedLog, saveLogAs, timed, toast, writeStored } from './runner';
+import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFilePath, logStartup, readStored, recordResult, runFolder, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, writeStored } from './runner';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, type Ask } from './wizard';
 
@@ -65,12 +65,24 @@ export async function showReturnPath(): Promise<void> {
 	await runReturnPath(dialogAsk());
 }
 
+/** Runs a menu action as one run: its log lines and results also go to the run files. */
+async function recorded(command: string, title: string, fn: () => Promise<void>): Promise<void> {
+	beginRun(command);
+	try {
+		await guarded(title, fn);
+	}
+	finally {
+		await endRun();
+	}
+}
+
 export async function runReturnPath(ask: Ask): Promise<void> {
 	const title = t('Return path');
-	await guarded(title, async () => {
+	await recorded('Show for Selected Net', title, async () => {
 		await showPanelForRun();
 		const net = await selectedNet();
 		if (!net) {
+			recordResult('outcome', 'nothing selected');
 			eda.sys_Dialog.showInformationMessage(t('Select a track, via or pad of the net to analyse.'), title);
 			return;
 		}
@@ -85,7 +97,11 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<v
 	const byName = hfApplicability({ pours: [] }, net);
 	const board = byName.ok ? await timed('read board', readBoard, boardSizes) : undefined;
 	const scope = board ? hfApplicability(board, net) : byName;
+	recordResult('net', net);
+	if (board)
+		recordResult('board', boardSizes(board));
 	if (!scope.ok) {
+		recordResult('outcome', `not a signal net (${scope.kind})`);
 		log(`${net}: not a signal net (${scope.kind}); high-frequency check skipped`, 'warn');
 		if (await confirm(scope.message!, title, t('Open DC view')))
 			await runDcReturn(ask, scope.kind === 'power' ? net : undefined, scope.kind === 'power');
@@ -100,6 +116,7 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<v
 	const analysis = await runSteps(analyzeNetSteps(board, net, { drivers }), { title, timeBudgetMs: HF_BUDGET_MS, percent: hfPercent() });
 	log(`${net}: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${+Number(v).toFixed(3)}`).join(' ')}`);
 	const drawn = await timed('draw markers', () => drawAnalysis(analysis, board), d => `${d.markers} markers`);
+	recordResult('hf', { drivers, stats: analysis.stats, findings: analysis.findings, markers: drawn.markers, returnLayers: drawn.returnLayers, boardWarnings: board.warnings });
 	const lines = [
 		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
 		drawn.returnLayers.length
@@ -109,6 +126,7 @@ async function hfFor(net: string, ask: Ask, storedDrivers?: string[]): Promise<v
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
 		...board.warnings.map(w => `warning: ${w}`),
 	];
+	recordResult('report', lines);
 	await report(title, lines);
 }
 
@@ -144,15 +162,18 @@ export async function showDcReturn(): Promise<void> {
 /** `railGiven`: the rail came from the selection and was judged a supply net, so the wizard does not ask for it. */
 export async function runDcReturn(ask: Ask, preferredRail?: string, railGiven = false): Promise<void> {
 	const title = t('DC return current');
-	await guarded(title, async () => {
+	await recorded('DC Return Current', title, async () => {
 		log(`DC Return Current (v${extensionConfig.version})`);
 		await showPanelForRun();
 		const rail = preferredRail ?? await timed('read selection', selectedNet, n => n ?? 'nothing selected');
 		const board = await timed('read board', readBoard, boardSizes);
 		await addPinNames(board);
+		recordResult('board', boardSizes(board));
 		const wiz = await runDcWizard(board, loggedAsk(ask), rail, railGiven);
-		if (!wiz)
+		if (!wiz) {
+			recordResult('outcome', 'wizard closed');
 			return;
+		}
 		await remember({ kind: 'dc', input: wiz.input });
 		await dcFor(board, wiz.input);
 	});
@@ -190,6 +211,28 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 	const streams = await timed('streamlines', async () => ({ supply: traceStreamlines(res.grid, res.supply, DRAWN_STREAMS), ret: res.ret ? traceStreamlines(res.grid, res.ret, DRAWN_STREAMS) : [] }), s => `${s.supply.length + s.ret.length} lines`);
 	const drawn = await timed('draw markers', () => drawDc(res, streams), d => `${d.markers} markers`);
 	const layerName = (id: number) => board.stackup.copper.find(l => l.id === id)?.name ?? `L${id}`;
+	recordResult('dc', {
+		input,
+		rail: setup.rail,
+		ground: setup.ground,
+		source: setup.source.designator,
+		loads: setup.loads.map(l => ({ designator: l.designator, current: l.current })),
+		normalised: setup.normalised,
+		grid: { nx: res.grid.nx, ny: res.grid.ny, cellMm: res.grid.cell },
+		nets: [res.supply, res.ret].filter(n => !!n).map(n => ({
+			net: n!.net,
+			role: n!.role,
+			dropV: n!.drop,
+			bottleneck: n!.bottleneck ? { ...n!.bottleneck, layerName: layerName(n!.bottleneck.layer) } : undefined,
+			unconnected: n!.unconnected,
+			nodes: n!.nodes,
+			iterations: n!.iterations,
+			residual: n!.residual,
+		})),
+		streamlines: { supply: streams.supply.length, ret: streams.ret.length },
+		markers: drawn.markers,
+		warnings: [...board.warnings, ...res.warnings],
+	});
 	const vUnit = setup.normalised ? 'mV/A' : 'mV';
 	const jUnit = setup.normalised ? 'A/mm per A' : 'A/mm';
 	const lines = [
@@ -202,6 +245,7 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 		t('${1} overlay marker(s).', String(drawn.markers)),
 		...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 	].filter(Boolean);
+	recordResult('report', lines);
 	await report(title, lines);
 }
 
@@ -236,13 +280,13 @@ export async function rerunAnalysis(): Promise<void> {
 		return;
 	}
 	if (run.kind === 'hf') {
-		await guarded(t('Return path'), async () => {
+		await recorded('Rerun Last Analysis', t('Return path'), async () => {
 			await showPanelForRun();
 			await hfFor(run.net, dialogAsk(), run.drivers);
 		});
 		return;
 	}
-	await guarded(t('DC return current'), async () => {
+	await recorded('Rerun Last Analysis', t('DC return current'), async () => {
 		log(`Rerun DC Return Current (v${extensionConfig.version})`);
 		await showPanelForRun();
 		const board = await timed('read board', readBoard, boardSizes);
@@ -321,5 +365,32 @@ export async function showSavedLog(): Promise<void> {
 		const body = [where, '', ...all.slice(-40)].join('\n');
 		if (await confirm(body, t('Saved log (last ${1} of ${2} lines)', String(Math.min(40, all.length)), String(all.length)), t('Save as file...')))
 			await saveLogAs();
+	});
+}
+
+/** Picks the folder for the run files (each analysis's `.log` and `.results.json`). */
+export async function setRunFolder(): Promise<void> {
+	const title = t('Run folder');
+	await guarded(title, async () => {
+		const current = chosenRunFolder();
+		let folder: string | undefined;
+		try {
+			folder = await eda.sys_FileSystem.openReadFolderPathDialog();
+		}
+		catch {
+			folder = await new Promise<string | undefined>((resolve) => {
+				eda.sys_Dialog.showInputDialog(t('Folder for the run files (absolute path). Leave empty for the default.'), '', title, 'text', current ?? '', undefined, (v: unknown) => resolve(typeof v === 'string' ? v : undefined));
+			});
+			if (folder === undefined)
+				return;
+		}
+		if (folder === undefined && current !== undefined)
+			return;
+		await storeRunFolder(folder?.trim() || undefined);
+		const dir = await runFolder();
+		log(`run folder: ${dir ?? 'none (no file access)'}`);
+		eda.sys_Dialog.showInformationMessage(dir
+			? t('Each analysis now writes its .log and .results.json to: ${1}', dir)
+			: t('Run files need file access: allow "External Interaction" for this extension in Advanced > Extension Manager (desktop client).'), title);
 	});
 }

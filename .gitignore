@@ -7,3 +7,7 @@ out/
 .eslintcache
 debug.log
 .DS_Store
+
+# run files from the extension (Set Run Folder... target) and the agent-runs worktree of scripts/agent-sync.mjs
+/agent-runs/
+/.agent-runs-branch/
