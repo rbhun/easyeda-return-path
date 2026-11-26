@@ -3,7 +3,7 @@ import { basename, extname } from 'node:path';
 import { strFromU8, unzipSync } from 'fflate';
 import type { Board } from '@returnpath/core';
 import { parseEasyEdaPcb, type ParseOptions } from './parse.js';
-import { parseRecords } from './records.js';
+import { projectPinNames, splitEpru } from './project.js';
 
 /**
  * Load a board from an EasyEDA Pro project (.epro / .zip: PCB *.epcb + FOOTPRINT *.efoo + optional *.ecop;
@@ -19,8 +19,6 @@ export function loadBoard(file: string, opts: ParseOptions & { pcb?: string } = 
   const pcbs: [string, string][] = [];
   const footprints = new Map<string, string>();
   const poured: string[] = [];
-  const deviceSymbol = new Map<string, string>();
-  const symbolPins = new Map<string, Map<string, string>>();
   for (const [name, data] of Object.entries(entries)) {
     const text = () => strFromU8(data);
     const stem = basename(name).split('.')[0];
@@ -31,15 +29,11 @@ export function loadBoard(file: string, opts: ParseOptions & { pcb?: string } = 
       for (const doc of splitEpru(text())) {
         if (doc.type === 'PCB') pcbs.push([`${name}#${doc.uuid}`, doc.text]);
         else if (doc.type === 'FOOTPRINT') footprints.set(doc.uuid, doc.text);
-        else if (doc.type === 'DEVICE') {
-          const symbol = /"Symbol":"([^"]+)"/.exec(doc.text)?.[1];
-          if (symbol) deviceSymbol.set(doc.uuid, symbol);
-        } else if (doc.type === 'SYMBOL') symbolPins.set(doc.uuid, symbolPinNames(doc.text));
       }
     }
   }
   if (!pcbs.length) throw new Error(`${file}: no .epcb document inside`);
-  const pinNames = new Map([...deviceSymbol].flatMap(([device, symbol]) => (symbolPins.has(symbol) ? [[device, symbolPins.get(symbol)!] as const] : [])));
+  const pinNames = projectPinNames(entries).byDevice;
   const parse = ([, pcb]: [string, string]) => parseEasyEdaPcb({ pcb, footprints, poured, pinNames }, opts);
   if (opts.pcb) {
     const chosen = pcbs.find(([n]) => n.includes(opts.pcb!));
@@ -55,33 +49,4 @@ export function loadBoard(file: string, opts: ParseOptions & { pcb?: string } = 
   return best.board;
 }
 
-/** An `.epru` (inside `.epro2`) holds every document of the project in one file, each starting with a DOCHEAD line. */
-export function splitEpru(text: string): { type: string; uuid: string; text: string }[] {
-  const docs: { type: string; uuid: string; lines: string[] }[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (line.startsWith('{"type":"DOCHEAD"')) {
-      const body = line.slice(line.indexOf('||') + 2).replace(/\|\s*$/, '');
-      const head = JSON.parse(body) as { docType?: string; uuid?: string };
-      docs.push({ type: head.docType ?? '', uuid: head.uuid ?? '', lines: [] });
-    } else if (docs.length) docs[docs.length - 1].lines.push(line);
-  }
-  return docs.map((d) => ({ type: d.type, uuid: d.uuid, text: d.lines.join('\n') }));
-}
-
-/** Pin number → pin name of a SYMBOL document (each PIN carries "Pin Number" and "Pin Name" ATTRs). */
-function symbolPinNames(text: string): Map<string, string> {
-  const byPin = new Map<string, { number?: string; name?: string }>();
-  for (const r of parseRecords(text)) {
-    if (r.type !== 'ATTR' || !r.parentId) continue;
-    const key = String(r.key);
-    if (key !== 'Pin Number' && key !== 'Pin Name') continue;
-    const id = String(r.parentId);
-    const p = byPin.get(id) ?? {};
-    if (key === 'Pin Number') p.number = String(r.value);
-    else p.name = String(r.value);
-    byPin.set(id, p);
-  }
-  const out = new Map<string, string>();
-  for (const p of byPin.values()) if (p.number && p.name && p.name !== p.number) out.set(p.number, p.name);
-  return out;
-}
+export { splitEpru };

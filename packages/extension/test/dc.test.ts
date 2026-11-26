@@ -133,6 +133,51 @@ test('a netlist without pin names is skipped on later runs, after an upgrade too
 	assert.ok(mock.logs.some(l => /pin names: skipped, the netlist gave none in an earlier run/.test(l.message)));
 });
 
+test('pin names from the project file when the netlist gives none, and the project file is not asked for again after it gave none', async () => {
+	const { addPinNames, readBoard } = await import('../src/eda-board.ts');
+	const { strToU8, zipSync } = await import('fflate');
+	const u2 = board.components.find(c => c.designator === 'U2')!;
+	const u2Pads = board.pads.filter(p => p.componentId === u2.id);
+	const line = (head: object, body: object) => `${JSON.stringify(head)}||${JSON.stringify(body)}|`;
+	const epru = [
+		line({ type: 'DOCHEAD' }, { docType: 'DEVICE', uuid: 'dev2' }),
+		line({ type: 'META', id: 'META' }, { attributes: { Symbol: 'sym2' } }),
+		line({ type: 'DOCHEAD' }, { docType: 'SYMBOL', uuid: 'sym2' }),
+		...u2Pads.flatMap((p, i) => [
+			line({ type: 'ATTR', id: `n${i}` }, { parentId: `pin${i}`, key: 'Pin Number', value: p.number }),
+			line({ type: 'ATTR', id: `m${i}` }, { parentId: `pin${i}`, key: 'Pin Name', value: p.net === 'GND' ? 'GND' : `IO${i}` }),
+		]),
+		line({ type: 'DOCHEAD' }, { docType: 'PCB', uuid: 'pcb1' }),
+		line({ type: 'COMPONENT', id: 'c9' }, { layerId: 1, x: 0, y: 0, angle: 0, attrs: {} }),
+		line({ type: 'ATTR', id: 'a1' }, { parentId: 'c9', key: 'Designator', value: 'U2' }),
+		line({ type: 'ATTR', id: 'a2' }, { parentId: 'c9', key: 'Device', value: 'dev2' }),
+	].join('\n');
+	const zip = zipSync({ 'project2.json': strToU8('{}'), 'p.epru': strToU8(epru) });
+	const storage = new Map<string, unknown>();
+	const mock = createMockEda(board, '3V3', [], undefined, { storage });
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	(mock.eda.pcb_Net as Record<string, unknown>).getNetlist = async () => {
+		throw new Error('Export failed');
+	};
+	let files = 0;
+	(mock.eda as Record<string, unknown>).sys_FileManager = { getProjectFile: async () => {
+		files++;
+		return { arrayBuffer: async () => zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) };
+	} };
+	const b = await readBoard();
+	assert.equal(await addPinNames(b), u2Pads.length);
+	assert.deepEqual(b.pads.filter(p => p.componentId === u2.id).map(p => p.pinName), u2Pads.map((p, i) => (p.net === 'GND' ? 'GND' : `IO${i}`)));
+	assert.ok(mock.logs.some(l => new RegExp(`pin names: ${u2Pads.length} of \\d+ component pads named from the project file \\(1 parts\\)`).test(l.message)));
+
+	(mock.eda as Record<string, unknown>).sys_FileManager = { getProjectFile: async () => {
+		files++;
+		throw new Error('no permission');
+	} };
+	assert.equal(await addPinNames(await readBoard()), 0);
+	await addPinNames(await readBoard());
+	assert.equal(files, 2, 'after a failure the project file is not asked for again');
+});
+
 test('pin names from the netlist: a load returns only through its GND pin, not through an address pin tied to GND', async () => {
 	const u2 = board.components.find(c => c.designator === 'U2')!;
 	const gnd = board.pads.find(p => p.componentId === u2.id && p.net === 'GND')!;

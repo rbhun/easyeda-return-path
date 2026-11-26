@@ -6,6 +6,9 @@ import { test } from 'node:test';
 import { strToU8, zipSync } from 'fflate';
 import { area, bbox } from '@returnpath/core';
 import { loadBoard } from '../src/easyeda/load.js';
+import { projectPinNames } from '../src/easyeda/project.js';
+import { readFileSync } from 'node:fs';
+import { unzipSync } from 'fflate';
 
 const line = (head: object, body: object) => `${JSON.stringify(head)}||${JSON.stringify(body)}|`;
 
@@ -68,4 +71,10 @@ test('.epro2 (one .epru, object form): layers in use, tracks, 10 mil pour fills 
   assert.ok(Math.abs(area(pad.shape) - 40 * 20 * 0.0254 ** 2) < 1e-6);
   assert.equal(b.components[0].designator, 'U1');
   assert.equal(pad.pinName, 'GND', 'pin name from the symbol of the device');
+});
+
+test('.epro2 pin names by designator, through the device of each PCB component and its symbol', () => {
+  const names = projectPinNames(unzipSync(new Uint8Array(readFileSync(epro2()))));
+  assert.deepEqual([...names.byDesignator.get('U1') ?? []], [['1', 'GND']]);
+  assert.deepEqual([...names.byDevice.get('dev1') ?? []], [['1', 'GND']]);
 });
