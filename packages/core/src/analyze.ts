@@ -440,7 +440,8 @@ class Context {
 
   copperPath(layer: number, net: string, a: Pt, b: Pt): Path | null {
     const region = this.netCopper(layer, net);
-    return (region.length && drawnGeodesic(region, a, b, this.opts.maxDetourNodes)?.path) ?? null;
+    if (!region.length) return null;
+    return drawnGeodesic(region, a, b, this.opts.maxDetourNodes)?.path ?? null;
   }
 
   copper(layer: number, exclude?: string): Paths {
