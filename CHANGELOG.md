@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.66] - 2026-11-26
+
+From Balazs: U8 pin 7 is called SD. It is an enable pin tied to ground and draws almost no current. The return sink can also be named EP, −Vo or VSS, and on a header it may be only a pin number.
+
+- **SD is not where the return starts.** Pin 7 stays tied to GND in the result, and the line leaves the pin named GND. The same goes for EN. The sink is a pin named GND, EP, −Vo or VSS. A header whose ground pins have no such name, only their numbers, still returns through each of them.
+
 ## [0.1.65] - 2026-11-26
 
 From Balazs: U8's return on the +6V rail drew a loop that changed from run to run, and it started on pad 7.

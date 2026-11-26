@@ -279,14 +279,17 @@ export interface DcSetupInput {
   currents?: Record<string, number>;
 }
 
-/** Ground pin names that carry a part's supply current; other ground pads (A0 tied low) carry none. */
-const SUPPLY_GROUND_PIN_RE = /^(?:[ADPS]?GND\w*|V(?:SS|EE)\w*|0V|E?PAD|EP\d*|THERMAL\w*|TAB|SLUG)$/i;
+/**
+ * Pin names that sink a part's supply current: GND (and AGND, PGND, …), VSS, VEE, the exposed
+ * pad, and a converter's −Vo. An enable or address pin tied to the same net (SD, EN, A0) does not.
+ */
+const SUPPLY_GROUND_PIN_RE = /^(?:[ADPS]?GND\w*|V(?:SS|EE)\w*|0V|E?PAD|EP\d*|THERMAL\w*|TAB|SLUG|[-−–]VO(?:UT)?|VO(?:UT)?[-−–])$/i;
 const isSupplyGroundPin = (name: string) => name.split(/[\s/(),;|]+/).some((tok) => SUPPLY_GROUND_PIN_RE.test(tok));
 
 /**
- * A part's pads on the ground that carry its return current. A named ground pin (GND, VSS, EP…)
- * is the return: an NC, an address pin or a pad with no name on the same net does not start one.
- * With no named ground pin, every pad on the ground counts.
+ * A part's pads on the ground that carry its return current. The sink is GND, EP, −Vo or VSS.
+ * An enable pin such as SD, tied to that net, does not start one. With no such name, every pad
+ * on the ground counts, including a header pin whose name is only its number.
  */
 export function returnPads(pads: Pad[], ground: string): { pads: Pad[]; tied: Pad[] } {
   const on = pads.filter((p) => p.net === ground);

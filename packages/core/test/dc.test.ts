@@ -231,6 +231,28 @@ test('only ground pins start a return: address pins tied to GND do not; without 
   assert.deepEqual(returnPads(b.pads.filter((p) => p.componentId === 'c0'), 'GND').pads.map((p) => p.number), ['c0.2', 'c0.4']);
 });
 
+test('SD tied to ground draws no return; the sink is GND, EP, -Vo or VSS, and a header pin that is only a number still does', () => {
+  const b = partsBoard([
+    ['J1', 'Header', [['1', '5V', '1'], ['2', 'GND', '2'], ['3', 'GND', '3']]],
+    ['U8', 'LED driver', [['5', '6V', 'VCC'], ['7', 'GND', 'SD'], ['11', 'GND', 'GND']]],
+    ['U1', 'isolated', [['6', '12V', '+Vo'], ['7', 'GND', '-Vo'], ['8', 'GND', 'SD']]],
+    ['U2', 'LDO', [['2', '3V3', 'VOUT'], ['3', 'GND', 'VSS'], ['4', 'GND', 'EN']]],
+    ['U3', 'QFN', [['1', '3V3', 'VDD'], ['17', 'GND', 'EP'], ['18', 'GND', 'SD']]],
+  ]);
+  const setup = buildDcSetup(b, { rail: '5V', ground: 'GND', source: 'J1', loads: ['U8', 'U1', 'U2', 'U3'] });
+  const by = (des: string) => setup.loads.find((l) => l.designator === des)!;
+  assert.deepEqual(by('U8').groundPads.map((p) => p.pinName), ['GND']);
+  assert.deepEqual(by('U1').groundPads.map((p) => p.pinName), ['-Vo']);
+  assert.deepEqual(by('U2').groundPads.map((p) => p.pinName), ['VSS']);
+  assert.deepEqual(by('U3').groundPads.map((p) => p.pinName), ['EP']);
+  assert.deepEqual(setup.source.groundPads.map((p) => p.pinName), ['2', '3'], 'a header whose pins are only numbers still returns through each ground pin');
+  const warnings = setup.warnings.join('\n');
+  assert.match(warnings, /U8: SD is tied to GND but carries no supply current; the return starts at GND/);
+  assert.match(warnings, /U1: SD is tied to GND but carries no supply current; the return starts at -Vo/);
+  assert.match(warnings, /U2: EN is tied to GND but carries no supply current; the return starts at VSS/);
+  assert.doesNotMatch(warnings, /^J1:/m);
+});
+
 test('ground pairing by name', () => {
   const b = partsBoard([['U1', 'x', [['1', 'GND'], ['2', 'AGND'], ['3', 'AVDD'], ['4', '3V3']]]]);
   assert.equal(pairGround(b, 'AVDD', ['AGND', 'GND']), 'AGND');
