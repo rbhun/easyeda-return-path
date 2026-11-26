@@ -45,7 +45,13 @@ npm run build:extension   # → packages/extension/build/dist/*.eext
 npm run demo              # CLI demo boards → packages/cli/out/
 ```
 
-Versioning: every change raises the minor version and adds an entry to [CHANGELOG.md](CHANGELOG.md); `npm run check:version` (also run in CI) checks it.
+Versioning: every change raises the patch number above main's version and adds an entry to [CHANGELOG.md](CHANGELOG.md); `npm run check:version -- origin/main` checks it, and CI runs the same comparison on every pull request.
+
+## Pull requests and releases
+
+- **Every pull request:** CI runs the `check` job (version, typecheck, tests, build) and uploads the `.eext` as an artifact named `easyeda-return-path_v<version><letter>`. The letter counts the builds of that version: `a` for the first, then `b`, `c` and so on, so each push gets its own file. `extension.json` keeps the plain version, so EasyEDA shows `0.1.30` for both `0.1.30a` and `0.1.30b`.
+- **Merging:** once `check` passes, the `automerge` job merges the pull request with a merge commit (`gh pr merge --auto --merge`, or a direct merge where auto-merge is not available). Draft pull requests and pull requests that change `.github/workflows` are left for a person to merge.
+- **On main:** the Release workflow builds the `.eext` and publishes the GitHub Release `v<version>` with the file attached and the CHANGELOG entry as notes. A version that already has a release is skipped.
 
 ## Run files and the sync worker
 

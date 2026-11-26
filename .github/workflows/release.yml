@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build extension
+        run: npm run build:extension
+      - name: Publish release v<version> with the .eext
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./packages/extension/extension.json').version")
+          tag="v${version}"
+          file="packages/extension/build/dist/easyeda-return-path_v${version}.eext"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::Release $tag already exists; nothing to publish."
+            exit 0
+          fi
+          awk -v h="## [${version}]" 'index($0, h) == 1 { on = 1; next } on && /^## \[/ { exit } on { print }' CHANGELOG.md > release-notes.md
+          gh release create "$tag" "$file" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$tag" --notes-file release-notes.md
