@@ -286,11 +286,17 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 			pairs[r] = dflt;
 	}
 	let rail = rails[0];
+	let picked: string[] = [];
 	if (rails.length > 1) {
-		const picked = await ask.select(title, t('Step 2/5: rail to solve.'), rails.map(r => ({ value: r, label: pairs[r] ? `${r} / ${pairs[r]}` : r })), preferredRail && rails.includes(preferredRail) ? preferredRail : rails[0]);
-		if (!picked)
+		const first = preferredRail && rails.includes(preferredRail) ? preferredRail : previous && rails.includes(previous.rail) ? previous.rail : rails[0];
+		const dflt = previous?.rail === first ? [first, ...(previous.railNets ?? []).filter(n => rails.includes(n))] : [first];
+		const ticked = await ask.multi(title, t('Step 2/5: rail to solve. Tick several nets of one rail (for example both sides of a fuse, shunt or jumper) to solve them together; the parts between them are taken as shorts.'), rails.map(r => ({ value: r, label: pairs[r] ? `${r} / ${pairs[r]}` : r })), dflt);
+		if (!ticked?.length)
 			return undefined;
-		rail = picked;
+		rail = ticked.includes(first) ? first : ticked[0];
+		picked = ticked.filter(n => n !== rail);
+		if (picked.length)
+			log(`wizard: ${rail} solved together with ${picked.join(', ')} (ticked in step 2)`);
 	}
 
 	// 3. Its ground, asked only when there is a choice.
@@ -303,14 +309,14 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	let g: RailGuess = byNet.get(rail) ?? { net: rail, reason: 'name', candidates: [], rule: 'ask', loads: [], excluded: [], askReason: t('${1} was not guessed as a rail: pick its source.', rail) };
 
 	// Nets the rail continues on through a fuse, ferrite, diode…, solved with it as one rail; asked only when there are any.
-	const neighbours = railNeighbours(board, rail);
-	let railNets: string[] = [];
+	const neighbours = [...new Map([rail, ...picked].flatMap(n => railNeighbours(board, n)).filter(x => x.net !== rail && !picked.includes(x.net)).map(x => [x.net, x])).values()];
+	let railNets: string[] = picked;
 	if (neighbours.length) {
 		const before = previous?.rail === rail ? (previous.railNets ?? []).filter(n => neighbours.some(x => x.net === n)) : undefined;
-		const joined = await ask.multi(title, t('${1} continues through series parts to the nets below. Ticked nets are solved with it as one rail, the parts between them taken as shorts; untick all to solve ${1} alone.', rail), neighbours.map(x => ({ value: x.net, label: t('${1} (through ${2})', x.net, x.via) })), before ?? neighbours.map(x => x.net));
+		const joined = await ask.multi(title, t('${1} continues through series parts to the nets below. Ticked nets are solved with it as one rail, the parts between them taken as shorts; untick all to solve ${1} alone.', railLabel({ rail, railNets: picked })), neighbours.map(x => ({ value: x.net, label: t('${1} (through ${2})', x.net, x.via) })), before ?? neighbours.map(x => x.net));
 		if (!joined)
 			return undefined;
-		railNets = joined;
+		railNets = [...picked, ...joined];
 		log(`wizard: ${rail} solved together with ${railNets.join(', ') || 'no other net'}`);
 	}
 	const group = [rail, ...railNets];
