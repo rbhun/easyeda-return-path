@@ -171,7 +171,8 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       }
       if (opts.merge && k > 0) {
         const hit = meets(layer, c);
-        if (hit) {
+        // Joining across a trace would draw one line over the copper that separates the two paths.
+        if (hit && !leavesCopper(f, p, hit.pt)) {
           const pts = segments[segments.length - 1].pts;
           pts.push(...join(pts, p, hit).slice(1));
           complete = true;
@@ -244,10 +245,7 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       stall = c === lastCell ? stall + 1 : 0;
       lastCell = c;
       let next = stall > 6 ? undefined : rkStep(f, p);
-      if (next) {
-        const [ni, nj] = cellOf(g, next);
-        if (!inGrid(g, ni, nj) || !(f.weight[nj * g.nx + ni] > 0)) next = undefined;
-      }
+      if (next && (offPolygon(f, next) || leavesCopper(f, p, next))) next = undefined;
       if (!next) {
         // Narrow copper (track corners, pad edges): step to the neighbour cell lower in potential.
         const d = descend(f, c);
@@ -266,6 +264,7 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
         }
         if (d < 0) break;
         next = centreOf(g, d);
+        if (leavesCopper(f, p, next)) break;
         stall = 0;
       }
       p = next;
@@ -331,7 +330,7 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
       }
       for (const a of [1, 0.75, 0.5, 0.25]) {
         const q = { x: p.x + (sx / sw - p.x) * a, y: p.y + (sy / sw - p.y) * a };
-        if (onCopper(q)) return q;
+        if (onCopper(q) && !offPolygon(f, q) && !leavesCopper(f, p, q)) return q;
       }
       return p;
     });
@@ -435,9 +434,51 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
         const k = qj * g.nx + qi;
         onCopper = inGrid(g, qi, qj) && f.weight[k] > 0 && isFinite(f.v[k]);
       }
-      if (onCopper) return q;
+      if (onCopper && !offPolygon(f, q) && !leavesCopper(f, at, q)) return q;
     }
     return undefined;
+  }
+
+  /** A point drawn in a full cell can still lie in a hole the cell only partly covers. */
+  function offPolygon(f: DcLayerField, p: Pt): boolean {
+    const grids = f.copper;
+    if (!grids?.length) return false;
+    return grids.every((grid) => !grid.contains(p));
+  }
+
+  /** True when the straight segment leaves this layer's copper, so a drawn line may not bridge it. */
+  function leavesCopper(f: DcLayerField, a: Pt, b: Pt): boolean {
+    const grids = f.copper;
+    // Both ends sit in the copper, and every net's copper is cut somewhere along the segment:
+    // the segment crosses a trace or a slot, even one narrower than a cell.
+    if (grids?.length && grids.some((grid) => grid.contains(a)) && grids.some((grid) => grid.contains(b)) && grids.every((grid) => !grid.contains(a) || !grid.contains(b) || grid.crosses(a, b))) return true;
+    let [i, j] = cellOf(g, a);
+    const [ie, je] = cellOf(g, b);
+    if (!inGrid(g, i, j) || !(f.weight[j * g.nx + i] > 0)) return true;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const si = Math.sign(dx);
+    const sj = Math.sign(dy);
+    const tdx = si ? g.cell / Math.abs(dx) : Infinity;
+    const tdy = sj ? g.cell / Math.abs(dy) : Infinity;
+    let tx = si ? ((si > 0 ? g.x0 + (i + 1) * g.cell : g.x0 + i * g.cell) - a.x) / dx : Infinity;
+    let ty = sj ? ((sj > 0 ? g.y0 + (j + 1) * g.cell : g.y0 + j * g.cell) - a.y) / dy : Infinity;
+    const n = Math.abs(ie - i) + Math.abs(je - j);
+    for (let k = 0; k < n; k++) {
+      if (tx < ty) {
+        const c = j * g.nx + i;
+        if (si > 0 ? f.gapX?.[c] : i > 0 && f.gapX?.[c - 1]) return true;
+        tx += tdx;
+        i += si;
+      } else {
+        const c = j * g.nx + i;
+        if (sj > 0 ? f.gapY?.[c] : j > 0 && f.gapY?.[c - g.nx]) return true;
+        ty += tdy;
+        j += sj;
+      }
+      if (!inGrid(g, i, j) || !(f.weight[j * g.nx + i] > 0)) return true;
+    }
+    return false;
   }
 
   function rkStep(f: DcLayerField, p: Pt): Pt | undefined {
@@ -465,6 +506,7 @@ export function traceStreamlines(g: Grid, r: DcNetResult, options: Partial<Strea
         if ((!di && !dj) || !inGrid(g, i + di, j + dj)) continue;
         const k = (j + dj) * g.nx + i + di;
         if (!(f.weight[k] > 0) || !isFinite(f.v[k])) continue;
+        if (leavesCopper(f, centreOf(g, c), centreOf(g, k))) continue;
         if (pot(k) < bestPot) {
           best = k;
           bestPot = pot(k);
