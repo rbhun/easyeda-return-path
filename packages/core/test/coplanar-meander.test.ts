@@ -56,7 +56,8 @@ test('a meander in a wider pour clearance returns in the plane under it, through
   // It comes from the GND via to one end of the meander and goes back to it from the other.
   const atVia = (p: { x: number; y: number }) => Math.hypot(p.x - 15.75, p.y - 12.3) < 0.1;
   assert.ok(onPlane.length > 0 && onPlane.every((t) => atVia(t.pts[0]) && atVia(t.pts[t.pts.length - 1])), 'the plane return starts and ends at the via');
-  assert.ok(onPlane.every((t) => t.pts.every((p) => atVia(p) || tracksDist(p) < 0.25)), 'the plane return lies under the meander');
+  // The bend off the via is smoothed, so the line rounds a little past the end of the meander.
+  assert.ok(onPlane.every((t) => t.pts.every((p) => atVia(p) || tracksDist(p) < 0.45)), 'the plane return lies under the meander');
   const xs = onPlane.flatMap((t) => t.pts.map((p) => p.x));
   assert.ok(Math.min(...xs) < 15 && Math.max(...xs) > 16.5, 'from one end of the meander to the other');
   const beside = an.returnPath.traces.filter((t) => t.layer === 2 && t.pts.every((p) => p.x < 37));
@@ -138,9 +139,32 @@ test('a connector pin the trace passes through closes the loop through its own g
   const pin = an.returnPath.jumps.find((j) => j.kind === 'pin' && j.label === 'J1.2');
   assert.ok(pin, an.returnPath.jumps.map((j) => `${j.kind} ${j.label}`).join(', '));
   assert.deepEqual([pin.from, pin.to], [{ x: 10, y: 12 }, { x: 10, y: 12 }], 'the return runs into the ground pin: only the pin is marked');
-  const into = an.returnPath.traces.filter((t) => [t.pts[0], t.pts[t.pts.length - 1]].some((p) => p.x === 10 && p.y === 12));
-  assert.equal(into.length, 2, 'the return from each side of the pin ends in its ground pin');
+  const atPin = (p: { x: number; y: number }) => p.x === 10 && p.y === 12;
+  const into = an.returnPath.traces.filter((t) => atPin(t.pts[0]) || atPin(t.pts[t.pts.length - 1]));
+  assert.ok(into.length >= 1, 'the return runs into the ground pin');
+  // The two sides are one current where they meet, so the other side joins that line instead of a second corner into the pad.
+  const onInto = (p: { x: number; y: number }) => into.some((t) => t.pts.some((q, i) => i < t.pts.length - 1 && distPointSeg(p, q, t.pts[i + 1]) < 0.4));
+  const sides = an.returnPath.traces.filter((t) => t.layer === 2 && t.pts.some((p) => p.x < 9) && t.pts.some((p) => p.x > 11 || atPin(p) || onInto(p)));
+  assert.ok(sides.length >= 1 && an.returnPath.traces.some((t) => t.layer === 2 && t.pts[0].x < 9 && (atPin(t.pts.at(-1)!) || onInto(t.pts.at(-1)!))), 'the return from the left reaches the pin');
+  assert.ok(an.returnPath.traces.some((t) => t.layer === 2 && t.pts.some((p) => p.x > 12) && (atPin(t.pts[0]) || atPin(t.pts.at(-1)!) || onInto(t.pts[0]) || onInto(t.pts.at(-1)!))), 'the return from the right joins it');
   assert.ok(!an.findings.some((f) => f.kind === 'driver-loop' && /not at an end/.test(f.message)), 'J1 can be the driver');
+});
+
+test('an enable pin tied to ground does not take the return; the named ground pin does', () => {
+  // SD sits closer to the signal pad than GND. The return still enters GND, and says so.
+  const board = meanderBoard();
+  board.components = [{ id: 'u1', designator: 'U1', at: { x: 10, y: 11 }, rotation: 0, layer: 2, padIds: ['p1', 'sd', 'gnd'] }];
+  board.pads = [
+    { id: 'p1', net: 'SIG', layer: 2, number: '1', pinName: 'SD0', at: { x: 10, y: 10 }, shape: [rect(10, 10, 0.6, 0.6)], holeDiameter: 0, componentId: 'u1' },
+    { id: 'sd', net: 'GND', layer: 2, number: '7', pinName: 'SD', at: { x: 10, y: 11.2 }, shape: [rect(10, 11.2, 0.6, 0.6)], holeDiameter: 0, componentId: 'u1' },
+    { id: 'gnd', net: 'GND', layer: 2, number: '11', pinName: 'GND', at: { x: 10, y: 13.2 }, shape: [rect(10, 13.2, 0.6, 0.6)], holeDiameter: 0, componentId: 'u1' },
+  ];
+  const an = analyzeNet(board, 'SIG');
+  const pin = an.returnPath.jumps.find((j) => j.kind === 'pin');
+  assert.equal(pin?.label, 'U1.11', an.returnPath.jumps.map((j) => `${j.kind} ${j.label}`).join(', '));
+  assert.ok(an.returnPath.traces.some((t) => t.pts.some((p) => Math.hypot(p.x - 10, p.y - 13.2) < 0.05)), 'the return runs into the GND pin');
+  assert.ok(!an.returnPath.traces.some((t) => t.pts.some((p) => Math.hypot(p.x - 10, p.y - 11.2) < 0.05)), 'the return does not enter the SD pin');
+  assert.ok(an.findings.some((f) => /SD is tied to GND but does not take the return/.test(f.message)), an.findings.map((f) => f.message).join('\n'));
 });
 
 test('a ground pad with a trace across the way in is reached through the copper around that trace', () => {
