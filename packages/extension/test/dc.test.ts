@@ -21,7 +21,7 @@ function dcBoard() {
 const board = dcBoard();
 const ext = await import('../src/index.ts');
 const { PALETTE } = await import('../src/style.ts');
-const DC_COLORS = { supply: PALETTE.yellow, return: PALETTE.magenta, returnOther: PALETTE.cyan, bottleneck: PALETTE.red };
+const DC_COLORS = { supply: PALETTE.yellow, supplyOther: PALETTE.green, return: PALETTE.magenta, returnOther: PALETTE.cyan, bottleneck: PALETTE.red };
 
 async function run(selected: string, answer?: (d: DialogCall) => unknown) {
 	const mock = createMockEda(board, selected, [], answer);
@@ -50,13 +50,14 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.match(msg, /3V3: drop \d+\.\d+ mV,/);
 	assert.match(msg, /GND: drop \d+\.\d+ mV,/);
 	assert.doesNotMatch(msg, /Contours drawn/);
-	assert.match(msg, /Streamlines: 3V3 supply yellow; GND return magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
+	assert.match(msg, /Streamlines, in the colour of the copper layer the current flows in: 3V3 supply yellow on Top Layer and green on other layers; GND return magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
-	assert.deepEqual(colors, new Set([DC_COLORS.supply, DC_COLORS.return, DC_COLORS.returnOther, DC_COLORS.bottleneck].map(c => JSON.stringify(c))));
+	const allowed = new Set([DC_COLORS.supply, DC_COLORS.supplyOther, DC_COLORS.return, DC_COLORS.returnOther, DC_COLORS.bottleneck].map(c => JSON.stringify(c)));
+	assert.ok([...colors].every(c => allowed.has(c)) && [DC_COLORS.supply, DC_COLORS.return, DC_COLORS.returnOther, DC_COLORS.bottleneck].every(c => colors.has(JSON.stringify(c))), [...colors].join(' '));
 	assert.ok(mock.markers.every(m => ['r', 'g', 'b'].every(k => [0, 255].includes((m.color as Record<string, number>)[k]))), 'channels only 0 or 255: EasyEDA Pro 3.2 clips colours to a 0–1 scale');
 	assert.ok(mock.markers.every(m => m.shape.type === 'line' || m.shape.type === 'circle'));
 	const of = (c: unknown) => mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(c));
-	assert.ok(of(DC_COLORS.supply).every(m => m.width === 2) && [...of(DC_COLORS.return), ...of(DC_COLORS.returnOther)].every(m => m.width === 5), 'supply thin, return thick');
+	assert.ok([...of(DC_COLORS.supply), ...of(DC_COLORS.supplyOther)].every(m => m.width === 2) && [...of(DC_COLORS.return), ...of(DC_COLORS.returnOther)].every(m => m.width === 5), 'supply thin, return thick');
 	assert.ok(of(DC_COLORS.returnOther).some(m => m.shape.type === 'circle'), 'GND changes layer at vias on this board, marked with circles');
 	assert.ok(of(DC_COLORS.returnOther).some(m => m.shape.type === 'line'), 'and runs on Inner1');
 
@@ -388,13 +389,13 @@ test('panel: opens without blocking, runs DC from a button, shows the result the
 	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 255 });
 	const white = JSON.stringify({ r: 255, g: 255, b: 255, alpha: 255 });
 	const supplyCount = mock.markers.filter(m => JSON.stringify(m.color) === yellow).length;
-	mock.panelSend({ cmd: 'style', style: { supply: { colour: 'white', width: 4 } } });
+	mock.panelSend({ cmd: 'style', style: { forwardTop: { colour: 'white', width: 4 } } });
 	for (let i = 0; i < 40 && mock.markers.filter(m => JSON.stringify(m.color) === white).length < supplyCount; i++)
 		await new Promise(r => setTimeout(r, 25));
 	const restyled = mock.markers.filter(m => JSON.stringify(m.color) === white);
 	assert.equal(restyled.length, supplyCount, 'the supply redrawn in the new colour without a new analysis');
 	assert.ok(restyled.every(m => m.width === 4));
-	assert.equal(states().at(-1).roles.find((r: { role: string }) => r.role === 'supply').colour, 'white');
+	assert.equal(states().at(-1).roles.find((r: { role: string }) => r.role === 'forwardTop').colour, 'white');
 
 	mock.panelSend({ cmd: 'resetStyle' });
 	await new Promise(r => setTimeout(r, 50));

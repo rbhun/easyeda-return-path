@@ -262,7 +262,7 @@ async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: num
 		opts.hz || known?.speedHz ? signal.message : `${signal.message} ${t('(The usual speed of this kind of line; HF check asks for the speed.)')}`,
 		noted ? t('Board info: ${1}.', noted) : '',
 		drawn.returnLayers.length
-			? t('Return current of the trace on ${1}, drawn where it flows: on the trace when it runs in the copper of the other layer, beside it in a pour on the trace\'s own layer. Signal trace in ${4}, with a circle on each via it passes through. Dashed ${2}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${3} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).', drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name, roleColour('signal').name)
+			? t('Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace\'s own layer. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).', drawn.forwardLayers.join(', '), drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name)
 			: t('No return path drawn: the trace has no reference copper.'),
 		drivers.length ? t('Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.', drivers.join(', '), roleColour('hop').name) : t('Driver: not chosen, so only the pin at each end closes the loop.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
@@ -473,7 +473,7 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 		...[res.supply, res.ret].filter(n => !!n).map(n => carriesCurrent(n!)
 			? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
 			: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
-		t('Streamlines: ${1} supply ${2}; ${3} return ${4} on ${5} and ${6} on other layers, with a circle where it changes layer.', rail, roleColour('supply').name, setup.ground, roleColour('returnTop').name, layerName(board.stackup.copper[0].id), roleColour('returnOther').name),
+		t('Streamlines, in the colour of the copper layer the current flows in: ${1} supply ${2} on ${5} and ${3} on other layers; ${4} return ${6} on ${5} and ${7} on other layers, with a circle where it changes layer.', rail, roleColour('forwardTop').name, roleColour('forwardOther').name, setup.ground, layerName(board.stackup.copper[0].id), roleColour('returnTop').name, roleColour('returnOther').name),
 		t('${1} overlay marker(s).', String(drawn.markers)),
 		...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 	].filter(Boolean);
