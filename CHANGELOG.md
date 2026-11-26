@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.42] - 2026-11-26
+
+From Balazs, with a screenshot of the panel: the buttons are uneven.
+
+- The panel's buttons in a row now share its width equally, so both columns line up from row to row. Before, each button was sized by its label, so "Rerun last" was narrower than "HF check" above it.
+
 ## [0.1.41] - 2026-11-26
 
 Numbered above 0.1.40, which #20 took.
