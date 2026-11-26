@@ -66,6 +66,21 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.equal(mock.markers.length, 0);
 });
 
+test('a rail selected as 3v3 on a board that spells it 3V3 and 3v3 is the one rail 3V3, its ground found though spelt gnd in places', async () => {
+	const mixed = dcBoard();
+	let k = 0;
+	for (const p of [...mixed.tracks, ...mixed.vias, ...mixed.pads])
+		if ((p.net === '3V3' || p.net === 'GND') && k++ % 3 === 0)
+			p.net = p.net.toLowerCase();
+	const mock = createMockEda(mixed, '3v3');
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showDcReturn();
+	assert.deepEqual(mock.dialogs.map(d => d.kind), ['select', 'multi', 'currents'], 'the selected rail skips steps 1 and 2, as for 3V3');
+	assert.match(mock.messages[0], /^3V3 \/ GND: source U1, loads U2, U3, J2\./);
+	assert.match(mock.messages[0], /3V3: drop \d+\.\d+ mV,/);
+	assert.doesNotMatch(mock.messages[0], /no GND pad|has no pad on/);
+});
+
 test('the overlay is drawn when the editor cannot convert the canvas origin any more after the solve', async () => {
 	const at = { x: 1000, y: -500 };
 	const drawWith = async (host: Parameters<typeof createMockEda>[4]) => {

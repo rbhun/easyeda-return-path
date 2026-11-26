@@ -3,7 +3,7 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, netInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, railLabel, railNetsOf, type Board, type BoardInfo, type DcSetupInput, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, netInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, railLabel, railNetsOf, resolveDcInput, resolveNet, sameNet, type Board, type BoardInfo, type DcSetupInput, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { boardInfo } from './board-info';
 import { carriesCurrent, drawDc } from './dc-overlay';
@@ -197,7 +197,7 @@ async function chooseNet(board: Board, selected: string | undefined, ask: Ask, i
 			speed: String(hz),
 		};
 	});
-	const dflt = cands.some(c => c.net === selected) ? selected! : cands[0].net;
+	const dflt = cands.find(c => sameNet(c.net, selected))?.net ?? cands[0].net;
 	const picked = await ask.netSpeed(title, t('Net to check and its speed (bit rate or clock frequency), prefilled from the board info or with the usual speed of its kind. The speed sets the edge time, which decides whether the trace acts as a transmission line. Recognised data lines come first; the selected net is ticked. A speed you change is saved to the board info.'), options, dflt);
 	return picked && { ...picked, prefilledHz: prefill.get(picked.net)! };
 }
@@ -209,6 +209,8 @@ async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: num
 	// The name check needs no board, so power and ground nets are turned away before the read.
 	const byName = hfApplicability({ pours: [] }, net);
 	const board = byName.ok ? opts.board ?? await timed('read board', readBoard, boardSizes) : undefined;
+	if (board)
+		net = resolveNet(board, net);
 	const scope = board ? hfApplicability(board, net) : byName;
 	recordResult('net', net);
 	if (board)
@@ -376,7 +378,8 @@ async function focusOn(sel: SelectedPart, ask: Ask, command: string): Promise<vo
 	// A pad on a supply net picks that rail; a ground pad or the whole part picks the rail it draws from.
 	const wanted = kind?.kind === 'power' ? pad!.net : undefined;
 	const last = lastRun();
-	let input = last?.kind === 'dc' && (wanted ? railNetsOf(last.input).includes(wanted) : railNetsOf(last.input).some(n => nets.has(n))) ? last.input : undefined;
+	const lastInput = last?.kind === 'dc' ? resolveDcInput(board, last.input) : undefined;
+	let input = lastInput && (wanted ? railNetsOf(lastInput).includes(wanted) : railNetsOf(lastInput).some(n => nets.has(n))) ? lastInput : undefined;
 	if (!input) {
 		const rails = guessRails(board).rails;
 		const rail = wanted ?? rails.find(r => r.loads.some(l => l.componentId === comp.id))?.net ?? rails.find(r => nets.has(r.net))?.net;
@@ -408,6 +411,7 @@ async function focusOn(sel: SelectedPart, ask: Ask, command: string): Promise<vo
 /** `focus`: the one part whose current alone is solved and drawn (the last run stays as it was). */
 async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise<void> {
 	const title = t('DC return current');
+	input = resolveDcInput(board, input);
 	log(`DC setup: ${JSON.stringify(input)}`);
 	await checkpoint();
 	const setup = buildDcSetup(board, input);

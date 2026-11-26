@@ -18,6 +18,7 @@ import {
 	scalePaths,
 	splitIslands,
 	strokePath,
+	unifyNetCase,
 	union,
 	MULTI_LAYER,
 	type Board,
@@ -925,5 +926,5 @@ export async function readBoard(): Promise<Board> {
 	await step(`board outline ${outline.length ? `${outline.length} ring(s)` : 'missing'}, ${keepouts.length} pour keepouts`);
 	// The PCB is open now; the overlay drawn after a long solve may find no canvas to convert on.
 	await canvasOrigin();
-	return { outline, stackup, nets, tracks, vias, pads, components, pours, keepouts, warnings };
+	return unifyNetCase({ outline, stackup, nets, tracks, vias, pads, components, pours, keepouts, warnings });
 }

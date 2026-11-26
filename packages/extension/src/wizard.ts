@@ -4,7 +4,7 @@
 // the system dialogs when that window cannot be used.
 import { checkpoint, log } from './runner';
 import { askInWindow, BACK, closeWizardWindow, type WizardKind } from './wizard-window';
-import { componentsOnNet, emptyBoardInfo, guessRailGroup, guessRails, infoRails, parseCurrents, parseHz, railBridges, railInfo, railLabel, railLoadsFor, railNeighbours, withRail, type Board, type BoardInfo, type DcSetupInput, type RailGuess } from '@returnpath/core';
+import { componentsOnNet, emptyBoardInfo, guessRailGroup, guessRails, infoRails, parseCurrents, parseHz, railBridges, railInfo, railLabel, railLoadsFor, railNeighbours, resolveDcInput, resolveNet, withRail, type Board, type BoardInfo, type DcSetupInput, type RailGuess } from '@returnpath/core';
 import { t } from './i18n';
 
 export interface Option {
@@ -247,12 +247,14 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 	log('wizard: guessing rails…');
 	await checkpoint();
 	const guess = guessRails(board);
+	preferredRail = preferredRail && resolveNet(board, preferredRail);
+	previous = previous && resolveDcInput(board, previous);
 	log(`wizard: ${guess.rails.length} rails (${guess.rails.map(r => `${r.net}: source ${r.source?.designator ?? '?'}`).join(', ')}), grounds ${guess.grounds.join(', ') || '-'}`);
 	const byNet = new Map(guess.rails.map(r => [r.net, r]));
 	const allNets = [...new Set([...board.nets, ...board.pads.map(p => p.net)].filter(Boolean))].sort();
-	const knownRails = infoRails(info).filter(n => allNets.includes(n) && !byNet.has(n));
-	for (const n of info.nets.filter(n => n.kind === 'ground' && allNets.includes(n.net) && !guess.grounds.includes(n.net)))
-		guess.grounds.push(n.net);
+	const knownRails = infoRails(info).map(n => resolveNet(board, n)).filter(n => allNets.includes(n) && !byNet.has(n));
+	for (const n of info.nets.filter(n => n.kind === 'ground').map(n => resolveNet(board, n.net)).filter(n => allNets.includes(n) && !guess.grounds.includes(n)))
+		guess.grounds.push(n);
 
 	// 1. Power rails.
 	const railOptions = [

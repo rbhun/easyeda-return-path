@@ -77,3 +77,16 @@ test('board info: an import adds to what is there, a manual change overrides one
   assert.deepEqual(rows[1], { net: '3V3', voltage: 3.3, source: { part: 'U2', pin: '5' }, load: { part: 'U9' }, typicalA: 0.01 });
   assert.equal(rail.loads.filter(l => l.net === 'VBUS').length, 1, 'other rails untouched');
 });
+
+test('board info: a net or rail row matches the board net in any letter case', () => {
+  const { info } = parseBoardInfoCsv('row,net,kind,voltage,source_part,load_part,typical_current\nnet,i2c_scl,clock\nload,3v3,,3.3,U2,U1,40mA\nnet,I2C_SCL,data\nload,3V3,,,,U4,2mA\n');
+  assert.deepEqual(info.nets, [{ net: 'I2C_SCL', kind: 'data' }], 'the later row for the net wins, as for a repeated row');
+  assert.deepEqual(railInfo(info, '3V3'), { voltage: 3.3, source: 'U2', loads: [{ part: 'U1', typicalA: 0.04, peakA: undefined }, { part: 'U4', typicalA: 0.002, peakA: undefined }] });
+  assert.deepEqual(infoRails(info), ['3v3']);
+  const merged = mergeBoardInfo(info, { nets: [{ net: 'I2c_Scl', speedHz: 1e5 }], loads: [{ net: '3V3', load: { part: 'U1' }, typicalA: 0.05 }], layers: [] });
+  assert.equal(merged.nets.length, 1);
+  assert.equal(netInfo(merged, 'i2c_scl')?.speedHz, 1e5);
+  assert.equal(merged.loads.filter(l => l.load?.part === 'U1').length, 1);
+  const rail = withRail(info, '3V3', { source: 'U2', loads: [{ part: 'U4' }] });
+  assert.deepEqual(rail.loads.map(l => [l.net, l.load?.part]), [['3V3', 'U4']], 'the wizard\'s rail replaces the rows of 3v3');
+});

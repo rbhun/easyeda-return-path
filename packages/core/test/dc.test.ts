@@ -451,6 +451,12 @@ test('a rail of two nets joined by a fuse: solved as one, the line runs through 
   assert.deepEqual(setup.loads.map((l) => l.designator), ['U1'], 'the fuse joins the nets; it is no load');
   assert.deepEqual(railBridges(b, setup.railNets!).map((x) => x.designator), ['F1']);
   assert.ok(setup.warnings.some((w) => /F1 joins VBUS_R \+ VBUS_RAW, taken as a short/.test(w)));
+
+  assert.deepEqual(railNeighbours(b, 'vbus_r'), [{ net: 'VBUS_RAW', via: 'F1' }], 'a net name in any case is the board net');
+  const lower = buildDcSetup(b, { rail: 'vbus_r', railNets: ['Vbus_Raw', 'VBUS_r'], ground: 'gnd', source: 'J1' });
+  assert.deepEqual([lower.rail, lower.railNets, lower.ground], ['VBUS_R', ['VBUS_R', 'VBUS_RAW'], 'GND']);
+  assert.deepEqual(lower.loads.map((l) => [l.designator, l.railPads.length, l.groundPads.length]), [['U1', 1, 1]]);
+  assert.deepEqual(guessRailGroup(b, ['vbus_r', 'VBUS_RAW']).source?.designator, guessRailGroup(b, ['VBUS_R', 'VBUS_RAW']).source?.designator);
   const res = solveDc(b, setup, { cell: 0.2 });
   assert.equal(res.supply.net, 'VBUS_R + VBUS_RAW');
   assert.deepEqual(res.supply.unconnected, []);

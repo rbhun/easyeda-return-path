@@ -3,6 +3,7 @@
 // pours and splits are intended). Kept per project, loaded from and saved to one CSV format, and
 // used to prefill the HF and DC checks. Imported and manual values both win over recognition.
 
+import { sameNet, uniqueNets } from './nets.js';
 import { formatHz, parseHz } from './signal.js';
 
 export const NET_KINDS = ['clock', 'data', 'bus', 'diff pair', 'power', 'ground', 'analog', 'control'] as const;
@@ -194,7 +195,7 @@ export function parseBoardInfoCsv(text: string): ParsedBoardInfo {
       if (cells.reference) n.reference = cells.reference;
       if (cells.target) n.target = cells.target;
       if (notes) n.notes = notes;
-      info.nets = [...info.nets.filter(x => x.net !== n.net), n];
+      info.nets = [...info.nets.filter(x => !sameNet(x.net, n.net)), n];
     }
     else if (type === 'load') {
       if (!cells.net) { warnings.push(`line ${line}: a load row needs the rail in the net column`); continue; }
@@ -227,7 +228,7 @@ export function parseBoardInfoCsv(text: string): ParsedBoardInfo {
   return { info, warnings };
 }
 
-const sameLoad = (a: LoadInfo, b: LoadInfo) => a.net === b.net && (a.load?.part ?? '') === (b.load?.part ?? '');
+const sameLoad = (a: LoadInfo, b: LoadInfo) => sameNet(a.net, b.net) && (a.load?.part ?? '') === (b.load?.part ?? '');
 
 /** Writes the board info as CSV in the format parseBoardInfoCsv reads, with every column. */
 export function formatBoardInfoCsv(info: BoardInfo): string {
@@ -256,7 +257,7 @@ export function formatBoardInfoCsv(info: BoardInfo): string {
 export function mergeBoardInfo(base: BoardInfo, more: BoardInfo): BoardInfo {
   const nets = [...base.nets];
   for (const n of more.nets) {
-    const i = nets.findIndex(x => x.net === n.net);
+    const i = nets.findIndex(x => sameNet(x.net, n.net));
     if (i < 0) nets.push(n);
     else nets[i] = { ...nets[i], ...n };
   }
@@ -275,7 +276,7 @@ export function mergeBoardInfo(base: BoardInfo, more: BoardInfo): BoardInfo {
   return { nets, loads, layers };
 }
 
-export const netInfo = (info: BoardInfo, net: string) => info.nets.find(n => n.net === net);
+export const netInfo = (info: BoardInfo, net: string) => info.nets.find(n => sameNet(n.net, net));
 
 /** A rail as the board info gives it: voltage, source part and the loads with their currents. */
 export interface RailInfo {
@@ -285,7 +286,7 @@ export interface RailInfo {
 }
 
 export function railInfo(info: BoardInfo, rail: string): RailInfo | undefined {
-  const rows = info.loads.filter(l => l.net === rail);
+  const rows = info.loads.filter(l => sameNet(l.net, rail));
   if (!rows.length) return undefined;
   return {
     voltage: rows.find(r => r.voltage !== undefined)?.voltage,
@@ -296,7 +297,7 @@ export function railInfo(info: BoardInfo, rail: string): RailInfo | undefined {
 
 /** Rails the board info names: nets with load rows, and nets of kind power. */
 export function infoRails(info: BoardInfo): string[] {
-  return [...new Set([...info.loads.map(l => l.net), ...info.nets.filter(n => n.kind === 'power').map(n => n.net)])];
+  return uniqueNets([...info.loads.map(l => l.net), ...info.nets.filter(n => n.kind === 'power').map(n => n.net)]);
 }
 
 /** Sets a net's fields (a manual change in the wizard), keeping the others. */
@@ -309,7 +310,7 @@ export function withNet(info: BoardInfo, net: string, patch: Partial<Omit<NetInf
  * loads are dropped, kept loads keep their pins, peak current and notes, new loads get a row.
  */
 export function withRail(info: BoardInfo, rail: string, setup: { source: string; loads: { part: string; typicalA?: number }[] }): BoardInfo {
-  const rows = info.loads.filter(l => l.net === rail);
+  const rows = info.loads.filter(l => sameNet(l.net, rail));
   const voltage = rows.find(r => r.voltage !== undefined)?.voltage;
   const sourcePin = rows.find(r => r.source?.part === setup.source)?.source?.pin;
   const source = { part: setup.source, ...(sourcePin ? { pin: sourcePin } : {}) };
@@ -321,5 +322,5 @@ export function withRail(info: BoardInfo, rail: string, setup: { source: string;
     if (l.typicalA !== undefined) row.typicalA = l.typicalA;
     kept.push(row);
   }
-  return { ...info, loads: [...info.loads.filter(l => l.net !== rail), ...kept] };
+  return { ...info, loads: [...info.loads.filter(l => !sameNet(l.net, rail)), ...kept] };
 }

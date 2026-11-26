@@ -3,7 +3,7 @@
 	"uuid": "cfe3a38bdd3044659ee9f3eadd5ebbc8",
 	"displayName": "Return Path Visualizer",
 	"description": "Shows the high-frequency return current path of the selected net and flags split crossings, missing reference copper and layer changes without a nearby return via or decap.",
-	"version": "0.1.70",
+	"version": "0.1.71",
 	"publisher": "rbhun",
 	"engines": {
 		"eda": "^4.1.93"

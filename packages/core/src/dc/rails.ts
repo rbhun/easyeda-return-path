@@ -1,6 +1,7 @@
 // Wizard step 1 (design decisions D3, D7): guess power rails, their grounds, the source of each
 // rail and its loads from net names, part names and designators. The user confirms or corrects.
 import { dist } from '../geom.js';
+import { resolveNet, uniqueNets } from '../nets.js';
 import type { Board, Component, Pad } from '../types.js';
 
 const bare = (net: string) => net.replace(/^[/\\]+/, '').trim();
@@ -331,7 +332,7 @@ function sourceGroundPads(board: Board, c: Component, rail: string, ground: stri
 
 /** The rail's nets, `rail` first, without repeats. */
 export function railNetsOf(input: Pick<DcSetupInput, 'rail' | 'railNets'>): string[] {
-  return [...new Set([input.rail, ...(input.railNets ?? [])].filter(Boolean))];
+  return uniqueNets([input.rail, ...(input.railNets ?? [])].filter(Boolean));
 }
 
 /** "VBUS_R + VBUS_RAW" for a rail of several nets. */
@@ -348,6 +349,7 @@ const PASS_OUT_RE = /^(?:\+?V?OUT\d*\+?|\+?VO\+?|VREG)$/i;
  * of the rail's nets, are the link. A part that only senses across the nets (VIN+ and VIN-) is not.
  */
 export function railBridges(board: Board, nets: string[]): DcBridge[] {
+  nets = uniqueNets(nets.map((n) => resolveNet(board, n)));
   const across = acrossNets(board, nets);
   const series = across.filter((x) => x.all).map((x) => ({ designator: x.c.designator, pads: x.pads }));
   const seen = new Set(series.map((b) => b.designator));
@@ -375,6 +377,7 @@ const CHAIN_DEPTH = 3;
  * a regulator output, and the unnamed nets on the way to one, each with the part it is reached through.
  */
 export function railNeighbours(board: Board, rail: string): { net: string; via: string }[] {
+  rail = resolveNet(board, rail);
   const pourNets = new Set(board.pours.map((p) => p.net));
   const powerNets = new Set(guessRails(board).rails.map((r) => r.net));
   // A switcher's switch node carries pulses, not the rail's DC: the chain stops before it.
@@ -425,6 +428,7 @@ function acrossNets(board: Board, nets: string[]): { c: Component; pads: Pad[]; 
  * shunt counts), without the parts that sit across two of them.
  */
 export function guessRailGroup(board: Board, nets: string[]): RailGuess {
+  nets = uniqueNets(nets.map((n) => resolveNet(board, n)));
   const g = guessRails(board);
   const powerNets = new Set(g.rails.map((r) => r.net));
   const per = nets.map((n) => g.rails.find((r) => r.net === n) ?? guessRail(board, n, 'name', g.grounds, powerNets));
@@ -461,6 +465,7 @@ export function railLoadsFor(board: Board, nets: string[], sourceId: string | un
 }
 
 export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
+  input = resolveDcInput(board, input);
   const warnings: string[] = [];
   const nets = railNetsOf(input);
   const label = railLabel(input);
@@ -526,6 +531,13 @@ export function buildDcSetup(board: Board, input: DcSetupInput): DcSetup {
     normalised,
     warnings,
   };
+}
+
+/** The input with its rail and ground nets spelt as on the board. */
+export function resolveDcInput<T extends Pick<DcSetupInput, 'rail' | 'railNets' | 'ground'>>(board: Board, input: T): T {
+  const rail = resolveNet(board, input.rail);
+  const railNets = input.railNets && uniqueNets(input.railNets.map((n) => resolveNet(board, n)));
+  return { ...input, rail, ...(railNets ? { railNets } : {}), ground: resolveNet(board, input.ground) };
 }
 
 /**
