@@ -10,6 +10,7 @@ Pull request workflow: every pull request gets a numbered build, merges itself w
 - **Merge when green:** a new `automerge` job runs after `check` passes. It calls `gh pr merge --auto --merge` with `GITHUB_TOKEN` and, where auto-merge is not available (a private repository on GitHub Free has no branch protection), merges directly with a merge commit. Drafts, pull requests from forks and pull requests that change `.github/workflows` (which `GITHUB_TOKEN` may not merge) are left for a person. A merge by `GITHUB_TOKEN` starts no push workflows, so the job then starts the Release workflow itself.
 - **Release on main:** the new Release workflow (`.github/workflows/release.yml`) runs on every push to main and on request. It builds the `.eext` and publishes the GitHub Release `v<version>` with the file attached and this changelog's entry as notes. A version that already has a release is skipped.
 - **Version rule:** CI now compares every pull request's version against `origin/main`, whatever branch it targets: the patch number must be above main's.
+- **`npm run fetch:build -- <pr-number|main>`** (`scripts/fetch-build.mjs`): saves a pull request's newest successful CI build, or main's newest release, to `~/Downloads` under its own file name (`--out <dir>` for another folder). Builds from before this version, uploaded as `extension-eext`, are found too.
 
 ## [0.1.27] - 2026-11-26
 
