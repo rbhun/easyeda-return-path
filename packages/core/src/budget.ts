@@ -49,6 +49,9 @@ function driver(opts: RunOptions) {
   return {
     now,
     check(t: Tick | undefined) {
+      // The time since the last tick went to the phase that was running, not the one this tick starts.
+      if (opts.timeBudgetMs !== undefined && now() - start > opts.timeBudgetMs && phase !== undefined)
+        throw new AnalysisAborted('time', `Analysis stopped after ${Math.round(opts.timeBudgetMs / 1000)} s (time budget) during "${phase}". The net or its reference copper is too large; try a smaller net or a coarser setting.`, phase);
       if (t && t.phase !== phase) {
         const tNow = now();
         opts.onPhase?.(t.phase, phase, tNow - phaseStart);
