@@ -87,6 +87,16 @@ test('high-frequency check: power, ground and plane nets are refused with a hint
   }
   assert.equal(hfApplicability({ ...board, pours: [{ ...board.pours[0], net: 'SHIELD' }] }, 'SHIELD').kind, 'plane');
   assert.equal(hfApplicability(board, 'CLK').ok, true);
+
+  const pad = (id: string, net: string, componentId: string) => ({ id, net, layer: 1, number: '1', at: { x: 0, y: 0 }, shape: [], holeDiameter: 0, componentId });
+  const comp = (id: string, designator: string) => ({ id, designator, at: { x: 0, y: 0 }, rotation: 0, layer: 1, padIds: [`${id}.1`] });
+  const sw = { pours: [], pads: [pad('u.1', '$1N58', 'u'), pad('l.1', '$1N58', 'l')], components: [comp('u', 'U4'), comp('l', 'L1')] };
+  const s = hfApplicability(sw, '$1N58');
+  assert.equal(s.kind, 'power');
+  assert.match(s.message!, /connects to L1, an inductor or ferrite bead/);
+  const track = (width: number) => ({ id: `t${width}`, net: 'N1', layer: 1, a: { x: 0, y: 0 }, b: { x: 5, y: 0 }, width });
+  assert.match(hfApplicability({ pours: [], tracks: [track(1), track(1), track(0.2)] }, 'N1').message!, /routed 1\.00 mm wide/);
+  assert.equal(hfApplicability({ pours: [], tracks: [track(0.2), track(0.25)] }, 'N1').ok, true);
 });
 
 test('runAsync without a host yield function still completes', async () => {

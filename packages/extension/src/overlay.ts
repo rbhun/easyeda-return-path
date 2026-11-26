@@ -5,25 +5,26 @@ import { MIL } from './eda-board';
 
 export type Rgba = { r: number; g: number; b: number; alpha: number };
 
-// Markers with alpha below 1 come out white in EasyEDA Pro 3.2; only opaque colours show.
+// EasyEDA Pro 3.2 reads marker colours on a 0–1 scale and clips above 1 (both { r: 255 } and { r: 1 }
+// draw red), so any mixed 0–255 colour comes out white. Channels of only 0 and 255 read the same on
+// either scale.
 export const COLORS = {
-	band: { r: 148, g: 163, b: 184, alpha: 1 },
-	gap: { r: 229, g: 57, b: 53, alpha: 1 },
-	hop: { r: 251, g: 140, b: 0, alpha: 1 },
+	band: { r: 255, g: 255, b: 255, alpha: 1 },
+	gap: { r: 255, g: 0, b: 0, alpha: 1 },
+	hop: { r: 255, g: 255, b: 0, alpha: 1 },
 } satisfies Record<string, Rgba>;
 
 /** Return path colour per reference layer: magenta on the top layer, cyan on the bottom one, inner layers in turn. */
 export const RETURN_COLORS = {
-	top: { r: 217, g: 70, b: 239, alpha: 1 },
-	bottom: { r: 34, g: 211, b: 238, alpha: 1 },
+	top: { r: 255, g: 0, b: 255, alpha: 1 },
+	bottom: { r: 0, g: 255, b: 255, alpha: 1 },
 	inner: [
-		{ r: 132, g: 204, b: 22, alpha: 1 },
-		{ r: 250, g: 204, b: 21, alpha: 1 },
-		{ r: 59, g: 130, b: 246, alpha: 1 },
+		{ r: 0, g: 255, b: 0, alpha: 1 },
+		{ r: 0, g: 0, b: 255, alpha: 1 },
 	],
 } satisfies Record<string, Rgba | Rgba[]>;
 
-export const RETURN_COLOR_NAMES = { top: 'magenta', bottom: 'cyan', inner: ['green', 'yellow', 'blue'] };
+export const RETURN_COLOR_NAMES = { top: 'magenta', bottom: 'cyan', inner: ['green', 'blue'] };
 
 /** Index-ordered copper layers: 0 is the top. */
 function returnColor(board: Pick<Board, 'stackup'>, layer: number): { color: Rgba; name: string } {
@@ -114,8 +115,8 @@ export interface HfDrawn {
 
 /**
  * Replaces the overlay with the given analysis: the return path, thick, in a colour per reference
- * layer; dashed orange hops (via, decap, bridging cap, IC pin); red where the trace crosses a gap or
- * the ±3h band lacks copper; the band edges thin grey.
+ * layer; dashed yellow hops (via, decap, bridging cap, IC pin); red where the trace crosses a gap or
+ * the ±3h band lacks copper; the band edges thin white.
  */
 export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>): Promise<HfDrawn> {
 	const { segs, outline, dot, dashed } = await markerKit();
@@ -146,7 +147,7 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 		const key = `return ${t.layer}`;
 		if (!groups.has(key))
 			returnLayers.push(`${layerName(t.layer)}: ${name}`);
-		group(key, color, 3).push(...segs(t.pts, false));
+		group(key, color, 5).push(...segs(t.pts, false));
 	}
 	for (const j of an.returnPath.jumps)
 		hop.push(...dashed(j.from, j.to), dot(j.to, 0.4));

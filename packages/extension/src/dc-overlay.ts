@@ -3,11 +3,11 @@ import type { DcNetResult, DcResult, Streamline } from '@returnpath/core';
 import { drawGroups, markerKit, type MarkerGroup, type Rgba } from './overlay';
 
 export const DC_COLORS = {
-	supply: { r: 251, g: 191, b: 36, alpha: 1 },
-	return: { r: 217, g: 70, b: 239, alpha: 1 },
+	supply: { r: 255, g: 255, b: 0, alpha: 1 },
+	return: { r: 255, g: 0, b: 255, alpha: 1 },
 	/** Return on copper layers other than the top one. */
-	returnOther: { r: 34, g: 211, b: 238, alpha: 1 },
-	bottleneck: { r: 229, g: 57, b: 53, alpha: 1 },
+	returnOther: { r: 0, g: 255, b: 255, alpha: 1 },
+	bottleneck: { r: 255, g: 0, b: 0, alpha: 1 },
 } satisfies Record<string, Rgba | Rgba[]>;
 
 /** Whether any load reached the source through this net's copper. */
@@ -29,9 +29,9 @@ export async function drawDc(res: DcResult, streams: { supply: Streamline[]; ret
 	const hops = streams.ret.flatMap(l => l.segments.slice(1).map(s => dot(s.pts[0], 0.35)));
 	const nets = [res.supply, res.ret].filter((n): n is DcNetResult => !!n && carriesCurrent(n));
 	const groups: MarkerGroup[] = [
-		{ color: DC_COLORS.supply, markers: lines(streams.supply, () => true), width: 1 },
-		{ color: DC_COLORS.return, markers: lines(streams.ret, l => l === top), width: 3 },
-		{ color: DC_COLORS.returnOther, markers: [...lines(streams.ret, l => l !== top), ...hops], width: 3 },
+		{ color: DC_COLORS.supply, markers: lines(streams.supply, () => true), width: 2 },
+		{ color: DC_COLORS.return, markers: lines(streams.ret, l => l === top), width: 5 },
+		{ color: DC_COLORS.returnOther, markers: [...lines(streams.ret, l => l !== top), ...hops], width: 5 },
 		{ color: DC_COLORS.bottleneck, markers: nets.flatMap(n => n.bottleneck ? [dot(n.bottleneck.at, 1)] : []), width: 3 },
 	];
 	return { markers: await drawGroups(groups) };

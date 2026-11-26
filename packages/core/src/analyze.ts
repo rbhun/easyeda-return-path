@@ -157,13 +157,25 @@ export interface HfScope {
  * the return path (or carry DC), and their many segments over large pours make the check slow
  * and meaningless; the DC return-current view is the right tool for them.
  */
-export function hfApplicability(board: Pick<Board, 'pours'>, net: string): HfScope {
+/** Track width from which a net counts as a supply path rather than a signal, mm. */
+const POWER_TRACK_MM = 0.8;
+const INDUCTOR_DES = /^(?:L|FB)\d/i;
+
+export function hfApplicability(board: Pick<Board, 'pours'> & Partial<Pick<Board, 'tracks' | 'pads' | 'components'>>, net: string): HfScope {
   const dc = 'Use "DC Return Current..." to see how supply current flows and returns.';
   if (isGroundNet(net))
     return { ok: false, kind: 'ground', message: `${net} is a ground net: it is the return path, not a signal. Select a signal net routed over it. ${dc}` };
   if (looksLikePowerNet(net)) return { ok: false, kind: 'power', message: `${net} looks like a power rail. The high-frequency return-path check is for signal nets. ${dc}` };
   if (board.pours.some((p) => p.net === net))
     return { ok: false, kind: 'plane', message: `${net} owns copper pours (a plane net). The high-frequency return-path check is for signal traces. ${dc}` };
+  const onNet = new Set((board.pads ?? []).filter((p) => p.net === net && p.componentId).map((p) => p.componentId));
+  const inductor = (board.components ?? []).find((c) => onNet.has(c.id) && INDUCTOR_DES.test(c.designator));
+  if (inductor)
+    return { ok: false, kind: 'power', message: `${net} connects to ${inductor.designator}, an inductor or ferrite bead: a supply or switching node, not a signal. ${dc}` };
+  const widths = (board.tracks ?? []).filter((t) => t.net === net).map((t) => t.width).sort((x, y) => x - y);
+  const median = widths[Math.floor(widths.length / 2)];
+  if (median >= POWER_TRACK_MM)
+    return { ok: false, kind: 'power', message: `${net} is routed ${median.toFixed(2)} mm wide, like a supply path, not a signal. ${dc}` };
   return { ok: true };
 }
 

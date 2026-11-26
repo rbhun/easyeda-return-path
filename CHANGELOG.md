@@ -2,6 +2,15 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.15] - 2026-11-26
+
+From 0.1.14 on the rack display: every marker was still white, and the lines looked thin and all alike. Show for Selected Net on `$1N58` (the switching node between U4 and L1) ran the high-frequency check without offering the DC view, and DC Return Current showed an "export failed" error before its first dialog.
+
+- **Colours, the real cause:** in 0.1.10's colour check, red given on the 0–255 scale and red given on the 0–1 scale both came out red. EasyEDA Pro 3.2 reads marker colours on a 0–1 scale and clips anything above 1, so every mixed colour (amber, the grey band, orange) came out white. The alpha explanation in 0.1.11 was wrong. All markers now use colours whose channels are only 0 or 255, which read the same on either scale. DC: supply yellow, return magenta on the top layer and cyan on the others, bottleneck red. High-frequency view: return magenta on the top layer, cyan on the bottom one, green and blue on inner layers; hops dashed yellow; gaps red; ±3h band edges thin white.
+- **Thicker lines:** DC supply 2 (was 1), DC return and the high-frequency return path 5 (was 3).
+- **Supply and switching nodes are not signals:** Show for Selected Net now also refuses a net that connects to an inductor or ferrite bead (`L*`, `FB*`), or whose tracks are 0.8 mm or wider (median), and offers the DC view as it does for power rails. The DC wizard then ticks and preselects that net even though its name is not a rail name.
+- **Netlist only once:** if the netlist gives no pin names (or the call fails, which may be the "export failed" message), later runs of the same version skip it instead of showing the error every time. Every ground pad of a load then starts a return, as before 0.1.12.
+
 ## [0.1.14] - 2026-11-26
 
 High-frequency view (Show for Selected Net), first step: draw the return path itself. Until now the overlay showed the ±3h band, the gaps, the detours and the via links, but not where the return current runs.

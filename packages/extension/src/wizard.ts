@@ -72,7 +72,8 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 		...guess.rails.map(r => ({ value: r.net, label: `${r.net}${r.voltage !== undefined ? ` (${r.voltage} V)` : ''}: ${r.source ? t('source ${1}', r.source.designator) : t('source to confirm')}` })),
 		...allNets.filter(n => !byNet.has(n) && !guess.grounds.includes(n)).map(n => ({ value: n, label: n })),
 	];
-	const rails = await ask.multi(title, t('Step 1/5: confirm the power rails (guessed from net names and pours).'), railOptions, guess.rails.map(r => r.net));
+	const asked = preferredRail && !byNet.has(preferredRail) && allNets.includes(preferredRail) ? [preferredRail] : [];
+	const rails = await ask.multi(title, t('Step 1/5: confirm the power rails (guessed from net names and pours).'), railOptions, [...guess.rails.map(r => r.net), ...asked]);
 	if (!rails?.length)
 		return undefined;
 

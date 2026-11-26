@@ -48,13 +48,13 @@ test('wizard step 1 with the guessed defaults, then the DC overlay', async () =>
 	assert.match(msg, /3V3: drop \d+\.\d+ mV\/A/);
 	assert.match(msg, /GND: drop \d+\.\d+ mV\/A/);
 	assert.doesNotMatch(msg, /Contours drawn/);
-	assert.match(msg, /Streamlines: 3V3 supply thin amber; GND return thick, magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
+	assert.match(msg, /Streamlines: 3V3 supply thin yellow; GND return thick, magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
 	assert.deepEqual(colors, new Set([DC_COLORS.supply, DC_COLORS.return, DC_COLORS.returnOther, DC_COLORS.bottleneck].map(c => JSON.stringify(c))));
-	assert.ok(mock.markers.every(m => (m.color as { alpha: number }).alpha === 1), 'only opaque colours show in EasyEDA Pro 3.2');
+	assert.ok(mock.markers.every(m => ['r', 'g', 'b'].every(k => [0, 255].includes((m.color as Record<string, number>)[k]))), 'channels only 0 or 255: EasyEDA Pro 3.2 clips colours to a 0–1 scale');
 	assert.ok(mock.markers.every(m => m.shape.type === 'line' || m.shape.type === 'circle'));
 	const of = (c: unknown) => mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(c));
-	assert.ok(of(DC_COLORS.supply).every(m => m.width === 1) && [...of(DC_COLORS.return), ...of(DC_COLORS.returnOther)].every(m => m.width === 3), 'supply thin, return thick');
+	assert.ok(of(DC_COLORS.supply).every(m => m.width === 2) && [...of(DC_COLORS.return), ...of(DC_COLORS.returnOther)].every(m => m.width === 5), 'supply thin, return thick');
 	assert.ok(of(DC_COLORS.returnOther).some(m => m.shape.type === 'circle'), 'GND changes layer at vias on this board, marked with circles');
 	assert.ok(of(DC_COLORS.returnOther).some(m => m.shape.type === 'line'), 'and runs on Inner1');
 
@@ -141,6 +141,27 @@ test('hide/show keeps the overlay; rerun repeats the last DC analysis on the cha
 	await ext.clearReturnPath();
 	await ext.toggleReturnPath();
 	assert.equal(after.markers.length, 0, 'Clear Overlay forgets it');
+});
+
+test('Show for Selected Net on a switching node (a net on an inductor) offers the DC view with that net preselected', async () => {
+	const u2 = board.components.find(c => c.designator === 'U2')!;
+	const pads = [
+		{ id: 'sw.u', net: 'SWN', layer: 1, number: '7', at: { x: u2.at.x + 1, y: u2.at.y }, shape: [[{ x: u2.at.x + 0.8, y: u2.at.y - 0.2 }, { x: u2.at.x + 1.2, y: u2.at.y - 0.2 }, { x: u2.at.x + 1.2, y: u2.at.y + 0.2 }, { x: u2.at.x + 0.8, y: u2.at.y + 0.2 }]], holeDiameter: 0, componentId: u2.id },
+		{ id: 'sw.l', net: 'SWN', layer: 1, number: '1', at: { x: u2.at.x + 4, y: u2.at.y }, shape: [[{ x: u2.at.x + 3.5, y: u2.at.y - 0.5 }, { x: u2.at.x + 4.5, y: u2.at.y - 0.5 }, { x: u2.at.x + 4.5, y: u2.at.y + 0.5 }, { x: u2.at.x + 3.5, y: u2.at.y + 0.5 }]], holeDiameter: 0, componentId: 'l9' },
+	];
+	const sw = {
+		...board,
+		pads: [...board.pads, ...pads],
+		tracks: [...board.tracks, { id: 'sw.t', net: 'SWN', layer: 1, a: pads[0].at, b: pads[1].at, width: 0.3 }],
+		components: [...board.components.map(c => (c.id === u2.id ? { ...c, padIds: [...c.padIds, 'sw.u'] } : c)), { id: 'l9', designator: 'L9', at: pads[1].at, rotation: 0, layer: 1, padIds: ['sw.l'] }],
+	};
+	const mock = createMockEda(sw, 'SWN', [], d => (d.kind === 'confirm' ? true : d.kind === 'select' && /active source/.test(d.prompt) ? undefined : d.dflt));
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showReturnPath();
+	assert.equal(mock.dialogs[0].kind, 'confirm');
+	assert.match(mock.dialogs[0].prompt, /SWN connects to L9, an inductor or ferrite bead/);
+	assert.ok((mock.dialogs[1].dflt as string[]).includes('SWN'), 'ticked in step 1 though its name is not a rail name');
+	assert.equal(mock.dialogs[2].dflt, 'SWN', 'and preselected in step 2');
 });
 
 test('a ground with no copper path from any load is reported in words and gets no contours', async () => {

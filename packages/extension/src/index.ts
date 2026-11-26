@@ -98,7 +98,7 @@ async function hfFor(net: string, ask: Ask): Promise<void> {
 	const lines = [
 		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
 		drawn.returnLayers.length
-			? t('Return path (thick) on ${1}. Dashed orange: hop through a via, decap, bridging cap or IC pin. Red: trace over a gap, or band without copper. Thin grey: ±3h band edges.', drawn.returnLayers.join(', '))
+			? t('Return path (thick) on ${1}. Dashed yellow: hop through a via, decap, bridging cap or IC pin. Red: trace over a gap, or band without copper. Thin white: ±3h band edges.', drawn.returnLayers.join(', '))
 			: t('No return path drawn: the trace has no reference copper.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
 		...board.warnings.map(w => `warning: ${w}`),
@@ -166,7 +166,7 @@ async function dcFor(board: Board, input: DcSetupInput): Promise<void> {
 		...[res.supply, res.ret].filter(n => !!n).map(n => carriesCurrent(n!)
 			? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
 			: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator)),
-		t('Streamlines: ${1} supply thin amber; ${2} return thick, magenta on ${3} and cyan on other layers, with a circle where it changes layer.', setup.rail, setup.ground, layerName(board.stackup.copper[0].id)),
+		t('Streamlines: ${1} supply thin yellow; ${2} return thick, magenta on ${3} and cyan on other layers, with a circle where it changes layer.', setup.rail, setup.ground, layerName(board.stackup.copper[0].id)),
 		t('${1} overlay marker(s).', String(drawn.markers)),
 		...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 	].filter(Boolean);

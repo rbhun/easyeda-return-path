@@ -129,19 +129,28 @@ export function parsePinNames(text: string): Map<string, Map<string, string>> {
 	return out;
 }
 
+/** Set to the version whose netlist gave no pin names, so later runs skip a call that fails the same way. */
+const NO_NETLIST = 'netlistWithoutPinNames';
+
 /** Fills Pad.pinName from the board's netlist, so DC loads return only through their ground pins. */
 export async function addPinNames(board: Board): Promise<number> {
+	if (readStored(NO_NETLIST) === VERSION) {
+		log('pin names: skipped, the netlist gave none in an earlier run of this version; every ground pad of a load starts a return');
+		return 0;
+	}
 	let text: string | undefined;
 	try {
 		text = await call('pcb_Net.getNetlist', () => eda.pcb_Net.getNetlist('EasyEDA' as ESYS_NetlistType), apiTimeouts.stackupMs);
 	}
 	catch (e) {
-		log(`pin names: netlist not available (${e instanceof Error ? e.message : String(e)}); every ground pad of a load starts a return`, 'warn');
+		await writeStored(NO_NETLIST, VERSION);
+		log(`pin names: netlist not available (${e instanceof Error ? e.message : String(e)}); every ground pad of a load starts a return, and later runs skip the netlist`, 'warn');
 		return 0;
 	}
 	const names = parsePinNames(text ?? '');
 	if (!names.size) {
-		log(`pin names: none found in the netlist (${(text ?? '').length} characters, starts ${JSON.stringify((text ?? '').slice(0, 160))}); every ground pad of a load starts a return`, 'warn');
+		await writeStored(NO_NETLIST, VERSION);
+		log(`pin names: none found in the netlist (${(text ?? '').length} characters, starts ${JSON.stringify((text ?? '').slice(0, 160))}); every ground pad of a load starts a return, and later runs skip the netlist`, 'warn');
 		return 0;
 	}
 	const designators = new Map(board.components.map(c => [c.id, c.designator]));
