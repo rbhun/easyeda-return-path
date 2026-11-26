@@ -270,3 +270,62 @@ test('a ground with no copper path from any load is reported in words and gets n
 
 	assert.ok(mock.logs.some(l => /GND: .* not reached from U1; source pads .*; pours on GND: none/.test(l.message)));
 });
+
+test('loads are picked in the picker window: every load listed, select-all, cancel stops the wizard', async () => {
+	const mock = await run('3V3');
+	const q = mock.pickers.find(p => /Step 5\/5/.test(p.prompt))!;
+	assert.ok(q, 'the loads question went to the picker window, not the system dialog');
+	assert.equal(q.labels.all, 'Select all');
+	assert.ok(!mock.iframes.has('returnPathPicker'), 'the picker closes after the answer');
+	const u1 = board.components.find(c => c.designator === 'U1')!.id;
+	assert.ok(!q.options.some(o => o.value === u1), 'the source is not offered as a load');
+
+	const all = await run('3V3', d => /Step 5\/5/.test(d.prompt) ? d.options.map(o => o.value) : d.dflt);
+	const allLoads = q.options.map(o => board.components.find(c => c.id === o.value)!.designator);
+	assert.match(all.messages[0], new RegExp(`loads ${allLoads.join(', ')}\\.`), 'select-all takes every listed part');
+
+	const cancelled = await run('3V3', d => /Step 5\/5/.test(d.prompt) ? undefined : d.dflt);
+	assert.equal(cancelled.dialogs.at(-1)!.kind, 'multi', 'nothing is asked after a cancelled picker');
+	assert.equal(cancelled.markers.length, 0);
+});
+
+test('picker falls back to the system dialog, with a select-all entry, when its page does not connect', async () => {
+	const { pickerTimeouts } = await import('../src/picker.ts');
+	const saved = pickerTimeouts.helloMs;
+	pickerTimeouts.helloMs = 20;
+	try {
+		for (const picker of ['silent', 'refused'] as const) {
+			const mock = createMockEda(board, '3V3', [], d => d.kind === 'multi' ? ['__returnpath_all__'] : d.dflt, { picker });
+			(globalThis as Record<string, unknown>).eda = mock.eda;
+			await ext.showDcReturn();
+			const q = mock.dialogs.find(d => d.kind === 'multi')!;
+			assert.equal(q.options[0], '__returnpath_all__', `${picker}: select-all is the first entry`);
+			assert.equal(mock.pickers.length, 0);
+			const des = q.options.slice(1).map(id => board.components.find(c => c.id === id)!.designator);
+			assert.match(mock.messages[0], new RegExp(`loads ${des.join(', ')}\\.`), `${picker}: select-all takes every listed part`);
+			assert.ok(mock.logs.some(l => /picker: .*system dialog/.test(l.message)));
+			mock.logs.length = 0;
+			await ext.showDcReturn();
+			assert.ok(!mock.logs.some(l => /picker: /.test(l.message)), `${picker}: no second try on the same editor`);
+		}
+	}
+	finally {
+		pickerTimeouts.helloMs = saved;
+	}
+});
+
+test('part names with attribute references show the attribute values', async () => {
+	const { partName } = await import('../src/eda-board.ts');
+	const part = (name: string | undefined, props: Record<string, string> = {}, mpn?: string) => ({
+		getState_Name: () => name,
+		getState_OtherProperty: () => props,
+		getState_ManufacturerId: () => mpn,
+	});
+	assert.equal(partName(part('={Value}', { Value: '100nF' })), '100nF');
+	assert.equal(partName(part('={Manufacturer Part}', {}, 'AMS1117-3.3')), 'AMS1117-3.3');
+	assert.equal(partName(part('={Manufacturer Part}', { 'Manufacturer Part': 'TPS7A02' })), 'TPS7A02');
+	assert.equal(partName(part('={Value}')), undefined, 'an unknown attribute gives no name, not the template');
+	assert.equal(partName(part('={Value} {Package}', { Value: '10uF' })), '10uF');
+	assert.equal(partName(part('LM1117')), 'LM1117');
+	assert.equal(partName({ getState_Name: () => '={Value}' }), undefined, 'clients without getState_OtherProperty');
+});

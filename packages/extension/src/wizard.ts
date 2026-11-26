@@ -1,6 +1,7 @@
 // Wizard step 1 (design decisions D3, D7): confirm the power rails, pair each with its ground,
 // pick the rail to solve, confirm its single active source (the other candidates are left out) and
 // its loads, and optionally give load currents. Built on the system dialogs, so it needs no iframe.
+import { pickMany } from './picker';
 import { checkpoint, log } from './runner';
 import { componentsOnNet, guessRails, loadsFor, parseCurrents, type Board, type DcSetupInput, type RailGuess } from '@returnpath/core';
 
@@ -35,16 +36,28 @@ export function loggedAsk(ask: Ask): Ask {
 
 const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 
-/** Ask implemented with eda.sys_Dialog. The dialogs report a choice through a callback only. */
+/** Value of the select-all entry the system multi-select dialog gets in place of a select-all box. */
+const ALL = '__returnpath_all__';
+
+/**
+ * Ask implemented with eda.sys_Dialog, except multi-choice questions, which use the picker window
+ * when it connects. The dialogs report a choice through a callback only.
+ */
 export function dialogAsk(): Ask {
 	const toApi = (o: Option[]) => o.map(x => ({ value: x.value, displayContent: x.label }));
 	return {
 		select: (title, prompt, options, dflt) => new Promise((resolve) => {
 			eda.sys_Dialog.showSelectDialog(toApi(options), prompt, undefined, title, dflt, false, v => resolve(v || undefined));
 		}),
-		multi: (title, prompt, options, dflt) => new Promise((resolve) => {
-			eda.sys_Dialog.showSelectDialog(toApi(options), prompt, undefined, title, dflt, true, v => resolve(v));
-		}),
+		multi: async (title, prompt, options, dflt) => {
+			const picked = await pickMany(title, prompt, options, dflt);
+			if (picked !== null)
+				return picked;
+			const all = [{ value: ALL, label: t('Select all') }, ...options];
+			return new Promise((resolve) => {
+				eda.sys_Dialog.showSelectDialog(toApi(all), prompt, undefined, title, dflt, true, v => resolve(v?.includes(ALL) ? options.map(o => o.value) : v));
+			});
+		},
 		input: (title, prompt, value) => new Promise((resolve) => {
 			eda.sys_Dialog.showInputDialog(prompt, undefined, title, 'text', value, undefined, v => resolve(v == null ? undefined : String(v)));
 		}),
