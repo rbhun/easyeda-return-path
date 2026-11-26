@@ -2,6 +2,21 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.34] - 2026-11-26
+
+Numbered above 0.1.33, main's version.
+
+From Balazs, after 0.1.33: the HF driver question listed "OLED1 pad 10" with no pin name.
+
+- **Pin names from the project file.** Pin names came only from the board's netlist. On boards where the netlist fails ("Export failed") or gives none, the driver question showed bare pad numbers. The extension now reads them from the project file instead (`sys_FileManager.getProjectFile`, `.epro2`): each part's device, its symbol, and the symbol's pin names. This is the same route the CLI uses. The driver question then reads "OLED1 pad 10 (SCL)", and the DC load and source checks get the names too.
+  - On a real 2-layer test board, 27 parts are named this way, in about 0.1 s.
+  - If the project file can't be read (EasyEDA asks for the "Download project" permission) or names no pins, later runs skip it, as they already do for the netlist.
+- The CLI reads `.epro2` pin names through the same module (`@returnpath/cli/project`), so both paths share one parser.
+- Tests:
+  - pads named from a project file when the netlist fails;
+  - no second try after the project file failed;
+  - names by designator from an `.epro2`.
+
 ## [0.1.33] - 2026-11-26
 
 Numbered above 0.1.32, main's version.

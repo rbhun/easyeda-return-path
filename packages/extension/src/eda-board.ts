@@ -1,5 +1,7 @@
 // Reads the open PCB through the EasyEDA Pro API into the core board model.
 // Almost every call used here is @beta, so all API access stays in this module and overlay.ts.
+import { projectPinNames } from '@returnpath/cli/project';
+import { unzipSync } from 'fflate';
 import {
 	arcPoints,
 	assumedDielectricsMm,
@@ -118,7 +120,7 @@ export function partName(c: PartState): string | undefined {
 }
 
 /** Time limits for API calls; tests shorten them. */
-export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, pinsMs: 20_000, pouredTotalMs: 20_000, pouredSlowMs: 3_000, decodeMs: 10_000 };
+export const apiTimeouts = { callMs: 60_000, stackupMs: 15_000, projectMs: 30_000, pinsMs: 20_000, pouredTotalMs: 20_000, pouredSlowMs: 3_000, decodeMs: 10_000 };
 
 /** Set while computed pour fills are fetched; still set at the next start means the editor hung there. */
 const POURED_MARKER = 'fetchingPouredSince';
@@ -176,11 +178,18 @@ export function parsePinNames(text: string): Map<string, Map<string, string>> {
 const NO_NETLIST = 'netlistWithoutPinNames';
 const NETLIST_READER = '1';
 
-/** Fills Pad.pinName from the board's netlist, so DC loads return only through their ground pins. */
-export async function addPinNames(board: Board): Promise<number> {
+/**
+ * Set to PROJECT_READER when the project file gave no pin names (no "Download project" permission, or
+ * a format this reader does not know), so later runs skip it. Raise PROJECT_READER when that changes.
+ */
+const NO_PROJECT_FILE = 'projectFileWithoutPinNames';
+const PROJECT_READER = '1';
+
+/** Pin names from the board's netlist; undefined when it gives none. */
+async function netlistPinNames(): Promise<Map<string, Map<string, string>> | undefined> {
 	if (readStored(NO_NETLIST) === NETLIST_READER) {
-		log('pin names: skipped, the netlist gave none in an earlier run; every ground pad of a load starts a return');
-		return 0;
+		log('pin names: skipped, the netlist gave none in an earlier run');
+		return undefined;
 	}
 	let text: string | undefined;
 	try {
@@ -188,13 +197,51 @@ export async function addPinNames(board: Board): Promise<number> {
 	}
 	catch (e) {
 		await writeStored(NO_NETLIST, NETLIST_READER);
-		log(`pin names: netlist not available (${e instanceof Error ? e.message : String(e)}); every ground pad of a load starts a return, and later runs skip the netlist`, 'warn');
-		return 0;
+		log(`pin names: netlist not available (${e instanceof Error ? e.message : String(e)}); later runs skip it`, 'warn');
+		return undefined;
 	}
 	const names = parsePinNames(text ?? '');
 	if (!names.size) {
 		await writeStored(NO_NETLIST, NETLIST_READER);
-		log(`pin names: none found in the netlist (${(text ?? '').length} characters, starts ${JSON.stringify((text ?? '').slice(0, 160))}); every ground pad of a load starts a return, and later runs skip the netlist`, 'warn');
+		log(`pin names: none found in the netlist (${(text ?? '').length} characters, starts ${JSON.stringify((text ?? '').slice(0, 160))}); later runs skip it`, 'warn');
+		return undefined;
+	}
+	return names;
+}
+
+/** Pin names from the project file (.epro2): each part's device, its symbol, the symbol's pin names. */
+async function projectFilePinNames(): Promise<Map<string, Map<string, string>> | undefined> {
+	if (readStored(NO_PROJECT_FILE) === PROJECT_READER || typeof eda.sys_FileManager?.getProjectFile !== 'function')
+		return undefined;
+	let names: Map<string, Map<string, string>>;
+	try {
+		const file = await call('sys_FileManager.getProjectFile (pin names)', () => eda.sys_FileManager.getProjectFile(undefined, undefined, 'epro2'), apiTimeouts.projectMs);
+		if (!file)
+			throw new Error('no project file');
+		names = projectPinNames(unzipSync(new Uint8Array(await file.arrayBuffer()))).byDesignator;
+	}
+	catch (e) {
+		await writeStored(NO_PROJECT_FILE, PROJECT_READER);
+		log(`pin names: project file not available (${e instanceof Error ? e.message : String(e)}); later runs skip it`, 'warn');
+		return undefined;
+	}
+	if (!names.size) {
+		await writeStored(NO_PROJECT_FILE, PROJECT_READER);
+		log('pin names: none found in the project file; later runs skip it', 'warn');
+		return undefined;
+	}
+	return names;
+}
+
+/**
+ * Fills Pad.pinName from the board's netlist, or from the project file when the netlist gives none,
+ * so DC loads return only through their ground pins and the driver question shows pin names.
+ */
+export async function addPinNames(board: Board): Promise<number> {
+	const fromNetlist = await netlistPinNames();
+	const names = fromNetlist ?? await projectFilePinNames();
+	if (!names) {
+		log('pin names: none; every ground pad of a load starts a return');
 		return 0;
 	}
 	const designators = new Map(board.components.map(c => [c.id, c.designator]));
@@ -206,7 +253,7 @@ export async function addPinNames(board: Board): Promise<number> {
 			n++;
 		}
 	}
-	log(`pin names: ${n} of ${board.pads.filter(p => p.componentId).length} component pads named from the netlist (${names.size} parts)`);
+	log(`pin names: ${n} of ${board.pads.filter(p => p.componentId).length} component pads named from the ${fromNetlist ? 'netlist' : 'project file'} (${names.size} parts)`);
 	return n;
 }
 
