@@ -164,16 +164,16 @@ const naturally = (a: string, b: string) => a.localeCompare(b, undefined, { nume
 
 /**
  * The nets the high-frequency check applies to (routed, not ground, supply, plane or bias nets):
- * recognised data lines first, grouped by kind, then the other signal nets, each in natural order.
+ * recognised data lines first, longest first (a long line is the likelier trouble), then the other
+ * signal nets in natural order.
  */
 export function hfCandidates(board: Board): HfCandidate[] {
   const length = new Map<string, number>();
   for (const t of board.tracks) if (t.net) length.set(t.net, (length.get(t.net) ?? 0) + Math.hypot(t.b.x - t.a.x, t.b.y - t.a.y));
   const pins = new Map<string, (string | undefined)[]>();
   for (const p of board.pads) if (p.net && p.pinName) pins.set(p.net, [...(pins.get(p.net) ?? []), p.pinName]);
-  const order = RULES.map(([, kind]) => kind.type);
   return [...length.keys()]
     .filter((net) => hfApplicability(board, net).ok)
     .map((net) => ({ net, kind: classifySignal(net, pins.get(net)), lengthMm: length.get(net)! }))
-    .sort((a, b) => (a.kind ? order.indexOf(a.kind.type) : order.length) - (b.kind ? order.indexOf(b.kind.type) : order.length) || naturally(a.net, b.net));
+    .sort((a, b) => Number(!a.kind) - Number(!b.kind) || (a.kind && b.kind ? b.lengthMm - a.lengthMm : 0) || naturally(a.net, b.net));
 }
