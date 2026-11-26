@@ -55,8 +55,8 @@ test('a power net is not run through the high-frequency check: hint, then the DC
 
 	const accept = install(createMockEda(board, '3V3', [], (d: DialogCall) => (d.kind === 'confirm' ? true : d.dflt)));
 	await ext.runReturnPath(dialogAsk());
-	assert.deepEqual(accept.dialogs.map(d => d.kind), ['confirm', 'multi', 'select', 'select', 'multi', 'input']);
-	assert.equal(accept.dialogs[2].dflt, '3V3', 'rail preselected in the wizard');
+	assert.deepEqual(accept.dialogs.map(d => d.kind), ['confirm', 'select', 'multi', 'input'], 'the selected rail is not asked for again: source, loads, currents');
+	assert.match(accept.dialogs[1].prompt, /active source of 3V3/);
 	assert.ok(accept.markers.length > 0);
 	assert.match(accept.messages.at(-1)!, /3V3 \/ GND: source U1/);
 });

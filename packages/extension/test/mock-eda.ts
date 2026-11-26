@@ -48,6 +48,16 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	const files = new Map<string, string>();
 	const downloads: { name?: string; text: string }[] = [];
 	const counts = { boardReads: 0 };
+	const subscribers = new Map<string, ((m: unknown) => void)[]>();
+	const published: { topic: string; message: any }[] = [];
+	/** Messages pushed with no puller waiting, and pullers waiting for a message (sys_MessageBus.push / pullAsync). */
+	const queues = new Map<string, unknown[]>();
+	const pullers = new Map<string, ((m: unknown) => void)[]>();
+	const iframes = new Map<string, { html: string; width: number; height: number; props: Record<string, unknown>; shown: boolean }>();
+	/** Sends a message as the panel would. */
+	const panelSend = (message: unknown) => {
+		for (const fn of subscribers.get('returnpath.panel.command') ?? []) fn(message);
+	};
 	const fsCall = <T>(fn: () => T) => async () => {
 		if (host.fileSystem === 'denied')
 			throw new Error('external interaction is not allowed');
@@ -121,6 +131,45 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 				: {}),
 		},
 		sys_Message: { showToastMessage: (m: string) => void toasts.push(m) },
+		sys_MessageBus: {
+			subscribe: (topic: string, fn: (m: unknown) => void) => {
+				(subscribers.get(topic) ?? subscribers.set(topic, []).get(topic)!).push(fn);
+				return { cancel: () => {} };
+			},
+			publish: (topic: string, message: unknown) => {
+				published.push({ topic, message: JSON.parse(JSON.stringify(message ?? null)) });
+				for (const fn of subscribers.get(topic) ?? []) fn(message);
+			},
+			push: (topic: string, message: unknown) => {
+				const copy = JSON.parse(JSON.stringify(message ?? null));
+				const waiting = pullers.get(topic)?.shift();
+				if (waiting)
+					waiting(copy);
+				else
+					(queues.get(topic) ?? queues.set(topic, []).get(topic)!).push(copy);
+			},
+			pullAsync: (topic: string) => new Promise((resolve) => {
+				const queued = queues.get(topic)?.shift();
+				if (queued !== undefined)
+					resolve(queued);
+				else
+					(pullers.get(topic) ?? pullers.set(topic, []).get(topic)!).push(resolve);
+			}),
+		},
+		sys_IFrame: {
+			openIFrame: async (html: string, width: number, height: number, id: string, props: Record<string, unknown>) => {
+				iframes.set(id, { html, width, height, props, shown: true });
+				return true;
+			},
+			isIFrameAlreadyExist: async (id: string) => iframes.has(id),
+			showIFrame: async (id: string) => {
+				const f = iframes.get(id);
+				if (f)
+					f.shown = true;
+				return !!f;
+			},
+			closeIFrame: async (id: string) => iframes.delete(id),
+		},
 		sys_Dialog: {
 			showInformationMessage: (content: string) => void messages.push(content),
 			showConfirmationMessage: (content: string, title: string, _ok: string, _cancel: string, cb: (ok: boolean) => void) => {
@@ -214,5 +263,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts };
+	return { eda, markers, messages, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues };
 }

@@ -129,19 +129,33 @@ export function parsePinNames(text: string): Map<string, Map<string, string>> {
 	return out;
 }
 
+/**
+ * Set to NETLIST_READER when the netlist gave no pin names, so later runs, including after an upgrade,
+ * skip a call that shows "Export failed" and fails the same way. Raise NETLIST_READER when the
+ * netlist call or parsePinNames changes, so the netlist is tried again.
+ */
+const NO_NETLIST = 'netlistWithoutPinNames';
+const NETLIST_READER = '1';
+
 /** Fills Pad.pinName from the board's netlist, so DC loads return only through their ground pins. */
 export async function addPinNames(board: Board): Promise<number> {
+	if (readStored(NO_NETLIST) === NETLIST_READER) {
+		log('pin names: skipped, the netlist gave none in an earlier run; every ground pad of a load starts a return');
+		return 0;
+	}
 	let text: string | undefined;
 	try {
 		text = await call('pcb_Net.getNetlist', () => eda.pcb_Net.getNetlist('EasyEDA' as ESYS_NetlistType), apiTimeouts.stackupMs);
 	}
 	catch (e) {
-		log(`pin names: netlist not available (${e instanceof Error ? e.message : String(e)}); every ground pad of a load starts a return`, 'warn');
+		await writeStored(NO_NETLIST, NETLIST_READER);
+		log(`pin names: netlist not available (${e instanceof Error ? e.message : String(e)}); every ground pad of a load starts a return, and later runs skip the netlist`, 'warn');
 		return 0;
 	}
 	const names = parsePinNames(text ?? '');
 	if (!names.size) {
-		log(`pin names: none found in the netlist (${(text ?? '').length} characters, starts ${JSON.stringify((text ?? '').slice(0, 160))}); every ground pad of a load starts a return`, 'warn');
+		await writeStored(NO_NETLIST, NETLIST_READER);
+		log(`pin names: none found in the netlist (${(text ?? '').length} characters, starts ${JSON.stringify((text ?? '').slice(0, 160))}); every ground pad of a load starts a return, and later runs skip the netlist`, 'warn');
 		return 0;
 	}
 	const designators = new Map(board.components.map(c => [c.id, c.designator]));
@@ -302,20 +316,56 @@ function matchPlane(island: Paths, layer: number, planes: PlaneFill[], boxes: Re
 	return best;
 }
 
-/** The board outline: polylines on the outline layer, else the bounding box of outline line segments. */
+/** `POLY` objects on the outline layer in PCB document source text (`{"type":"POLY",…}||{…"layerId":11,"path":[…]}|`). */
+export function outlineFromSource(text: string): Paths {
+	const rings: Paths = [];
+	for (const line of text.split('\n')) {
+		if (!line.startsWith('{"type":"POLY"') || !line.includes('"layerId":11'))
+			continue;
+		const body = line.slice(line.indexOf('||') + 2).replace(/\|\s*$/, '');
+		try {
+			const r = JSON.parse(body) as { layerId?: number; path?: unknown };
+			if (r.layerId === LAYER_OUTLINE)
+				rings.push(...decodeRings(r.path, conv, MIL).filter(ring => ring.length >= 3));
+		}
+		catch {}
+	}
+	return rings;
+}
+
+/**
+ * The board outline: polylines on the outline layer, else the board outline in the document source
+ * (the polyline API may leave out the board outline, which is a polyline of type BOARD_OUTLINE),
+ * else the bounding box of outline line segments.
+ */
 async function readOutline(segments: Pt[][], warnings: string[]): Promise<Paths> {
 	const rings: Paths = [];
 	const api = eda.pcb_PrimitivePolyline;
+	const fromPolylines = async (label: string, layer?: number) => {
+		const all = await call(`pcb_PrimitivePolyline.getAll (${label})`, () => api.getAll(undefined, layer as never));
+		const onOutline = all.filter(pl => (pl.getState_Layer() as number) === LAYER_OUTLINE);
+		log(`read board: ${label}: ${all.length} polylines, ${onOutline.length} on the outline layer`);
+		for (const pl of onOutline)
+			rings.push(...decodeRings(pl.getState_Polygon().getSource(), conv, MIL).filter(r => r.length >= 3));
+	};
 	if (typeof api?.getAll === 'function') {
 		try {
-			for (const pl of await call('pcb_PrimitivePolyline.getAll (board outline)', () => api.getAll(undefined, LAYER_OUTLINE as never))) {
-				if ((pl.getState_Layer() as number) !== LAYER_OUTLINE)
-					continue;
-				rings.push(...decodeRings(pl.getState_Polygon().getSource(), conv, MIL).filter(r => r.length >= 3));
-			}
+			await fromPolylines('board outline', LAYER_OUTLINE);
+			if (!rings.length)
+				await fromPolylines('board outline, all layers');
 		}
 		catch (e) {
 			log(`read board: board outline not readable (${e instanceof Error ? e.message : String(e)})`, 'warn');
+		}
+	}
+	if (!rings.length && typeof eda.sys_FileManager?.getDocumentSource === 'function') {
+		try {
+			const text = await call('sys_FileManager.getDocumentSource (board outline)', () => eda.sys_FileManager.getDocumentSource());
+			rings.push(...outlineFromSource(text ?? ''));
+			log(`read board: board outline from the document source: ${rings.length} ring(s) in ${(text ?? '').length} characters`);
+		}
+		catch (e) {
+			log(`read board: document source not readable (${e instanceof Error ? e.message : String(e)})`, 'warn');
 		}
 	}
 	if (rings.length)

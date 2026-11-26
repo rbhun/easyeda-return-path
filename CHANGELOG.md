@@ -2,6 +2,48 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.22] - 2026-11-26
+
+Numbered above 0.1.21, the highest version on the open pull requests (the HF line took 0.1.19 to 0.1.21).
+
+From the owner's run of 0.1.18: the panel opened from the menu knew nothing of the analysis just run from the menu, though analyses run from the panel worked; some lines were hard to see; lines need a show/hide control.
+
+- **The panel shows menu runs.** EasyEDA appears to run menu actions in separate instances of the extension, which share neither memory nor a fresh view of the stored settings. The instances now keep the result, the last run, the overlay, busy state and style in step over the extension's message bus, and exactly one acts on each panel command: the panel's owner, which hands Hide/Show, Clear and redraws to the instance that drew the overlay. Each result and overlay change is also pushed to a mailbox topic, which the bus keeps until it is pulled; the panel's page pulls it and hands the newest to its owner, which takes over the result, Rerun and the drawing even when the instance that ran the analysis is gone. Hide/Show and Clear from the menu reach whichever instance holds the overlay.
+- **Show/hide per line kind.** Each role in the panel (DC supply, return on top, other and inner layers, hops, gaps and bottleneck, band edges) has a checkbox; hidden roles are not drawn, and the choice is kept with the colours and widths.
+
+## [0.1.18] - 2026-11-26
+
+From the owner's run of 0.1.17 on the rack display: a 9V track selected, Show for Selected Net, then the DC view.
+
+- **The selected rail is not asked for again.** With a guessed rail selected, or a rail handed over from Show for Selected Net, the wizard skips "confirm the power rails" and "rail to solve" and starts at the ground (when there is a choice) or the source.
+- **"Export failed" once, not once per version.** That message most likely comes from `pcb_Net.getNetlist`. The flag that skips the netlist after it gave no pin names was tied to the extension version, so every upgrade showed the message again. It is now kept until the netlist reader itself changes.
+- **Board outline.** The rack display's outline is a single rectangle polyline of type `BOARD_OUTLINE`, which the polyline API apparently does not return. The outline is now also looked for on all layers and then in the PCB's document source (`sys_FileManager.getDocumentSource`). The log says how many polylines each step found.
+- **Panel.** Every analysis opens the Return Path panel unless you closed it. Results go to the panel only once its page has connected (said hello); otherwise they stay in the dialog, so a panel that cannot reach the extension never swallows a result. Open Panel reports when EasyEDA refuses to open the window, and the log records what `openIFrame` returned.
+
+## [0.1.17] - 2026-11-26
+
+From the first run on the rack display backup (`rack display_2026-11-23-17-52.epro2`).
+
+- **Parts with no ground pad are no longer default loads.** On the rack display's 3V3 rail, 44 of the 55 default loads were I2C pull-ups, an LED and parts with no GND pin. With no load currents entered, the 1 A total was split equally across all of them, so the TCA9548s and OLEDs that really return current to ground got about a fifth of it. These parts are now listed under "left out: no ground pad", and the wizard still lets you tick them.
+- **CLI: projects with several PCBs.** The CLI analysed the first PCB in the project; on the rack display that is an unrouted copy with 0 tracks, which gave "no copper path" for every OLED and "net has no tracks" for `$1N58`. It now picks the PCB with the most tracks and lists the others in the warning. `--pcb` still overrides. The extension is unaffected (it analyses the open PCB).
+
+## [0.1.16] - 2026-11-26
+
+A window that stays open, as asked: results, actions and overlay styling without going through the menu each time.
+
+- **Return Path → Open Panel...:** a floating window (`iframe/index.html`) that does not grey out or block the editor and can be minimised. Buttons: Selected net, DC current..., Rerun last, Cancel, Hide/Show, Clear, Log.... It shows what is running, whether the overlay is shown, the last analysis, and the last result. While the panel is open, results go there instead of the modal dialog, with a short toast.
+- **Colours and widths per role:** DC supply, return on the top layer, on other layers, on inner layers, hops, gaps and bottleneck, and band edges; a colour from red, yellow, green, cyan, blue, magenta and white, and a width from 1 to 10. Changes redraw the current overlay without a new analysis, are kept with the extension's settings, and the result legends name the chosen colours. Reset to defaults restores 0.1.15's scheme.
+- The panel talks to the extension over its private message bus (`sys_MessageBus`); the menu items work as before.
+
+## [0.1.15] - 2026-11-26
+
+From 0.1.14 on the rack display: every marker was still white, and the lines looked thin and all alike. Show for Selected Net on `$1N58` (the switching node between U4 and L1) ran the high-frequency check without offering the DC view, and DC Return Current showed an "export failed" error before its first dialog.
+
+- **Colours, the real cause:** in 0.1.10's colour check, red given on the 0–255 scale and red given on the 0–1 scale both came out red. EasyEDA Pro 3.2 reads marker colours on a 0–1 scale and clips anything above 1, so every mixed colour (amber, the grey band, orange) came out white. The alpha explanation in 0.1.11 was wrong. All markers now use colours whose channels are only 0 or 255, which read the same on either scale. DC: supply yellow, return magenta on the top layer and cyan on the others, bottleneck red. High-frequency view: return magenta on the top layer, cyan on the bottom one, green and blue on inner layers; hops dashed yellow; gaps red; ±3h band edges thin white.
+- **Thicker lines:** DC supply 2 (was 1), DC return and the high-frequency return path 5 (was 3).
+- **Supply and switching nodes are not signals:** Show for Selected Net now also refuses a net that connects to an inductor or ferrite bead (`L*`, `FB*`), or whose tracks are 0.8 mm or wider (median), and offers the DC view as it does for power rails. The DC wizard then ticks and preselects that net even though its name is not a rail name.
+- **Netlist only once:** if the netlist gives no pin names (or the call fails, which may be the "export failed" message), later runs of the same version skip it instead of showing the error every time. Every ground pad of a load then starts a return, as before 0.1.12.
+
 ## [0.1.14] - 2026-11-26
 
 High-frequency view (Show for Selected Net), first step: draw the return path itself. Until now the overlay showed the ±3h band, the gaps, the detours and the via links, but not where the return current runs.

@@ -20,7 +20,8 @@ function dcBoard() {
 
 const board = dcBoard();
 const ext = await import('../src/index.ts');
-const { DC_COLORS } = await import('../src/dc-overlay.ts');
+const { PALETTE } = await import('../src/style.ts');
+const DC_COLORS = { supply: PALETTE.yellow, return: PALETTE.magenta, returnOther: PALETTE.cyan, bottleneck: PALETTE.red };
 
 async function run(selected: string, answer?: (d: DialogCall) => unknown) {
 	const mock = createMockEda(board, selected, [], answer);
@@ -32,29 +33,29 @@ async function run(selected: string, answer?: (d: DialogCall) => unknown) {
 test('wizard step 1 with the guessed defaults, then the DC overlay', async () => {
 	const mock = await run('3V3');
 	const kinds = mock.dialogs.map(d => d.kind);
-	assert.deepEqual(kinds, ['multi', 'select', 'select', 'multi', 'input'], 'rails, rail to solve, source, loads, currents (one ground: no pairing dialog)');
-	assert.deepEqual(mock.dialogs[0].dflt, ['3V3', 'VBUS']);
-	assert.equal(mock.dialogs[1].dflt, '3V3', 'the selected net is preselected');
+	assert.deepEqual(kinds, ['select', 'multi', 'input'], 'a selected rail skips steps 1 and 2: source, loads, currents (one ground: no pairing dialog)');
+	assert.ok(mock.logs.some(l => /rail 3V3 taken from the selection; steps 1 and 2 skipped/.test(l.message)));
 	const u1 = board.components.find(c => c.designator === 'U1')!.id;
-	assert.equal(mock.dialogs[2].dflt, u1, 'U1 guessed as the source');
-	assert.equal(mock.dialogs[2].options[0], u1, 'candidates first');
-	assert.match(mock.dialogs[2].prompt, /Other candidate sources are left out/);
+	assert.equal(mock.dialogs[0].dflt, u1, 'U1 guessed as the source');
+	assert.equal(mock.dialogs[0].options[0], u1, 'candidates first');
+	assert.match(mock.dialogs[0].prompt, /Other candidate sources are left out/);
 	const des = (id: string) => board.components.find(c => c.id === id)!.designator;
-	assert.deepEqual((mock.dialogs[3].dflt as string[]).map(des), ['U2', 'U3', 'J2']);
+	assert.deepEqual((mock.dialogs[1].dflt as string[]).map(des), ['U2', 'U3', 'J2']);
 
+	assert.ok(mock.iframes.has('returnPathPanel'), 'an analysis opens the panel');
 	assert.equal(mock.messages.length, 1);
 	const msg = mock.messages[0];
 	assert.match(msg, /^3V3 \/ GND: source U1, loads U2, U3, J2\./);
 	assert.match(msg, /3V3: drop \d+\.\d+ mV\/A/);
 	assert.match(msg, /GND: drop \d+\.\d+ mV\/A/);
 	assert.doesNotMatch(msg, /Contours drawn/);
-	assert.match(msg, /Streamlines: 3V3 supply thin amber; GND return thick, magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
+	assert.match(msg, /Streamlines: 3V3 supply yellow; GND return magenta on Top Layer and cyan on other layers, with a circle where it changes layer\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
 	assert.deepEqual(colors, new Set([DC_COLORS.supply, DC_COLORS.return, DC_COLORS.returnOther, DC_COLORS.bottleneck].map(c => JSON.stringify(c))));
-	assert.ok(mock.markers.every(m => (m.color as { alpha: number }).alpha === 1), 'only opaque colours show in EasyEDA Pro 3.2');
+	assert.ok(mock.markers.every(m => ['r', 'g', 'b'].every(k => [0, 255].includes((m.color as Record<string, number>)[k]))), 'channels only 0 or 255: EasyEDA Pro 3.2 clips colours to a 0–1 scale');
 	assert.ok(mock.markers.every(m => m.shape.type === 'line' || m.shape.type === 'circle'));
 	const of = (c: unknown) => mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(c));
-	assert.ok(of(DC_COLORS.supply).every(m => m.width === 1) && [...of(DC_COLORS.return), ...of(DC_COLORS.returnOther)].every(m => m.width === 3), 'supply thin, return thick');
+	assert.ok(of(DC_COLORS.supply).every(m => m.width === 2) && [...of(DC_COLORS.return), ...of(DC_COLORS.returnOther)].every(m => m.width === 5), 'supply thin, return thick');
 	assert.ok(of(DC_COLORS.returnOther).some(m => m.shape.type === 'circle'), 'GND changes layer at vias on this board, marked with circles');
 	assert.ok(of(DC_COLORS.returnOther).some(m => m.shape.type === 'line'), 'and runs on Inner1');
 
@@ -71,6 +72,8 @@ test('wizard: user picks another source and gives currents', async () => {
 			return 'U2=150mA, U3=0.02';
 		return d.dflt;
 	});
+	assert.deepEqual(mock.dialogs.slice(0, 2).map(d => d.kind), ['multi', 'select'], 'nothing selected: rails are confirmed and picked');
+	assert.deepEqual(mock.dialogs[0].dflt, ['3V3', 'VBUS']);
 	const msg = mock.messages[0];
 	assert.match(msg, /^3V3 \/ GND: source J2, loads U2, U3\./, 'U1 is a candidate source, so it is left out once J2 is active');
 	assert.doesNotMatch(msg, /per amp/);
@@ -78,7 +81,7 @@ test('wizard: user picks another source and gives currents', async () => {
 });
 
 test('wizard: cancelling draws nothing', async () => {
-	const mock = await run('3V3', d => (d.kind === 'multi' ? undefined : d.dflt));
+	const mock = await run('3V3', d => (d.kind === 'select' ? undefined : d.dflt));
 	assert.equal(mock.messages.length, 0);
 	assert.equal(mock.markers.length, 0);
 });
@@ -87,11 +90,46 @@ test('wizard: with several grounds, the ground is asked once, for the rail being
 	const mock = createMockEda({ ...board, vias: [...board.vias, { ...board.vias[0], id: 'pgnd-via', net: 'VBUS_PGND' }] }, '3V3');
 	(globalThis as Record<string, unknown>).eda = mock.eda;
 	await ext.showDcReturn();
-	assert.deepEqual(mock.dialogs.map(d => d.kind), ['multi', 'select', 'select', 'select', 'multi', 'input']);
-	assert.match(mock.dialogs[1].prompt, /Step 2\/5: rail to solve/);
-	assert.match(mock.dialogs[2].prompt, /Step 3\/5: ground that carries the return current of 3V3/);
-	assert.equal(mock.dialogs[2].dflt, 'GND');
+	assert.deepEqual(mock.dialogs.map(d => d.kind), ['select', 'select', 'multi', 'input']);
+	assert.match(mock.dialogs[0].prompt, /Step 3\/5: ground that carries the return current of 3V3/);
+	assert.equal(mock.dialogs[0].dflt, 'GND');
 	assert.ok(mock.markers.length > 0);
+});
+
+test('board outline: when the polyline API leaves out the BOARD_OUTLINE polyline, it is read from the document source', async () => {
+	const { readBoard, outlineFromSource } = await import('../src/eda-board.ts');
+	const line = '{"type":"POLY","ticket":9,"id":"e9"}||{"partitionId":"","groupId":0,"netName":"","layerId":11,"width":10,"path":["R",-625,-50,1000,400,0,0],"locked":false,"zIndex":-1,"polyType":"BOARD_OUTLINE"}|';
+	const [ring] = outlineFromSource(`{"type":"DOCHEAD"}||{}|\n${line}\n{"type":"POLY","ticket":10,"id":"e10"}||{"layerId":3,"path":[0,0,"L",1,1]}|`);
+	const xs = ring.map(p => p.x);
+	const ys = ring.map(p => p.y);
+	assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - 25.4) < 1e-6 && Math.abs(Math.max(...ys) - Math.min(...ys) - 10.16) < 1e-6, 'a 1000 × 400 mil rectangle');
+
+	const mock = createMockEda({ ...board, outline: [] }, '3V3');
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	(mock.eda as Record<string, unknown>).sys_FileManager = { getDocumentSource: async () => `{"type":"DOCHEAD"}||{}|\n${line}\n` };
+	const b = await readBoard();
+	assert.equal(b.outline.length, 1);
+	assert.ok(!b.warnings.some(w => /No board outline/.test(w)));
+	assert.ok(mock.logs.some(l => /board outline, all layers: \d+ polylines, 0 on the outline layer/.test(l.message)));
+	assert.ok(mock.logs.some(l => /board outline from the document source: 1 ring/.test(l.message)));
+});
+
+test('a netlist without pin names is skipped on later runs, after an upgrade too', async () => {
+	const { addPinNames, readBoard } = await import('../src/eda-board.ts');
+	const storage = new Map<string, unknown>([['netlistWithoutPinNames', '0.1.16']]);
+	const mock = createMockEda(board, '3V3', [], undefined, { storage });
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	let calls = 0;
+	(mock.eda.pcb_Net as Record<string, unknown>).getNetlist = async () => {
+		calls++;
+		throw new Error('Export failed');
+	};
+	const b = await readBoard();
+	await addPinNames(b);
+	assert.equal(calls, 1, 'a flag left by 0.1.16 does not stop the first try');
+	await addPinNames(b);
+	assert.equal(calls, 1, 'then the netlist is not asked for again');
+	assert.ok(mock.logs.some(l => /pin names: skipped, the netlist gave none in an earlier run/.test(l.message)));
 });
 
 test('pin names from the netlist: a load returns only through its GND pin, not through an address pin tied to GND', async () => {
@@ -141,6 +179,84 @@ test('hide/show keeps the overlay; rerun repeats the last DC analysis on the cha
 	await ext.clearReturnPath();
 	await ext.toggleReturnPath();
 	assert.equal(after.markers.length, 0, 'Clear Overlay forgets it');
+});
+
+test('Show for Selected Net on a switching node (a net on an inductor) offers the DC view for that net without asking for the rail', async () => {
+	const u2 = board.components.find(c => c.designator === 'U2')!;
+	const pads = [
+		{ id: 'sw.u', net: 'SWN', layer: 1, number: '7', at: { x: u2.at.x + 1, y: u2.at.y }, shape: [[{ x: u2.at.x + 0.8, y: u2.at.y - 0.2 }, { x: u2.at.x + 1.2, y: u2.at.y - 0.2 }, { x: u2.at.x + 1.2, y: u2.at.y + 0.2 }, { x: u2.at.x + 0.8, y: u2.at.y + 0.2 }]], holeDiameter: 0, componentId: u2.id },
+		{ id: 'sw.l', net: 'SWN', layer: 1, number: '1', at: { x: u2.at.x + 4, y: u2.at.y }, shape: [[{ x: u2.at.x + 3.5, y: u2.at.y - 0.5 }, { x: u2.at.x + 4.5, y: u2.at.y - 0.5 }, { x: u2.at.x + 4.5, y: u2.at.y + 0.5 }, { x: u2.at.x + 3.5, y: u2.at.y + 0.5 }]], holeDiameter: 0, componentId: 'l9' },
+	];
+	const sw = {
+		...board,
+		pads: [...board.pads, ...pads],
+		tracks: [...board.tracks, { id: 'sw.t', net: 'SWN', layer: 1, a: pads[0].at, b: pads[1].at, width: 0.3 }],
+		components: [...board.components.map(c => (c.id === u2.id ? { ...c, padIds: [...c.padIds, 'sw.u'] } : c)), { id: 'l9', designator: 'L9', at: pads[1].at, rotation: 0, layer: 1, padIds: ['sw.l'] }],
+	};
+	const mock = createMockEda(sw, 'SWN', [], d => (d.kind === 'confirm' ? true : d.kind === 'select' && /active source/.test(d.prompt) ? undefined : d.dflt));
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.showReturnPath();
+	assert.equal(mock.dialogs[0].kind, 'confirm');
+	assert.match(mock.dialogs[0].prompt, /SWN connects to L9, an inductor or ferrite bead/);
+	assert.match(mock.dialogs[1].prompt, /active source of SWN/, 'the wizard goes straight to the source of SWN, though its name is not a rail name');
+});
+
+test('panel: opens without blocking, runs DC from a button, shows the result there, restyles and hides the overlay', async () => {
+	const { readFileSync } = await import('node:fs');
+	const html = readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8');
+	assert.ok(html.includes("'returnpath.panel.command'") && html.includes("'returnpath.panel.state'"), 'the page uses the same topics');
+
+	const mock = createMockEda(board, '3V3', [], undefined, { storage: new Map() });
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	await ext.clearReturnPath();
+	await ext.showPanel();
+	const win = mock.iframes.get('returnPathPanel')!;
+	assert.equal(win.html, '/iframe/index.html');
+	assert.equal(win.props.grayscaleMask, false, 'the editor stays usable');
+	assert.equal(win.props.minimizeButton, true);
+
+	const states = () => mock.published.filter(p => p.topic === 'returnpath.panel.state').map(p => p.message);
+	mock.panelSend({ cmd: 'hello' });
+	assert.equal(states().at(-1).overlay, 'none');
+	assert.equal(states().at(-1).roles.length, 7);
+
+	mock.panelSend({ cmd: 'dc' });
+	for (let i = 0; i < 400 && !(states().at(-1)?.result && !states().at(-1).busy); i++)
+		await new Promise(r => setTimeout(r, 25));
+	const done = states().at(-1);
+	assert.ok(states().some(s => s.busy === 'DC Return Current'), 'busy while running');
+	assert.match(done.result.lines[0], /^3V3 \/ GND: source U1/);
+	assert.equal(done.overlay, 'shown');
+	assert.match(done.lastRun, /^DC 3V3 \/ GND, source U1/);
+	assert.equal(mock.messages.length, 0, 'no modal result dialog while the panel is open');
+	assert.match(mock.toasts.at(-1)!, /result is in the Return Path panel/);
+
+	const yellow = JSON.stringify({ r: 255, g: 255, b: 0, alpha: 1 });
+	const white = JSON.stringify({ r: 255, g: 255, b: 255, alpha: 1 });
+	const supplyCount = mock.markers.filter(m => JSON.stringify(m.color) === yellow).length;
+	mock.panelSend({ cmd: 'style', style: { supply: { colour: 'white', width: 4 } } });
+	for (let i = 0; i < 40 && mock.markers.filter(m => JSON.stringify(m.color) === white).length < supplyCount; i++)
+		await new Promise(r => setTimeout(r, 25));
+	const restyled = mock.markers.filter(m => JSON.stringify(m.color) === white);
+	assert.equal(restyled.length, supplyCount, 'the supply redrawn in the new colour without a new analysis');
+	assert.ok(restyled.every(m => m.width === 4));
+	assert.equal(states().at(-1).roles.find((r: { role: string }) => r.role === 'supply').colour, 'white');
+
+	mock.panelSend({ cmd: 'resetStyle' });
+	await new Promise(r => setTimeout(r, 50));
+	assert.equal(mock.markers.filter(m => JSON.stringify(m.color) === yellow).length, supplyCount);
+
+	mock.panelSend({ cmd: 'toggle' });
+	for (let i = 0; i < 40 && states().at(-1).overlay !== 'hidden'; i++)
+		await new Promise(r => setTimeout(r, 25));
+	assert.equal(mock.markers.length, 0);
+	assert.equal(states().at(-1).overlay, 'hidden');
+
+	(win.props.buttonCallbackFn as (b: string) => void)('close');
+	mock.iframes.delete('returnPathPanel');
+	await ext.showDcReturn();
+	assert.ok(!mock.iframes.has('returnPathPanel'), 'closed by the user: an analysis does not reopen it');
+	assert.equal(mock.messages.length, 1, 'and the result is shown in a dialog');
 });
 
 test('a ground with no copper path from any load is reported in words and gets no contours', async () => {

@@ -58,7 +58,7 @@ export interface WizardResult {
 }
 
 /** Runs the wizard; undefined when the user cancels or there is nothing to solve. */
-export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string): Promise<WizardResult | undefined> {
+export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string, railGiven = false): Promise<WizardResult | undefined> {
 	const title = t('DC return current');
 	log('wizard: guessing rails…');
 	await checkpoint();
@@ -72,9 +72,14 @@ export async function runDcWizard(board: Board, ask: Ask, preferredRail?: string
 		...guess.rails.map(r => ({ value: r.net, label: `${r.net}${r.voltage !== undefined ? ` (${r.voltage} V)` : ''}: ${r.source ? t('source ${1}', r.source.designator) : t('source to confirm')}` })),
 		...allNets.filter(n => !byNet.has(n) && !guess.grounds.includes(n)).map(n => ({ value: n, label: n })),
 	];
-	const rails = await ask.multi(title, t('Step 1/5: confirm the power rails (guessed from net names and pours).'), railOptions, guess.rails.map(r => r.net));
+	// A selected rail needs no confirming or picking: steps 1 and 2 are skipped.
+	const given = preferredRail && !guess.grounds.includes(preferredRail) && allNets.includes(preferredRail) && (railGiven || byNet.has(preferredRail)) ? preferredRail : undefined;
+	const asked = preferredRail && !byNet.has(preferredRail) && allNets.includes(preferredRail) ? [preferredRail] : [];
+	const rails = given ? [given] : await ask.multi(title, t('Step 1/5: confirm the power rails (guessed from net names and pours).'), railOptions, [...guess.rails.map(r => r.net), ...asked]);
 	if (!rails?.length)
 		return undefined;
+	if (given)
+		log(`wizard: rail ${given} taken from the selection; steps 1 and 2 skipped`);
 
 	// 2. Rail to solve.
 	const grounds = guess.grounds.length ? guess.grounds : allNets.filter(n => !rails.includes(n));

@@ -225,10 +225,13 @@ export function guessRail(board: Board, net: string, reason: 'name' | 'pour', gr
 export function loadsFor(board: Board, net: string, sourceId: string | undefined, candidateIds: string[]): { loads: LoadGuess[]; excluded: RailGuess['excluded'] } {
   const loads: LoadGuess[] = [];
   const excluded: RailGuess['excluded'] = [];
+  const hasGround = board.pads.some((p) => isGroundNet(p.net));
   for (const c of componentsOnNet(board, net)) {
     if (c.id === sourceId) continue;
     if (isDecap(board, c, net)) excluded.push({ designator: c.designator, why: 'decap (blocks DC)' });
     else if (sourceId && candidateIds.includes(c.id)) excluded.push({ designator: c.designator, why: 'inactive source' });
+    // A pull-up, an LED to a GPIO or a series part returns its current through another part, not to ground.
+    else if (hasGround && !padsOf(board, c).some((p) => isGroundNet(p.net))) excluded.push({ designator: c.designator, why: 'no ground pad' });
     else loads.push({ componentId: c.id, designator: c.designator, connector: CONNECTOR_DES_RE.test(c.designator) || BATTERY_DES_RE.test(c.designator) });
   }
   return { loads, excluded };

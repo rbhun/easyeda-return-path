@@ -32,11 +32,19 @@ export function loadBoard(file: string, opts: ParseOptions & { pcb?: string } = 
     }
   }
   if (!pcbs.length) throw new Error(`${file}: no .epcb document inside`);
-  const chosen = opts.pcb ? pcbs.find(([n]) => n.includes(opts.pcb!)) : pcbs[0];
-  if (!chosen) throw new Error(`${file}: no PCB matching "${opts.pcb}" (have ${pcbs.map(([n]) => n).join(', ')})`);
-  const board = parseEasyEdaPcb({ pcb: chosen[1], footprints, poured }, opts);
-  if (pcbs.length > 1) board.warnings.push(`Project has ${pcbs.length} PCBs; analysed ${chosen[0]} (use --pcb to pick).`);
-  return board;
+  const parse = ([, pcb]: [string, string]) => parseEasyEdaPcb({ pcb, footprints, poured }, opts);
+  if (opts.pcb) {
+    const chosen = pcbs.find(([n]) => n.includes(opts.pcb!));
+    if (!chosen) throw new Error(`${file}: no PCB matching "${opts.pcb}" (have ${pcbs.map(([n]) => n).join(', ')})`);
+    return parse(chosen);
+  }
+  if (pcbs.length === 1) return parse(pcbs[0]);
+  // Projects keep old copies and part-routed variants; the most routed PCB is the likely one.
+  const parsed = pcbs.map((p) => ({ name: p[0], board: parse(p) }));
+  const best = parsed.reduce((a, b) => (b.board.tracks.length > a.board.tracks.length ? b : a));
+  const others = parsed.filter((p) => p !== best).map((p) => `${p.name} (${p.board.tracks.length} tracks)`);
+  best.board.warnings.push(`Project has ${pcbs.length} PCBs; analysed ${best.name}, the one with the most tracks (${best.board.tracks.length}). Others: ${others.join(', ')}. Use --pcb to pick.`);
+  return best.board;
 }
 
 /** An `.epru` (inside `.epro2`) holds every document of the project in one file, each starting with a DOCHEAD line. */
