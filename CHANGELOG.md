@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.40] - 2026-11-26
+
+Numbered above 0.1.39, main's version. First pushed as 0.1.39; renumbered after #19 took 0.1.39 and merged.
+
+From Balazs, with a screenshot of the HF check of SC0 on a 2-layer board: the meander (on Bottom) was drawn in magenta (return on Top) with red under it, the next bump of the meander had no return at all, and dashed yellow lines ran from the meander to a GND via.
+
+- **A meander keeps its coplanar return.** The bottom pour keeps further from a meander than from the rest of the trace, so that stretch was given the Top pour as its reference. The return then dropped through a GND via to Top and came back up through the same via, which drew the yellow hops and the magenta. A stretch on the opposite layer's pour, between two stretches with a pour beside them and shorter than twice the via reach, now keeps the pour beside it. On that board's SC0, the trace is one stretch with no hops.
+- **Vias use the reference the trace actually found.** A via was judged against the opposite layer's pour on each side. Where the trace on one side returns in a pour beside it on the same layer the other side returns in (as SC0 does at its via to Top), the return does not change layer there, and the via is no longer reported. Across the two real test boards, via hops fall from 272 to 156 and warnings from 660 to 572.
+- **The coplanar return is drawn along every stretch with pour beside it.** It used to be drawn only when the middle of the stretch had pour beside it, and as an offset line that folded back inside tight bends. It is now drawn along the pour edge on each side that has pour within the band, stopping where another leg of the same trace is in the way.
+- **Red only where at least half the reference copper is missing.** A stretch at 62–90% coverage was drawn red like a broken return. Red now marks coverage below 50%; smaller shortfalls stay in the result list. Short bends of a coplanar trace, shorter than its keepout, are no longer judged on their own.
+
 ## [0.1.39] - 2026-11-26
 
 From Balazs: the run folder is a basic setting, so it belongs in the menu, not the panel; the panel's Log button duplicates the menu's Show Saved Log.

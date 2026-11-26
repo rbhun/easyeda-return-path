@@ -21,6 +21,9 @@ export type Marker = IDMT_IndicatorMarkerShape;
 /** Markers drawn in the colour and width of a role, looked up at drawing time so style changes apply on redraw. */
 export interface MarkerGroup { role: Role; inner?: number; markers: Marker[] }
 
+/** Coverage below which a stretch of trace is drawn red; milder shortfalls are only listed as findings. */
+const RED_BELOW = 0.5;
+
 /** Cap per marker call; marker performance in the thousands is a D1 test item. */
 const MAX_PER_CALL = 4000;
 
@@ -148,8 +151,10 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 		band.push(...outline(c.band));
 		// Red runs along the trace where it is short of reference copper, rather than outlining every
 		// uncovered piece of the band, which on a busy board breaks up into fragments.
-		for (const th of c.thin)
-			gap.push(...segs([th.a, th.b], false));
+		for (const th of c.thin) {
+			if (th.ratio < RED_BELOW)
+				gap.push(...segs([th.a, th.b], false));
+		}
 		for (const g of c.gaps) {
 			if (g.kind !== 'via-antipad')
 				gap.push(...segs([g.a, g.b], false));
