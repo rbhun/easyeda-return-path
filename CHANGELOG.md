@@ -2,6 +2,23 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.58] - 2026-11-26
+
+From Balazs (0.1.54, EasyEDA Pro 2.2.32.4 on a Mac): the panel's check buttons stayed greyed out. His log showed `log file disabled: writing <Run folder>/returnpath-log.txt failed: sys_FileSystem.saveFileToFileSystem did not answer within 2 s`.
+
+The panel greys its buttons while an analysis runs and enables them when the run ends. Three things could keep a run from ending, or keep its busy state after it ended:
+
+- **File writes that never answer.** On his Mac the file-system calls into the chosen Run folder do not return; macOS folder access for EasyEDA is the likely cause. Each one was given up after 2 s, but every log checkpoint and every run's files called the API again. **Now the first call that times out stops file writes for the session**: the log stays in the extension's settings (Show Saved Log), the run files are not written, and the analyses do not call the file system again. Choosing **Return Path → Run Folder...** again tries the files again. The log says once: `file writes stopped: … The analyses are not affected.`
+- **A wizard question whose window went away** without EasyEDA telling the extension. The run waited for the answer forever, and **Cancel** in the panel only stopped an analysis that was already computing. **Now Cancel also ends a question waiting in the wizard window**, so the run ends and the buttons come back.
+- **A busy state left by an instance that is gone.** Cancel was handed to that instance, which never answered. **Now, if the busy state is still there 5 s after Cancel, the panel clears it** and logs an error naming the run.
+
+Panel failures are no longer silent:
+
+- A panel command that fails outside an analysis is logged as an error and shown in a toast.
+- If the panel fails to start, it logs `panel: init failed`.
+- If the state cannot be sent, the page shows `Panel error: …` with its buttons enabled.
+- If the page cannot show a state, it says so instead of leaving the last one up.
+
 ## [0.1.57] - 2026-11-26
 
 From Balazs: a DC check stopped with "Cannot read properties of null (reading 'x')" thrown inside `convertDataOriginToCanvasOrigin` (pro-api 0.3.59). The solve had finished; only the drawing failed.
