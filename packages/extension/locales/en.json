@@ -39,5 +39,7 @@
 	"Rerun last analysis": "Rerun last analysis",
 	"No overlay to show: run an analysis first.": "No overlay to show: run an analysis first.",
 	"Overlay shown.": "Overlay shown.",
-	"Overlay hidden. Use Hide/Show Overlay again to show it.": "Overlay hidden. Use Hide/Show Overlay again to show it."
+	"Overlay hidden. Use Hide/Show Overlay again to show it.": "Overlay hidden. Use Hide/Show Overlay again to show it.",
+	"Return path (thick) on ${1}. Dashed orange: hop through a via, decap, bridging cap or IC pin. Red: trace over a gap, or band without copper. Thin grey: ±3h band edges.": "Return path (thick) on ${1}. Dashed orange: hop through a via, decap, bridging cap or IC pin. Red: trace over a gap, or band without copper. Thin grey: ±3h band edges.",
+	"No return path drawn: the trace has no reference copper.": "No return path drawn: the trace has no reference copper."
 }

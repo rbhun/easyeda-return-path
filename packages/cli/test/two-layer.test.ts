@@ -35,7 +35,7 @@ test('2-layer coplanar: CLK returns in the Top pour beside it and detours around
   assert.equal(ref.layer, TOP);
   assert.equal(ref.coplanar, true);
   assert.ok(ref.h > 0.2 && ref.h < 0.35, `trace-to-pour gap ${ref.h}`);
-  assert.deepEqual(kinds(coplanar, 'CLK'), ['slot-crossing']);
+  assert.deepEqual(kinds(coplanar, 'CLK'), ['loop-closure', 'loop-closure', 'slot-crossing']);
   const gap = an.chains[0].gaps.find((g) => g.kind === 'slot')!;
   assert.ok(gap.a.x > 29.5 && gap.b.x < 32, 'gap at the Top pour break');
   // CLK's own clearance splits the pour into halves above and below it; the return goes round an end of the break.
@@ -52,7 +52,7 @@ test('2-layer coplanar: DATA on Bottom is coplanar too; its vias need GND stitch
     assert.equal(v.transitions[0].kind, 'stitching-via');
     assert.ok(v.transitions[0].loopArea! > v.transitions[0].distance! * 1.4, 'vertical loop spans the full 1.5 mm core');
   }
-  assert.deepEqual(kinds(coplanar, 'DATA'), ['slot-crossing', 'via-return', 'via-return']);
+  assert.deepEqual(kinds(coplanar, 'DATA'), ['loop-closure', 'loop-closure', 'slot-crossing', 'via-return', 'via-return']);
 });
 
 test('2-layer without a Top pour: CLK references the Bottom pour 1.5 mm below and crosses its slot', () => {
@@ -61,7 +61,7 @@ test('2-layer without a Top pour: CLK references the Bottom pour 1.5 mm below an
   assert.equal(ref.layer, BOTTOM);
   assert.ok(!ref.coplanar);
   assert.equal(ref.h, 1.5);
-  assert.deepEqual(kinds(bottomOnly, 'CLK'), ['slot-crossing']);
+  assert.deepEqual(kinds(bottomOnly, 'CLK'), ['loop-closure', 'loop-closure', 'slot-crossing']);
   const gap = an.chains[0].gaps[0];
   assert.ok(gap.a.x > 39.5 && gap.b.x < 41.7);
   assert.ok(gap.detour!.path.some((p) => p.y > 13.8), 'detour passes the upper end of the slot');

@@ -54,7 +54,7 @@ test('POURED fill is used as-is', () => {
 test('demo board: slot, split, coverage and via findings', () => {
   const an = analyzeNet(boardFrom('demo', 'object'), 'CLK');
   const kinds = an.findings.map((f) => `${f.severity}:${f.kind}`);
-  assert.deepEqual(kinds, ['error:slot-crossing', 'warn:band-coverage', 'error:split-crossing', 'warn:via-return', 'warn:via-return']);
+  assert.deepEqual(kinds, ['error:slot-crossing', 'warn:band-coverage', 'error:split-crossing', 'warn:via-return', 'warn:via-return', 'ok:loop-closure', 'ok:loop-closure']);
   const slot = an.chains.flatMap((c) => c.gaps).find((g) => g.kind === 'slot')!;
   assert.ok(Math.abs(slot.detour!.extraLength - 15.8) < 0.2);
   assert.ok(Math.abs(slot.detour!.loopArea - 12.8) < 0.3);
@@ -68,6 +68,43 @@ test('fixed board: only the bridged split remains', () => {
   const an = analyzeNet(boardFrom('fixed', 'object'), 'CLK');
   assert.deepEqual(
     an.findings.map((f) => `${f.severity}:${f.kind}`),
-    ['warn:split-crossing', 'ok:via-return', 'ok:via-return'],
+    ['warn:split-crossing', 'ok:via-return', 'ok:via-return', 'ok:loop-closure', 'ok:loop-closure'],
   );
+});
+
+test('demo board: the return path runs under the trace, around the slot, and hops off the plane', () => {
+  const b = boardFrom('demo', 'object');
+  const an = analyzeNet(b, 'CLK');
+  const rp = an.returnPath;
+  const layer = (n: string) => b.stackup.copper.find((l) => l.name === n)!.id;
+  assert.deepEqual([...new Set(rp.traces.map((t) => t.layer))].sort(), [layer('Inner1'), layer('Inner2')].sort());
+  const detour = rp.traces.find((t) => t.detour)!;
+  assert.equal(detour.layer, layer('Inner1'));
+  assert.ok(Math.min(...detour.pts.map((p) => p.y)) < 13, 'detour goes round the slot end, well below the trace at y = 20');
+  // The plane runs and the detour together cover the trace on Inner1 except the slot itself.
+  const len = (pts: { x: number; y: number }[]) => pts.reduce((s, p, i) => (i ? s + dist(p, pts[i - 1]) : 0), 0);
+  const plane1 = rp.traces.filter((t) => t.layer === layer('Inner1') && !t.detour).reduce((s, t) => s + len(t.pts), 0);
+  assert.ok(plane1 > 20 && plane1 < 40, `Inner1 plane runs ${plane1}`);
+  const kinds = rp.jumps.map((j) => `${j.kind}:${j.kind === 'via' ? j.label.replace(/ via .*/, ' via') : j.label}`).sort();
+  assert.deepEqual(kinds, ['bridge:C2', 'bridge:C2', 'decap:C2', 'pin:U1.2', 'pin:U2.2', 'via:GND via'].sort());
+  for (const j of rp.jumps.filter((x) => x.kind === 'pin')) assert.ok(Math.abs(j.distance - 3.16) < 0.01);
+});
+
+test('2-layer coplanar return: drawn beside the trace; parts without a ground pad are reported', async () => {
+  const { buildTwoLayerEpro } = await import('../src/synth/make-2layer-board.js');
+  const files = unzipSync(buildTwoLayerEpro('coplanar'));
+  let pcb = '';
+  const footprints = new Map<string, string>();
+  for (const [name, data] of Object.entries(files)) {
+    if (name.endsWith('.epcb')) pcb = strFromU8(data);
+    if (name.endsWith('.efoo')) footprints.set(name.split('/').pop()!.split('.')[0], strFromU8(data));
+  }
+  const b = parseEasyEdaPcb({ pcb, footprints });
+  const an = analyzeNet(b, 'CLK');
+  const plane = an.returnPath.traces.filter((t) => !t.detour);
+  assert.ok(plane.length >= 2);
+  // CLK runs along y = 10 from x = 9 to 53; its return runs along both pour edges.
+  const ys = plane.flatMap((t) => t.pts.filter((p) => p.x > 15 && p.x < 50).map((p) => p.y - 10));
+  assert.ok(ys.some((d) => d > 0.2 && d < 0.6) && ys.some((d) => d < -0.2 && d > -0.6), `coplanar return beside the trace on both sides: ${ys}`);
+  assert.deepEqual(an.findings.filter((f) => f.kind === 'loop-closure').map((f) => f.severity), ['warn', 'warn']);
 });

@@ -2,6 +2,16 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.14] - 2026-11-26
+
+High-frequency view (Show for Selected Net), first step: draw the return path itself. Until now the overlay showed the ±3h band, the gaps, the detours and the via links, but not where the return current runs.
+
+- **Return path drawn:** a thick line on the reference layer under the trace, coloured by that layer (magenta on the top layer, cyan on the bottom one, green, yellow and blue on inner layers in turn). It follows the detour round a slot. For a coplanar return (2-layer boards) it runs along both pour edges beside the trace, where there is pour.
+- **Hops off the plane** are dashed orange lines with a circle at the end: across a split through the bridging cap, at a signal via to the return via or decap, and at each end of the net from the signal pad to the part's pin on the reference net (ground, or the supply for a trace over a supply plane).
+- **Loop closure:** one finding per net end names that pin and its distance from the signal pad, or warns that the part has no pad on the reference net.
+- The ±3h band edges are thin grey (were green); gaps and band without copper stay red. The result dialog says which colour is which layer.
+- CLI renders draw the return path and its hops too.
+
 ## [0.1.13] - 2026-11-26
 
 The overlay stays temporary markers (not custom layers, for now), but can be hidden and redrawn without going through the wizard again.

@@ -23,5 +23,7 @@
 	"Rerun last analysis": "重新运行上次分析",
 	"No overlay to show: run an analysis first.": "没有可显示的叠加层：请先运行分析。",
 	"Overlay shown.": "已显示叠加层。",
-	"Overlay hidden. Use Hide/Show Overlay again to show it.": "已隐藏叠加层。再次使用“隐藏/显示叠加层”即可显示。"
+	"Overlay hidden. Use Hide/Show Overlay again to show it.": "已隐藏叠加层。再次使用“隐藏/显示叠加层”即可显示。",
+	"Return path (thick) on ${1}. Dashed orange: hop through a via, decap, bridging cap or IC pin. Red: trace over a gap, or band without copper. Thin grey: ±3h band edges.": "回流路径（粗线）位于 ${1}。橙色虚线：经过孔、去耦电容、桥接电容或 IC 引脚的跳转。红色：走线跨越缝隙，或 ±3h 带内无铜。细灰线：±3h 带边界。",
+	"No return path drawn: the trace has no reference copper.": "未绘制回流路径：该走线没有参考铜。"
 }

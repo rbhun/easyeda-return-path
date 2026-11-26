@@ -1,17 +1,41 @@
 // Draws an analysis as temporary indicator markers: nothing is stored in the document or the
 // undo history (design decision D6). Markers have no fill, so regions are drawn as outlines.
-import { type Analysis, type Path, type Paths, type Pt } from '@returnpath/core';
+import { dist, lerp, type Analysis, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
 import { MIL } from './eda-board';
 
 export type Rgba = { r: number; g: number; b: number; alpha: number };
 
 // Markers with alpha below 1 come out white in EasyEDA Pro 3.2; only opaque colours show.
 export const COLORS = {
-	band: { r: 46, g: 158, b: 79, alpha: 1 },
+	band: { r: 148, g: 163, b: 184, alpha: 1 },
 	gap: { r: 229, g: 57, b: 53, alpha: 1 },
-	detour: { r: 251, g: 140, b: 0, alpha: 1 },
-	link: { r: 30, g: 136, b: 229, alpha: 1 },
+	hop: { r: 251, g: 140, b: 0, alpha: 1 },
 } satisfies Record<string, Rgba>;
+
+/** Return path colour per reference layer: magenta on the top layer, cyan on the bottom one, inner layers in turn. */
+export const RETURN_COLORS = {
+	top: { r: 217, g: 70, b: 239, alpha: 1 },
+	bottom: { r: 34, g: 211, b: 238, alpha: 1 },
+	inner: [
+		{ r: 132, g: 204, b: 22, alpha: 1 },
+		{ r: 250, g: 204, b: 21, alpha: 1 },
+		{ r: 59, g: 130, b: 246, alpha: 1 },
+	],
+} satisfies Record<string, Rgba | Rgba[]>;
+
+export const RETURN_COLOR_NAMES = { top: 'magenta', bottom: 'cyan', inner: ['green', 'yellow', 'blue'] };
+
+/** Index-ordered copper layers: 0 is the top. */
+function returnColor(board: Pick<Board, 'stackup'>, layer: number): { color: Rgba; name: string } {
+	const stack = board.stackup.copper;
+	const i = stack.findIndex(l => l.id === layer);
+	if (i <= 0)
+		return { color: RETURN_COLORS.top, name: RETURN_COLOR_NAMES.top };
+	if (i === stack.length - 1)
+		return { color: RETURN_COLORS.bottom, name: RETURN_COLOR_NAMES.bottom };
+	const k = (i - 1) % RETURN_COLORS.inner.length;
+	return { color: RETURN_COLORS.inner[k], name: RETURN_COLOR_NAMES.inner[k] };
+}
 
 export type Marker = IDMT_IndicatorMarkerShape;
 export interface MarkerGroup { color: Rgba; markers: Marker[]; width: number }
@@ -71,33 +95,61 @@ export async function markerKit() {
 	};
 	const outline = (paths: Paths) => paths.flatMap(r => segs(r, true));
 	const dot = (p: Pt, rMm: number): Marker => ({ type: 'circle' as EDMT_IndicatorMarkerType, ...toMil(p), r: rMm / MIL });
-	return { segs, outline, dot };
+	/** A straight hop drawn as dashes (mm), so it reads as a jump rather than copper. */
+	const dashed = (a: Pt, b: Pt, dash = 0.6, gap = 0.4): Marker[] => {
+		const d = dist(a, b);
+		const out: Marker[] = [];
+		for (let s = 0; s < d; s += dash + gap)
+			out.push(...segs([lerp(a, b, s / d), lerp(a, b, Math.min(d, s + dash) / d)], false));
+		return out;
+	};
+	return { segs, outline, dot, dashed };
 }
 
-/** Replaces the overlay with the given analysis. Returns the number of markers drawn. */
-export async function drawAnalysis(an: Analysis): Promise<number> {
-	const { segs, outline, dot } = await markerKit();
+export interface HfDrawn {
+	markers: number;
+	/** "Inner1: green" for each reference layer the return path runs on. */
+	returnLayers: string[];
+}
 
-	const groups: Record<keyof typeof COLORS, Marker[]> = { band: [], gap: [], detour: [], link: [] };
+/**
+ * Replaces the overlay with the given analysis: the return path, thick, in a colour per reference
+ * layer; dashed orange hops (via, decap, bridging cap, IC pin); red where the trace crosses a gap or
+ * the ±3h band lacks copper; the band edges thin grey.
+ */
+export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>): Promise<HfDrawn> {
+	const { segs, outline, dot, dashed } = await markerKit();
+	const layerName = (id: number) => board.stackup.copper.find(l => l.id === id)?.name ?? `L${id}`;
+
+	const groups = new Map<string, MarkerGroup>();
+	const group = (key: string, color: Rgba, width: number) => {
+		let g = groups.get(key);
+		if (!g)
+			groups.set(key, g = { color, width, markers: [] });
+		return g.markers;
+	};
+	const band = group('band', COLORS.band, 1);
+	const gap = group('gap', COLORS.gap, 3);
+	const hop = group('hop', COLORS.hop, 2);
+
 	for (const c of an.chains) {
-		groups.band.push(...outline(c.band));
-		groups.gap.push(...outline(c.bandUncovered));
+		band.push(...outline(c.band));
+		gap.push(...outline(c.bandUncovered));
 		for (const g of c.gaps) {
-			if (g.kind === 'via-antipad')
-				continue;
-			groups.gap.push(...segs([g.a, g.b], false));
-			if (g.detour)
-				groups.detour.push(...segs(g.detour.path, false));
-			if (g.bridge)
-				groups.link.push(...segs([g.a, g.bridge.at], false), dot(g.bridge.at, 0.5));
+			if (g.kind !== 'via-antipad')
+				gap.push(...segs([g.a, g.b], false));
 		}
 	}
-	for (const v of an.vias) {
-		for (const t of v.transitions) {
-			if (t.target)
-				groups.link.push(...segs([v.via.at, t.target.at], false), dot(t.target.at, 0.5));
-		}
+	const returnLayers: string[] = [];
+	for (const t of an.returnPath.traces) {
+		const { color, name } = returnColor(board, t.layer);
+		const key = `return ${t.layer}`;
+		if (!groups.has(key))
+			returnLayers.push(`${layerName(t.layer)}: ${name}`);
+		group(key, color, 3).push(...segs(t.pts, false));
 	}
+	for (const j of an.returnPath.jumps)
+		hop.push(...dashed(j.from, j.to), dot(j.to, 0.4));
 
-	return drawGroups((Object.entries(groups) as [keyof typeof COLORS, Marker[]][]).map(([key, markers]) => ({ color: COLORS[key], markers, width: 2 })));
+	return { markers: await drawGroups([...groups.values()]), returnLayers };
 }

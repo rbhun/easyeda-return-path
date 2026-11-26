@@ -22,6 +22,7 @@ function demoBoard() {
 const board = demoBoard();
 const expected = analyzeNet(board, 'CLK').findings.map(f => `[${f.severity}] ${f.message}`);
 const ext = await import('../src/index.ts');
+const { COLORS, RETURN_COLORS } = await import('../src/overlay.ts');
 
 async function run(planeLayers: number[]) {
 	const mock = createMockEda(board, 'CLK', planeLayers);
@@ -34,9 +35,16 @@ test('menu action reads the board through the API and draws temporary markers', 
 	const mock = await run([]);
 	assert.equal(mock.messages.length, 1);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
-	assert.match(mock.messages[0], /^CLK: 5 finding\(s\)/);
+	assert.match(mock.messages[0], /^CLK: 7 finding\(s\)/);
+	assert.match(mock.messages[0], /Return path \(thick\) on Inner1: green, Inner2: yellow\./);
 	const colors = new Set(mock.markers.map(m => JSON.stringify(m.color)));
-	assert.equal(colors.size, 4, 'band, gap, detour and link markers');
+	const expectedColors = [COLORS.band, COLORS.gap, COLORS.hop, RETURN_COLORS.inner[0], RETURN_COLORS.inner[1]].map(c => JSON.stringify(c));
+	assert.deepEqual(colors, new Set(expectedColors), 'band, gap, hop and one return colour per reference layer, all opaque');
+	assert.ok(mock.markers.every(m => (m.color as { alpha: number }).alpha === 1));
+	const of = (c: object) => mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(c));
+	assert.ok([RETURN_COLORS.inner[0], RETURN_COLORS.inner[1]].every(c => of(c).length && of(c).every(m => m.width === 3)), 'return path thick');
+	assert.ok(of(COLORS.band).every(m => m.width === 1), 'band edges thin');
+	assert.ok(of(COLORS.hop).filter(m => m.shape.type === 'circle').length >= 5, 'a circle at each hop target: C2 twice, the GND via, the decap, two IC pins');
 
 	const count = mock.markers.length;
 	await ext.showReturnPath();
