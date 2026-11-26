@@ -24,6 +24,8 @@ export interface DialogCall {
 
 /** Returned from `answer` to press Back in the wizard window. */
 export const BACK_ANSWER = Symbol('back');
+/** Returned from `answer` to leave the wizard window's question unanswered (the window went away unnoticed). */
+export const NO_ANSWER = Symbol('no answer');
 
 export interface MockHost {
 	/** Extension config storage; pass the same map to a second mock to simulate a restart. */
@@ -102,6 +104,8 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 		const dflt = q.kind === 'select' ? q.value || undefined : q.kind === 'confirm' ? undefined : q.kind === 'currents' ? currentsText(q.options.map(o => o.value), q.value as string[]) : q.kind === 'nets' ? [q.value as string, q.options.find(o => o.value === q.value)?.speed ?? ''] : q.value;
 		dialogs.push({ kind: q.kind, prompt: q.prompt, options: options.map(o => o.value), dflt });
 		const v = answer({ kind: q.kind, prompt: q.prompt, title: q.title, options, dflt });
+		if (v === NO_ANSWER)
+			return;
 		const reply = v === BACK_ANSWER ? { cmd: 'back', id: q.id } : q.kind === 'confirm' ? { cmd: 'answer', id: q.id, value: !!v } : v === undefined ? { cmd: 'cancel', id: q.id } : { cmd: 'answer', id: q.id, value: v };
 		queueMicrotask(() => eda.sys_MessageBus.publish('returnpath.wizard.reply', reply));
 	};

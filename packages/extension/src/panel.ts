@@ -13,7 +13,7 @@
 // over the result, the last run and the overlay drawing.
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { adoptOverlay, forgetOverlay, leftoverOverlay, overlayGroups, overlayState, restyleOverlay, type MarkerGroup } from './overlay';
-import { log, toast } from './runner';
+import { after, log, toast } from './runner';
 import { currentStyle, DEFAULT_STYLE, INNER_CYCLE, PALETTE, ROLE_LABELS, ROLE_USE, ROLES, saveStyle, setSharedStyle, type Role, type RoleStyle } from './style';
 import { t } from './i18n';
 
@@ -173,8 +173,8 @@ function snapshot(): Stamped {
 	return out;
 }
 
-/** How long a new instance waits for the others to send their shared state. */
-export const panelTimeouts = { syncMs: 300 };
+/** syncMs: how long a new instance waits for the others to send their shared state; cancelMs: how long a Cancel may take before a busy state is cleared anyway. */
+export const panelTimeouts = { syncMs: 300, cancelMs: 5000 };
 let synced: Promise<void> = Promise.resolve();
 let markSynced = () => {};
 
@@ -183,9 +183,19 @@ export function panelReady(): Promise<void> {
 	return synced;
 }
 
-/** Listens for panel commands and shared state; safe to call more than once. */
+/** Listens for panel commands and shared state; safe to call more than once. A failure is logged as an error, never thrown. */
 export function initPanel(h: PanelHost): void {
 	host = h;
+	try {
+		startPanel();
+	}
+	catch (e) {
+		const err = e instanceof Error ? e : new Error(String(e));
+		log(`panel: init failed: ${err.message}${err.stack ? `\n${err.stack}` : ''}`, 'error');
+	}
+}
+
+function startPanel(): void {
 	const b = bus();
 	if (!b || subscribed === b)
 		return;
@@ -195,15 +205,22 @@ export function initPanel(h: PanelHost): void {
 		delete stampOf[k];
 	setSharedStyle(undefined);
 	synced = new Promise((resolve) => {
-		const timer = setTimeout(resolve, panelTimeouts.syncMs);
+		const cancel = after(panelTimeouts.syncMs, resolve);
 		markSynced = () => {
-			clearTimeout(timer);
+			cancel();
 			resolve();
 		};
 	});
 	try {
-		b.subscribe(TOPIC_COMMAND, (m: PanelCommand) => void onCommand(m));
-		b.subscribe(TOPIC_SYNC, (m: SyncMessage) => onSync(m));
+		b.subscribe(TOPIC_COMMAND, (m: PanelCommand) => void onCommand(m).catch(e => commandFailed(m, e)));
+		b.subscribe(TOPIC_SYNC, (m: SyncMessage) => {
+			try {
+				onSync(m);
+			}
+			catch (e) {
+				log(`panel: shared state from another instance not taken: ${e instanceof Error ? e.message : String(e)}`, 'error');
+			}
+		});
 		subscribed = b;
 	}
 	catch (e) {
@@ -292,6 +309,8 @@ async function onCommand(m: PanelCommand): Promise<void> {
 	if (m.cmd === 'hello')
 		apply({ pageConnected: { v: true, at: now() } });
 	const target = handler(m);
+	if (m.cmd === 'cancel' && !m.to && shared.busy && shared.busyOwner && shared.panelOwner === me)
+		expireBusy(shared.busyOwner);
 	if (target !== me) {
 		// The owner hands the command on, so the instance holding the overlay or the run gets it.
 		if (target && !m.to && shared.panelOwner === me)
@@ -328,17 +347,38 @@ async function onCommand(m: PanelCommand): Promise<void> {
 	}
 	const labels: Record<string, string> = { hf: 'HF check', dc: 'DC check', trace: 'Selected trace', rerun: 'Rerun', toggle: '', clear: '', cancel: '' };
 	const busy = labels[m.cmd] || undefined;
-	if (busy)
-		share({ busy, busyOwner: me });
-	publishState();
 	try {
-		await host?.run(m.cmd);
+		if (busy)
+			share({ busy, busyOwner: me });
+		publishState();
+		if (!host)
+			throw new Error('the panel has no extension host to run it');
+		await host.run(m.cmd);
 	}
 	finally {
 		if (busy)
 			share({ busy: undefined, busyOwner: undefined });
 		publishState();
 	}
+}
+
+/** A command from the page that failed outside the analysis's own error handling: logged and shown, never silent. */
+function commandFailed(m: PanelCommand, e: unknown): void {
+	const err = e instanceof Error ? e : new Error(String(e));
+	log(`panel: command "${m?.cmd}" failed: ${err.message}${err.stack ? `\n${err.stack}` : ''}`, 'error');
+	toast(t('Return Path panel: ${1} failed: ${2}. Details are in the log.', String(m?.cmd), err.message));
+}
+
+/** Busy set by an instance that does not answer a Cancel (it is gone or stuck): cleared, so the panel's buttons work again. */
+function expireBusy(owner: string): void {
+	const at = stampOf.busy;
+	after(panelTimeouts.cancelMs, () => {
+		if (!shared.busy || shared.busyOwner !== owner || stampOf.busy !== at)
+			return;
+		log(`panel: the instance running "${shared.busy}" did not answer Cancel within ${panelTimeouts.cancelMs} ms; clearing its busy state`, 'error');
+		share({ busy: undefined, busyOwner: undefined });
+		publishState();
+	});
 }
 
 /** Hands Hide/Show or Clear from a menu to the instance that drew the overlay; false when this one holds it or none does. */
@@ -382,6 +422,18 @@ function overlayNow(): Shared['overlay'] {
 export function publishState(): void {
 	if (!subscribed || subscribed !== bus())
 		return;
+	try {
+		publishStateNow();
+	}
+	catch (e) {
+		const err = e instanceof Error ? e : new Error(String(e));
+		log(`panel: state not sent to the page: ${err.message}${err.stack ? `\n${err.stack}` : ''}`, 'error');
+		// Busy left out: whatever the page shows, its buttons must still work.
+		publish(TOPIC_STATE, { version: extensionConfig.version, error: err.message });
+	}
+}
+
+function publishStateNow(): void {
 	const local = overlayState();
 	if (local !== 'none' && (shared.overlayOwner !== me || shared.overlay !== local)) {
 		share({ overlay: local, overlayOwner: me });

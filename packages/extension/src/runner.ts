@@ -64,7 +64,7 @@ type SysTimer = { setTimeoutTimer: (id: string, ms: number, fn: () => void) => b
 let timerSeq = 0;
 
 /** Runs `fn` after `ms` with setTimeout, or EasyEDA's timer where the sandbox has no setTimeout; returns a cancel function. */
-function after(ms: number, fn: () => void): () => void {
+export function after(ms: number, fn: () => void): () => void {
 	if (typeof setTimeout === 'function') {
 		const id = setTimeout(fn, ms);
 		return () => clearTimeout(id);
@@ -85,6 +85,7 @@ function buffer(): string[] {
 		logProblem = undefined;
 		unwritten = undefined;
 		storageOff = false;
+		fsStalled = undefined;
 	}
 	if (!lines) {
 		let saved: unknown;
@@ -165,6 +166,28 @@ const sepOf = (dir: string) => (dir.includes('\\') && !dir.includes('/') ? '\\' 
 /** Why the log file is not written, when it is not. */
 let logProblem: string | undefined;
 
+/**
+ * Set when a file-system call did not answer in time. No further file writes are attempted this
+ * session (until a Run folder is chosen again): a call that hangs must not slow or block the analyses.
+ */
+let fsStalled: string | undefined;
+
+/** A file-system write with the time limit; after one has timed out, the others fail at once with its reason. */
+async function fileCall<T>(call: () => Promise<T> | T | undefined, what: string): Promise<T | undefined> {
+	if (fsStalled)
+		throw new Error(fsStalled);
+	try {
+		return await withTimeout(call(), saveTimeouts.ms, what);
+	}
+	catch (e) {
+		if (e instanceof TimedOut && !fsStalled) {
+			fsStalled = `${e.message}; file writes are off for this session (choose Return Path > Run Folder to try again)`;
+			log(`file writes stopped: ${fsStalled}. The analyses are not affected.`, 'warn');
+		}
+		throw e;
+	}
+}
+
 async function resolveLogPath(): Promise<string | null> {
 	logProblem = noFileApi();
 	if (logProblem) {
@@ -186,7 +209,7 @@ async function resolveLogPath(): Promise<string | null> {
 		dir = chosen.replace(/[/\\]+$/, '');
 		log(`log file goes to the Run folder: ${docs.reason}`, 'warn');
 	}
-	await withTimeout(api().sys_FileSystem!.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
+	await fileCall(() => api().sys_FileSystem!.createDirectoryInFileSystem?.(dir), 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
 	return `${dir}${sepOf(dir)}${LOG_FILE}`;
 }
 
@@ -211,7 +234,8 @@ async function persist(): Promise<void> {
 		logPath = await resolveLogPath();
 	if (logPath) {
 		try {
-			const ok = await withTimeout(api().sys_FileSystem!.saveFileToFileSystem!(logPath, new Blob([`${snapshot.join('\n')}\n`], { type: 'text/plain' })), saveTimeouts.ms, 'sys_FileSystem.saveFileToFileSystem');
+			const path = logPath;
+			const ok = await fileCall(() => api().sys_FileSystem!.saveFileToFileSystem!(path, new Blob([`${snapshot.join('\n')}\n`], { type: 'text/plain' })), 'sys_FileSystem.saveFileToFileSystem');
 			if (!ok)
 				throw new Error('sys_FileSystem.saveFileToFileSystem returned false');
 		}
@@ -328,7 +352,8 @@ export function chosenRunFolder(): string | undefined {
 
 export async function setRunFolder(folder: string | undefined): Promise<void> {
 	await writeStored(RUN_FOLDER_KEY, folder ?? '');
-	// A log file that had nowhere to go may have a place now.
+	// A log file that had nowhere to go, or a write that hung, may work with this folder.
+	fsStalled = undefined;
 	if (!logPath)
 		logPath = undefined;
 }
@@ -340,6 +365,8 @@ export async function runFolderStatus(): Promise<RunFolder> {
 	const missing = noFileApi();
 	if (missing)
 		return { dir: null, reason: missing, askable: false };
+	if (fsStalled)
+		return { dir: null, reason: fsStalled, askable: true };
 	const chosen = chosenRunFolder();
 	if (chosen)
 		return { dir: chosen.replace(/[/\\]+$/, '') };
@@ -372,9 +399,9 @@ export function unwrittenRun(): Readonly<UnwrittenRun> | undefined {
 async function writeRunFiles(dir: string, base: string, logText: string, resultsText: string): Promise<string> {
 	const fs = api().sys_FileSystem!;
 	const sep = sepOf(dir);
-	await withTimeout(fs.createDirectoryInFileSystem?.(dir), saveTimeouts.ms, 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
+	await fileCall(() => fs.createDirectoryInFileSystem?.(dir), 'sys_FileSystem.createDirectoryInFileSystem').catch(() => {});
 	const write = async (name: string, text: string, type: string) => {
-		const ok = await withTimeout(fs.saveFileToFileSystem!(`${dir}${sep}${name}`, new Blob([text], { type })), saveTimeouts.ms, 'sys_FileSystem.saveFileToFileSystem');
+		const ok = await fileCall(() => fs.saveFileToFileSystem!(`${dir}${sep}${name}`, new Blob([text], { type })), 'sys_FileSystem.saveFileToFileSystem');
 		if (!ok)
 			throw new Error(`could not write ${dir}${sep}${name}`);
 	};

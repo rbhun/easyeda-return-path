@@ -69,7 +69,7 @@
 				font: 11.5px/1.45 ui-monospace, Consolas, monospace;
 			}
 			#result .warn { color: #ffd166; }
-			#result .err { color: #ff6b6b; }
+			#result .err, #state.err { color: #ff6b6b; }
 			.muted { color: var(--muted); }
 			table { width: 100%; border-collapse: collapse; }
 			td { padding: 3px 0; vertical-align: middle; }
@@ -151,8 +151,35 @@
 					return ['result', 'overlayOwner', 'lastRun'].some(function (k) { return stampOf(newest, k) > s.stamps[k]; });
 				}
 
+				var ACTIONS = ['hf', 'dc', 'rerun', 'toggle', 'clear', 'trace'];
+				function showError(text) {
+					$('state').textContent = text;
+					$('state').className = 'err';
+					ACTIONS.forEach(function (id) { $(id).disabled = false; });
+					$('trace').textContent = 'Selected trace';
+				}
+
+				var heard = false;
 				function render(s) {
+					heard = true;
+					try {
+						if (s && s.error) {
+							last = null;
+							if (s.version) $('version').textContent = 'v' + s.version;
+							showError('Panel error: ' + s.error + '. Details: Return Path > Show Saved Log.');
+							return;
+						}
+						draw(s);
+					} catch (e) {
+						last = null;
+						showError('Panel error: ' + (e && e.message ? e.message : String(e)) + '. The buttons still work; please send Return Path > Show Saved Log.');
+						if (window.console) console.error('[ReturnPath] panel page:', e);
+					}
+				}
+
+				function draw(s) {
 					last = s;
+					$('state').className = '';
 					// After this state is drawn, so a reply delivered at once is not drawn over.
 					if (stale(s)) setTimeout(function () { send({ cmd: 'adopt', snapshot: newest }); }, 0);
 					$('version').textContent = 'v' + s.version;
@@ -278,7 +305,7 @@
 					})();
 				}
 				setTimeout(function () {
-					if (!last) $('state').textContent = 'No answer from the extension yet. Reopen the panel with Return Path > Open Panel...';
+					if (!heard) $('state').textContent = 'No answer from the extension yet. Reopen the panel with Return Path > Open Panel...';
 				}, 3000);
 			})();
 		</script>

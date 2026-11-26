@@ -163,6 +163,16 @@ export async function askInWindow(kind: WizardKind, title: string, prompt: strin
 	});
 }
 
+/** Ends the question waiting in the wizard window as if the user cancelled it, and closes the window; false when none is waiting. */
+export function cancelWizardQuestion(): boolean {
+	const waiting = abandon;
+	if (!waiting)
+		return false;
+	waiting();
+	void closeWizardWindow();
+	return true;
+}
+
 /** Closes the wizard window, if it is open. */
 export async function closeWizardWindow(): Promise<void> {
 	if (!open)

@@ -13,6 +13,7 @@ import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel,
 import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, withBack, type Ask } from './wizard';
+import { cancelWizardQuestion } from './wizard-window';
 import { t } from './i18n';
 
 const HF_BUDGET_MS = 60_000;
@@ -563,8 +564,13 @@ export async function toggleReturnPath(): Promise<void> {
 
 /** Stops a running analysis (closing its progress bar does the same). */
 export function cancelAnalysis(): void {
-	if (!cancelRunning())
-		toast(t('No analysis is running.'));
+	if (cancelRunning())
+		return;
+	if (cancelWizardQuestion()) {
+		log('cancel: ended the question waiting in the wizard window');
+		return;
+	}
+	toast(t('No analysis is running.'));
 }
 
 export async function clearReturnPath(): Promise<void> {

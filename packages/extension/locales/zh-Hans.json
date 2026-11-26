@@ -135,5 +135,6 @@
 	"Save the sample CSV as a template (${1})": "将示例 CSV 保存为模板（${1}）",
 	"Sample saved as ${1}: edit it and load it here.": "示例已保存为 ${1}：编辑后在此加载。",
 	"${1} continues through series parts to the nets below. Ticked nets are solved with it as one rail, the parts between them taken as shorts; untick all to solve ${1} alone.": "${1} 经串联元件延续到下列网络。勾选的网络与它作为同一电源轨一起求解，其间的元件视为短路；全部取消勾选则只求解 ${1}。",
-	"${1} (through ${2})": "${1}（经 ${2}）"
+	"${1} (through ${2})": "${1}（经 ${2}）",
+	"Return Path panel: ${1} failed: ${2}. Details are in the log.": "Return Path 面板：${1} 失败：${2}。详情见日志。"
 }
