@@ -9,6 +9,7 @@ Overlay: colour shows where the current flows, as in the DC view.
 - **By copper layer**: an HF return is coloured by the copper layer it flows in (magenta in Top copper, cyan in Bottom, blue in inner layers), not by the layer of its signal trace. A Bottom trace's return in the Top plane is now magenta.
 - **Forward current by layer too**: the signal trace (HF) and the supply streamlines (DC) are yellow on the top layer and green on the others. The panel's "DC supply" and "Signal trace" roles become "Forward current, top layer" and "Forward current, other layers", used by both checks. Colours saved for the old roles are not carried over.
 - Inner-layer returns are all blue (no longer green and blue in turn), as green now marks forward current on the other layers.
+- Tests: the saved-log tests give storage writes 1 s (50 ms only where storage never answers), so a busy CI runner no longer drops a write and fails them.
 
 ## [0.1.59] - 2026-11-26
 
