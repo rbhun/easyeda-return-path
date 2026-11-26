@@ -2,6 +2,18 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.45] - 2026-11-26
+
+Numbered above 0.1.44, main's version.
+
+From Balazs, on DC return lines: one jumped from the bottom to the top layer at a via and back down at the next, where the bottom ground pour runs on unbroken; another curved wide through a top pour between two vias instead of taking the straight path.
+
+The solve was right; the drawn line was not. Each load gets one line traced back along the solved current field. At a via it switched layers whenever the barrel carried any current in the walking direction. On a 2-layer board, where every stitching via hands a little current between the pours, that was nearly every via it crossed. Leaving a via, it started in the direction of the field at the barrel's centre. There the barrel's own radial flow dominates, so that direction was noise.
+
+- **Layer changes follow the bulk of the current.** The line changes layer at a via only where the barrel takes more current than flows on past the via on the same layer, measured through a 1 mm ring around it. On the rack display's 3V3 rail, the return lines change layer 26 times instead of 34; on 9V, 23 times instead of 32. Vias at the end of a track and the loads' own ground vias are still taken. OLED2's line, which went up to the top layer at a stitching via and back down 20 mm later, now stays on the bottom pour; there, the bottom copper around the via carried about 113 mA/mm and the top 14 mA/mm.
+- **Leaving a via along the densest path.** The line leaves a via where the most current crosses that ring, so between a via feeding a plane and a via draining it, it takes the straight path. In a test plane the bow dropped from 0.48 mm to 0.11 mm.
+- The 9V return line of OLED8, which used to stop short, now reaches the source. Supply lines on both boards are unchanged.
+
 ## [0.1.44] - 2026-11-26
 
 From Balazs: the point is a visually accurate picture of where the return current flows, so the designer can see where it takes big turns or passes through choke points; lines that pass through other traces, or are otherwise unreal, are unacceptable.

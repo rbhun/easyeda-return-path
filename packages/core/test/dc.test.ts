@@ -266,3 +266,58 @@ test('drawn streamlines: one per load, later ones end where they meet an earlier
   assert.ok(gap < 0.2, `on the first (${gap.toFixed(3)} mm away)`);
   assert.ok(Math.abs(second.at(-1)!.x - 19.8) < 0.3, 'and ends at its load');
 });
+
+/** Length over chord of each drawn piece, and the layers in order. */
+function pieces(res: ReturnType<typeof solveDc>) {
+  const [sl] = traceStreamlines(res.grid, res.supply, DRAWN_STREAMS);
+  assert.ok(sl.complete);
+  return {
+    layers: sl.segments.map((s) => s.layer),
+    segments: sl.segments.map((s) => {
+      let len = 0;
+      for (let i = 1; i < s.pts.length; i++) len += Math.hypot(s.pts[i].x - s.pts[i - 1].x, s.pts[i].y - s.pts[i - 1].y);
+      const a = s.pts[0];
+      const b = s.pts.at(-1)!;
+      return { layer: s.layer, pts: s.pts, len, chord: Math.hypot(b.x - a.x, b.y - a.y) };
+    }),
+  };
+}
+
+test('drawn streamline: two stitched planes carry the flow together; the line stays on the layer of its pads', () => {
+  // Both layers are full planes of the net, stitched by vias on and beside the straight path; the
+  // pads are on L1. Each via hands over only a small part of the flow, so the line has no reason to
+  // visit L2 between them.
+  const src = pad('s', 'P', 1, 0.5, 3, 0.6, 0.6);
+  const load = pad('l', 'P', 1, 29.5, 3, 0.6, 0.6);
+  const vias = [3, 5.5, 8, 10.5, 13, 15.5, 18, 20.5, 23, 25.5].flatMap((x) => [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5].map((y) => ({ id: `v${x}-${y}`, net: 'P', at: { x, y }, drill: 0.3, diameter: 0.6, stitching: true })));
+  const b = board(2, { pours: [pour('P', 1, [rect(15, 3, 30, 6)]), pour('P', 2, [rect(15, 3, 30, 6)])], vias, pads: [src, load] });
+  const res = solveDc(b, terminalSetup(src, load, 'P'), { cell: 0.25 });
+  assert.ok(res.supply.layers[1].flow > 0.3 * res.supply.layers[0].flow, 'L2 carries a real share of the flow');
+  const { layers } = pieces(res);
+  assert.deepEqual(layers, [1]);
+});
+
+test('drawn streamline: from a via into a plane to a via out of it, the line takes the straight path', () => {
+  // L2 tracks bring the current to via A and take it from via B; between them it crosses an L1 plane
+  // that extends far to one side. Its densest path is the straight line between the vias.
+  const src = pad('s', 'P', 2, 2, 8, 0.6, 0.6);
+  const load = pad('l', 'P', 2, 28, 8, 0.6, 0.6);
+  const b = board(2, {
+    pours: [pour('P', 1, [rect(10, 5, 20, 10)])],
+    tracks: [
+      { id: 'ta', net: 'P', layer: 2, a: { x: 2, y: 8 }, b: { x: 12, y: 8 }, width: 0.5 },
+      { id: 'tb', net: 'P', layer: 2, a: { x: 17, y: 8 }, b: { x: 28, y: 8 }, width: 0.5 },
+    ],
+    vias: [
+      { id: 'a', net: 'P', at: { x: 12, y: 8 }, drill: 0.3, diameter: 0.6, stitching: false },
+      { id: 'b', net: 'P', at: { x: 17, y: 8 }, drill: 0.3, diameter: 0.6, stitching: false },
+    ],
+    pads: [src, load],
+  });
+  const res = solveDc(b, terminalSetup(src, load, 'P'), { cell: 0.2 });
+  const { layers, segments } = pieces(res);
+  assert.deepEqual(layers, [2, 1, 2]);
+  const plane = segments[1];
+  assert.ok(plane.len < 1.1 * plane.chord, `through the plane: ${plane.len.toFixed(2)} mm for ${plane.chord.toFixed(2)} mm between the vias`);
+  assert.ok(plane.pts.every((p) => Math.abs(p.y - 8) < 0.25), `off the straight line by ${Math.max(...plane.pts.map((p) => Math.abs(p.y - 8))).toFixed(2)} mm`);
+});
