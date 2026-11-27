@@ -716,6 +716,16 @@ function drawnGeodesic(region: Paths, a: Pt, b: Pt, maxNodes?: number) {
   return geodesic(region, a, b, o);
 }
 
+/**
+ * Clip a coverage strip to the board outline. An outline that contains none of the trace is left
+ * unused: the polyline API can hand back a footprint shape on the outline layer and never the
+ * board, and clipping to that reports 0% copper under a trace that sits on a real pour.
+ */
+function clipToBoard(strip: Paths, outline: Paths, pts: Pt[]): Paths {
+  if (!outline.length || !pts.some((p) => pointInPaths(p, outline))) return strip;
+  return intersect(strip, outline);
+}
+
 function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Finding[]): Steps<ChainResult> {
   const { board, opts, stats } = ctx;
   const line = new Polyline(chain.pts);
@@ -750,13 +760,13 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
   );
 
   const strip = difference(strokePath(chain.pts, 2 * halfBand, true), keepout);
-  const band = board.outline.length ? intersect(strip, board.outline) : strip;
+  const band = clipToBoard(strip, board.outline, chain.pts);
   // Within ±d of a trace at height h the plane carries (2/π)·atan(d/h) of the return current,
   // which is exactly half at d = h. Coplanar current sits in the pour beside the trace; the band
   // still uses the dielectric to the plane under it when there is one.
   const h50 = (ref.coplanar ? referenceFor(board, chain.layer, ctx.refCopper)?.h : ref.h) ?? ref.h;
   const halfStrip = strokePath(chain.pts, 2 * h50);
-  const half = board.outline.length ? intersect(halfStrip, board.outline) : halfStrip;
+  const half = clipToBoard(halfStrip, board.outline, chain.pts);
   const bandCopper = intersect(band, copper);
   const bandUncovered = difference(difference(band, bandCopper), antipads);
 

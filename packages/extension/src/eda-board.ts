@@ -433,12 +433,33 @@ export function outlineFromSource(text: string): Paths {
 	return rings;
 }
 
+/** True when the outline's box holds most of the copper. A footprint shape on the outline layer does not. */
+function outlineCovers(rings: Paths, pts: Pt[]): boolean {
+	if (!rings.length)
+		return false;
+	if (!pts.length)
+		return true;
+	const b = bbox(rings);
+	let hit = 0;
+	let n = 0;
+	const step = Math.max(1, Math.floor(pts.length / 48));
+	for (let i = 0; i < pts.length; i += step) {
+		const p = pts[i];
+		n++;
+		if (p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY)
+			hit++;
+	}
+	return hit >= Math.max(1, Math.ceil(n * 0.5));
+}
+
 /**
  * The board outline: polylines on the outline layer, else the board outline in the document source
  * (the polyline API may leave out the board outline, which is a polyline of type BOARD_OUTLINE),
  * else the bounding box of outline line segments.
+ * A polyline that does not cover the copper is a footprint shape, not the board. The document
+ * source is used instead when that one does cover it.
  */
-async function readOutline(segments: Pt[][], warnings: string[]): Promise<Paths> {
+async function readOutline(segments: Pt[][], copper: Pt[], warnings: string[]): Promise<Paths> {
 	const rings: Paths = [];
 	const api = eda.pcb_PrimitivePolyline;
 	const fromPolylines = async (label: string, layer?: number) => {
@@ -458,18 +479,26 @@ async function readOutline(segments: Pt[][], warnings: string[]): Promise<Paths>
 			log(`read board: board outline not readable (${e instanceof Error ? e.message : String(e)})`, 'warn');
 		}
 	}
-	if (!rings.length && typeof eda.sys_FileManager?.getDocumentSource === 'function') {
+	const fromApi = rings.length ? union(rings) : [];
+	if (outlineCovers(fromApi, copper))
+		return fromApi;
+	if (typeof eda.sys_FileManager?.getDocumentSource === 'function') {
 		try {
 			const text = await call('sys_FileManager.getDocumentSource (board outline)', () => eda.sys_FileManager.getDocumentSource());
-			rings.push(...outlineFromSource(text ?? ''));
-			log(`read board: board outline from the document source: ${rings.length} ring(s) in ${(text ?? '').length} characters`);
+			const fromDoc = outlineFromSource(text ?? '');
+			log(`read board: board outline from the document source: ${fromDoc.length} ring(s) in ${(text ?? '').length} characters`);
+			if (fromDoc.length && (outlineCovers(fromDoc, copper) || !fromApi.length)) {
+				if (fromApi.length)
+					log('read board: the polyline outline does not cover the copper; using the board outline from the document source', 'warn');
+				return union(fromDoc);
+			}
 		}
 		catch (e) {
 			log(`read board: document source not readable (${e instanceof Error ? e.message : String(e)})`, 'warn');
 		}
 	}
-	if (rings.length)
-		return union(rings);
+	if (fromApi.length)
+		return fromApi;
 	if (segments.length) {
 		const b = bbox(segments);
 		warnings.push('Board outline built from line segments; using their bounding box.');
@@ -921,7 +950,12 @@ export async function readBoard(): Promise<Board> {
 	await step(`${pours.length} pours, fills and planes in total`);
 
 	const nets = [...new Set([...tracks.map(t => t.net), ...vias.map(v => v.net), ...pads.map(p => p.net)].filter(Boolean))].sort();
-	const outline = await readOutline(outlineSegments, warnings);
+	const copperPts = [
+		...tracks.flatMap(t => [t.a, t.b]),
+		...pads.map(p => p.at),
+		...pours.flatMap(p => p.outline.flat()),
+	];
+	const outline = await readOutline(outlineSegments, copperPts, warnings);
 	const keepouts = await readKeepouts(copperIds);
 	await step(`board outline ${outline.length ? `${outline.length} ring(s)` : 'missing'}, ${keepouts.length} pour keepouts`);
 	// The PCB is open now; the overlay drawn after a long solve may find no canvas to convert on.
