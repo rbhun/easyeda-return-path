@@ -7,8 +7,8 @@ import { parseEasyEdaPcb } from '@returnpath/cli/parse';
 import { splitEpru } from '@returnpath/cli/project';
 import { isGroundNet, looksLikePowerNet, type Board } from '@returnpath/core';
 import { strFromU8, unzipSync } from 'fflate';
-import { buildCopperByLayerFromBoard, checkNetGeometry } from '../src/checker.js';
-import { MAX_REPLY_BYTES } from '../src/service.js';
+import { buildCopperByLayerFromBoard, checkNetGeometry } from '../src/rcp/checker.js';
+import { MAX_REPLY_BYTES } from '../src/rcp/service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

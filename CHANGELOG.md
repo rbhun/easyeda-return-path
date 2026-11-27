@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.82] - 2026-11-27
+
+From Balazs: one extension only. The `mcp.rcp.*` bridge commands now live in the existing Return Path extension, and the separate `mcp-rcp` extension is gone.
+
+- **`mcp.rcp.*` on the Return Path extension.** `mcp.rcp.info`, `mcp.rcp.listNets`, `mcp.rcp.checkNet`, `mcp.rcp.showFindings` and `mcp.rcp.clearMarkers` are registered on the public message bus by the extension people already install (same name and uuid). Upgrade Return Path and they are available to `easyeda-mcp-pro`'s `easyeda_extension_call`; nothing else needs installing. They are read-only apart from temporary markers, reply in millimetres, and stay under the 256 KiB bridge limit. The extension now also starts at `onStartupFinished`, so the commands are there as soon as EasyEDA is open, before the Return Path menu is used. A failure to register them is logged and never stops the Return Path extension.
+- **About lists the bridge services.** Return Path > About shows the version and the registered `mcp.rcp.*` topics.
+- **The separate extension is retired.** `packages/mcp-rcp` (the `easyeda-mcp-rcp` extension, its `.eext`, packaging and docs) is removed; the check code moved into `packages/extension/src/rcp`. Anyone who installed the 0.1.81 `MCP Return Path` extension should delete it in EasyEDA's extension manager after upgrading Return Path.
+
 ## [0.1.81] - 2026-11-27
 
 Added a new sibling EasyEDA Pro extension package (`packages/mcp-rcp`, `@returnpath/mcp-rcp` / `easyeda-mcp-rcp`) that exposes read-only, per-net return-current-path checks on EasyEDA's public message bus (`mcp.rcp.*`) for AI agents via `easyeda-mcp-pro`'s `easyeda_extension_call` bridge.

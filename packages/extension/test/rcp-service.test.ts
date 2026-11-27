@@ -4,8 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { rect, union, type Path, type Paths } from '@returnpath/core';
-import { activate, showStatus } from '../src/index.js';
-import { MAX_REPLY_BYTES, RCP_TOPICS, resetRcpServiceState } from '../src/service.js';
+import { MAX_REPLY_BYTES, RCP_TOPICS, registerRcpServices, resetRcpServiceState } from '../src/rcp/service.js';
 import type {
   CheckNetReplyData,
   ClearMarkersReplyData,
@@ -13,7 +12,7 @@ import type {
   ListNetsReplyData,
   ServiceEnvelope,
   ShowFindingsReplyData,
-} from '../src/types.js';
+} from '../src/rcp/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,7 +38,6 @@ interface MockFixtureOptions {
 
 function installMockEda(opts: MockFixtureOptions = {}) {
   const rpcs = new Map<string, (msg: unknown) => Promise<unknown> | unknown>();
-  const dialogs: Array<{ content: string; title: string }> = [];
   const generatedMarkers: Array<{ markers: IDMT_IndicatorMarkerShape[]; color: unknown; lineWidth?: number; zoom?: boolean }> = [];
   let removeCount = 0;
 
@@ -117,11 +115,6 @@ function installMockEda(opts: MockFixtureOptions = {}) {
         const fn = rpcs.get(topic);
         if (!fn) throw undefined;
         return await fn(msg);
-      },
-    },
-    sys_Dialog: {
-      showInformationMessage: (content: string, title: string) => {
-        dialogs.push({ content, title });
       },
     },
     dmt_SelectControl: {
@@ -211,43 +204,36 @@ function installMockEda(opts: MockFixtureOptions = {}) {
 
   (globalThis as unknown as { eda: unknown }).eda = mockEda;
   resetRcpServiceState();
-  activate();
+  registerRcpServices();
 
   return {
     call: <T>(topic: string, msg?: unknown) =>
       mockEda.sys_MessageBus.rpcCallPublic(topic, msg) as Promise<ServiceEnvelope<T>>,
     rpcs,
-    dialogs,
     generatedMarkers,
     getRemoveCount: () => removeCount,
   };
 }
 
-test('extension.json has valid unique UUID, onStartupFinished activation, Apache-2.0, and Status menus', () => {
+test('the Return Path extension.json stays the one shipped extension and activates on startup for the bridge', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extension.json'), 'utf8'));
-  assert.match(manifest.uuid, /^[a-f0-9]{32}$/);
-  assert.notEqual(manifest.uuid, 'e718233f3c1e439386a1bb93c284c392', 'must not reuse mcp-demo-service uuid');
-  assert.notEqual(manifest.uuid, 'cfe3a38bdd3044659ee9f3eadd5ebbc8', 'must not reuse easyeda-return-path uuid');
+  assert.equal(manifest.name, 'easyeda-return-path');
+  assert.equal(manifest.uuid, 'cfe3a38bdd3044659ee9f3eadd5ebbc8');
   assert.equal(manifest.license, 'Apache-2.0');
   assert.equal(manifest.activationEvents?.onStartupFinished, true);
-  assert.equal(manifest.headerMenus?.home?.[0]?.menuItems?.[0]?.registerFn, 'showStatus');
-  assert.equal(manifest.headerMenus?.pcb?.[0]?.menuItems?.[0]?.registerFn, 'showStatus');
+  assert.equal(fs.existsSync(path.join(__dirname, '..', '..', 'mcp-rcp')), false, 'no separate mcp-rcp extension package');
 });
 
-test('registers all 5 mcp.rcp.* topics matching bridge topic regex and exposes globalThis.showStatus', () => {
+test('registers all 5 mcp.rcp.* topics matching the bridge topic regex, once per message bus', () => {
   const env = installMockEda();
   const topicPattern = /^mcp\.[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
   for (const topic of RCP_TOPICS) {
     assert.ok(topicPattern.test(topic), `topic ${topic} must satisfy bridge regex`);
     assert.ok(env.rpcs.has(topic), `topic ${topic} should be registered on public bus`);
   }
-  assert.equal(typeof (globalThis as unknown as { showStatus?: unknown }).showStatus, 'function');
-
-  showStatus();
-  assert.equal(env.dialogs.length, 1);
-  assert.match(env.dialogs[0].content, /mcp\.rcp\.info/);
-  assert.match(env.dialogs[0].content, /mcp\.rcp\.checkNet/);
-  assert.match(env.dialogs[0].content, /mcp\.rcp\.clearMarkers/);
+  const before = env.rpcs.get('mcp.rcp.info');
+  registerRcpServices();
+  assert.equal(env.rpcs.get('mcp.rcp.info'), before, 'a second call on the same bus does not register again');
 });
 
 test('returns { ok: false, error } when a PCB document is not focused', async () => {
