@@ -1,5 +1,5 @@
 import { netKey } from '@returnpath/core';
-import extensionConfig from '../extension.json' with { type: 'json' };
+import extensionConfig from '../../extension.json' with { type: 'json' };
 import { checkNetGeometry, summarizeFindings } from './checker.js';
 import {
   clearBoardCache,
@@ -43,6 +43,7 @@ const MAX_LIST_LIMIT = 200;
 
 let registeredTopics: string[] = [];
 let registeredAt: string | null = null;
+let registeredBus: unknown = null;
 
 function utf8ByteLength(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
@@ -205,8 +206,14 @@ function serve<T>(topic: RcpTopic, handler: (message: unknown) => Promise<T> | T
   registeredTopics.push(topic);
 }
 
+/** Registers the mcp.rcp.* services once per editor message-bus object; a new editor session registers again. */
 export function registerRcpServices(): void {
-  if (registeredAt) return;
+  const bus = eda.sys_MessageBus;
+  if (registeredAt && registeredBus === bus) return;
+  if (typeof bus?.rpcServicePublic !== 'function') {
+    throw new Error('eda.sys_MessageBus.rpcServicePublic is not available in this EasyEDA Pro version.');
+  }
+  registeredBus = bus;
   registeredTopics = [];
   serve('mcp.rcp.info', handleInfo);
   serve('mcp.rcp.listNets', handleListNets);
@@ -234,5 +241,6 @@ export function getServiceStatus(): {
 export function resetRcpServiceState(): void {
   registeredTopics = [];
   registeredAt = null;
+  registeredBus = null;
   clearBoardCache();
 }

@@ -9,14 +9,12 @@
   "workspaces": [
     "packages/core",
     "packages/cli",
-    "packages/extension",
-    "packages/mcp-rcp"
+    "packages/extension"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm test --workspaces --if-present",
     "build:extension": "npm run build -w @returnpath/extension",
-    "build:mcp-rcp": "npm run build -w @returnpath/mcp-rcp",
     "demo": "npm run demo -w @returnpath/cli",
     "check:version": "node scripts/check-version.mjs",
     "sync": "node scripts/agent-sync.mjs",

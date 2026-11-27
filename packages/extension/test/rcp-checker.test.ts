@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { circle, difference, rect, union, MULTI_LAYER, type Paths, type Stackup, type Track, type Via } from '@returnpath/core';
-import { checkNetGeometry, type CheckBoardInput } from '../src/checker.js';
+import { checkNetGeometry, type CheckBoardInput } from '../src/rcp/checker.js';
 
 function make4LayerStackup(): Stackup {
   return {

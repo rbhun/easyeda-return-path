@@ -8,7 +8,7 @@ EasyEDA Pro extension built on the official [pro-api-sdk](https://github.com/eas
 2. In EasyEDA Pro (≥ 4.1.93 for the stackup and undo-group APIs), import `packages/extension/build/dist/easyeda-return-path_v<version>.eext` (the version is in `extension.json`; see the root `CHANGELOG.md`) as a local extension in the Extension Manager. CI uploads each pull request's build as the artifact `easyeda-return-path_v<version><letter>` (`a` for the first build of a version, then `b`, `c`, ...), and every version on main is published as the GitHub Release `v<version>` with the `.eext` attached.
 3. In a PCB, open **Return Path → Open Panel...**. Press **HF check** in the panel, pick the net and its speed. A selected track, via or pad preselects its net. **Clear** removes the drawing.
 
-The menu has **Open Panel...**, **Load Board Info...**, **Save Board Info...**, **Run Folder...**, **Show Saved Log...** and **About...**; the analyses, the overlay and its colours are in the panel.
+The extension also serves the read-only `mcp.rcp.*` commands to AI agents on the bridge (see [Agent bridge](#agent-bridge-mcprcp)). The menu has **Open Panel...**, **Load Board Info...**, **Save Board Info...**, **Run Folder...**, **Show Saved Log...** and **About...**; the analyses, the overlay and its colours are in the panel.
 
 The analysis runs in ~30 ms slices and hands control back to the editor between them, so the UI stays responsive. A progress bar shows the current phase; closing it, or **Cancel** in the panel (the **Selected trace** button while a run is going), stops the run (so does **Clear**). The high-frequency check stops with a message after 60 s, the DC solve after 120 s. Nets with more than 4000 track segments, or boards whose reference copper has more than 500 000 polygon vertices, are refused up front. A slot detour with more than 1500 copper corners in its search window is reported as too complex instead of being traced.
 
@@ -47,6 +47,219 @@ The CSV has one row per net, rail load or layer; the first column `row` says whi
 The stored peak currents, pins, receivers, targets and layer rows are kept and shown, but the analyses do not use them yet.
 
 It reads tracks, arcs, vias, free and component pads, pours, computed pour fills, copper fills and the stackup through the API (`src/eda-board.ts`). Plane-layer copper has no pour, so it takes its net from the fill-mode-2 (`INNER_ELECTRICAL_LAYER`) `Fill` it overlaps most. The overlay is temporary: it is drawn with `dmt_EditorControl.generateIndicatorMarkers` and removed with `removeIndicatorMarkers`, so nothing is saved in the document or the undo history (`src/overlay.ts`). Green outlines show the ±3h band, red the band without copper and centreline gaps, orange the detour path, and blue the links from vias to return vias or decaps and from splits to bridging caps. The findings are listed in a dialog.
+
+## Agent bridge (`mcp.rcp.*`)
+
+The Return Path extension itself answers read-only, per-net return-current-path checks on EasyEDA's public message bus, so an AI agent can call them through the [`easyeda-mcp-pro`](https://github.com/oaslananka/easyeda-mcp-pro) bridge (`easyeda_extension_call`). There is no second extension: upgrade Return Path and the topics are there.
+
+```text
+agent --easyeda_extension_call--> easyeda-mcp-pro --bridge--> MCP Pro Bridge extension
+      --eda.sys_MessageBus.rpcCallPublic(topic, msg)--> Return Path (this extension) --> JSON reply
+```
+
+The extension performs the geometry analysis and returns compact, plain JSON findings in **millimetres (`mm`)**. The agent decides which nets to check, aggregates and ranks violations, and can highlight chosen findings on the PCB canvas with temporary indicator markers that never modify the design. The check code is in `src/rcp/`; it is separate from the HF/DC analyses in the panel and from the `returnpath.run` bus.
+
+### Install, upgrade and verify (desktop EasyEDA Pro)
+
+EasyEDA Pro caches extension code aggressively: re-importing an unchanged version does not replace the running code.
+
+1. Build or download the new Return Path `.eext` (the version in `extension.json` is higher than the one installed).
+2. In **Advanced -> Extension Manager -> Installed**, remove the old **Return Path** entry. If you installed the short-lived `MCP Return Path` / `Return-Current-Path Checker (MCP)` extension from 0.1.81, remove that too: it is retired, and its topics would clash with the ones Return Path now registers.
+3. Fully quit EasyEDA Pro (**Cmd+Q**) and reopen it.
+4. Import the `.eext` (**Extension Manager -> Import**), then fully quit and reopen once more so the startup activation runs on the new bundle.
+5. Open any PCB and choose **Return Path -> About...**. It shows the version and the five `mcp.rcp.*` topics.
+
+### Calling from Claude Desktop via `easyeda-mcp-pro`
+
+1. In `~/Library/Application Support/Claude/claude_desktop_config.json`, add `mcp.rcp.*` to the `easyeda-mcp-pro` server's `env`:
+
+```json
+{
+  "TOOL_PROFILE": "experimental",
+  "BRIDGE_EXTENSION_RPC_TOPICS": "mcp.demo.*,mcp.rcp.*"
+}
+```
+
+2. Fully quit (**Cmd+Q**) and reopen Claude Desktop.
+3. Focus a PCB document in EasyEDA Pro and call through `easyeda_extension_call`:
+
+```json
+{ "topic": "mcp.rcp.info", "message": {}, "timeoutMs": 10000, "confirmWrite": true }
+```
+
+```json
+{ "topic": "mcp.rcp.listNets", "message": { "offset": 0, "limit": 50, "includePower": false }, "timeoutMs": 10000, "confirmWrite": true }
+```
+
+```json
+{ "topic": "mcp.rcp.checkNet", "message": { "net": "USB_DP" }, "timeoutMs": 20000, "confirmWrite": true }
+```
+
+```json
+{ "topic": "mcp.rcp.showFindings", "message": { "findings": [{ "x": 12.5, "y": 8.2 }], "color": "red" }, "timeoutMs": 10000, "confirmWrite": true }
+```
+
+```json
+{ "topic": "mcp.rcp.clearMarkers", "message": {}, "timeoutMs": 10000, "confirmWrite": true }
+```
+
+### Hard guarantees
+
+- **Public bus namespace:** all services register under `mcp.rcp.*` via `eda.sys_MessageBus.rpcServicePublic` when the Return Path extension starts (`activationEvents: { "onStartupFinished": true }`), next to its own `returnpath.run` / `returnpath.result` topics.
+- **Envelope:** every topic returns `{ "ok": true, "data": ... }` on success or `{ "ok": false, "error": "..." }` on failure (errors are returned as data, never thrown across the bus).
+- **Plain JSON & ≤ 256 KiB:** replies are strictly plain JSON (no functions, class instances, or non-finite numbers) and are bounded below 240 KiB (safely under the bridge's 256 KiB transport limit).
+- **Read-only & idempotent:** analysis calls never mutate the PCB. `showFindings` and `clearMarkers` only manage temporary indicator markers (`dmt_EditorControl.generateIndicatorMarkers` / `removeIndicatorMarkers`), which are never saved into the document or undo history. Retrying any call after a timeout is safe.
+- **Units:** EasyEDA stores PCB coordinates in `mil`. All coordinates, lengths, thicknesses, and radii in requests and replies are in **`mm`**, and every reply states `"unit": "mm"`.
+
+### Topics
+
+| Topic | Request (`message`) | Reply (`data`) |
+| --- | --- | --- |
+| `mcp.rcp.info` | `null` or `{}` | `{ service, version, pcbUuid, copperLayers, stackup, unit, defaultRules, topics }` |
+| `mcp.rcp.listNets` | `{ offset?, limit?, includePower? }` | `{ unit, total, totalAll, offset, limit, includePower, hasMore, nets, truncated? }` |
+| `mcp.rcp.checkNet` | `{ net, rules?, refresh? }` | `{ net, unit, skipped?, reason?, segmentsChecked, viasChecked, referenceNetsUsed, rulesApplied, summary, findings, truncated?, warnings? }` |
+| `mcp.rcp.showFindings` | `{ findings, color?, lineWidth?, zoom?, clearExisting? }` | `{ shown, unit }` |
+| `mcp.rcp.clearMarkers` | `null` or `{}` | `{ cleared, unit }` |
+
+#### `mcp.rcp.info`
+
+Returns extension metadata, active PCB UUID, copper layer count, physical stackup, unit (`"mm"`), default check rules, and registered topic names. Requires a focused PCB document (`documentType === 3`).
+
+```json
+{
+  "ok": true,
+  "data": {
+    "service": "easyeda-return-path",
+    "version": "0.1.82",
+    "pcbUuid": "pcb-uuid",
+    "copperLayers": 4,
+    "stackup": [
+      { "layerId": 1, "name": "Top Layer", "type": "copper", "thicknessMm": 0.035 },
+      { "layerId": 0, "name": "Prepreg 1", "type": "dielectric", "thicknessMm": 0.21 },
+      { "layerId": 15, "name": "Inner1", "type": "copper", "thicknessMm": 0.017 },
+      { "layerId": 0, "name": "Core", "type": "dielectric", "thicknessMm": 1.065 },
+      { "layerId": 16, "name": "Inner2", "type": "copper", "thicknessMm": 0.017 },
+      { "layerId": 0, "name": "Prepreg 2", "type": "dielectric", "thicknessMm": 0.21 },
+      { "layerId": 2, "name": "Bottom Layer", "type": "copper", "thicknessMm": 0.035 }
+    ],
+    "unit": "mm",
+    "defaultRules": {
+      "referenceNets": null,
+      "returnViaRadiusMm": 2.5,
+      "planeEdgeClearanceFactor": 3,
+      "minSegmentLengthMm": 0.25,
+      "skipNets": []
+    },
+    "topics": [
+      "mcp.rcp.info",
+      "mcp.rcp.listNets",
+      "mcp.rcp.checkNet",
+      "mcp.rcp.showFindings",
+      "mcp.rcp.clearMarkers"
+    ]
+  }
+}
+```
+
+When EasyEDA does not expose the physical stackup, standard 1.6 mm dielectrics are assumed (`1.5 mm` for 2-layer; `0.21 / 1.065 / 0.21 mm` for 4-layer) and entries include `"assumed": true`.
+
+#### `mcp.rcp.listNets`
+
+Lists PCB nets in pages so replies stay small on large boards.
+
+**Request:**
+
+- `offset` (`number`, default `0`): zero-based index into the filtered net list.
+- `limit` (`number`, default `50`, max `200`): page size.
+- `includePower` (`boolean`, default `false`): when `false`, power rails and ground nets are filtered out so agents can iterate signal nets directly; when `true`, all nets are returned with `isPower` and `isGround` flags.
+
+**Reply (`data`):**
+
+```json
+{
+  "unit": "mm",
+  "total": 98,
+  "totalAll": 134,
+  "offset": 0,
+  "limit": 50,
+  "includePower": false,
+  "hasMore": true,
+  "nets": [
+    {
+      "name": "USB_DP",
+      "trackCount": 14,
+      "viaCount": 2,
+      "layers": [1, 2],
+      "totalLengthMm": 28.45,
+      "isPower": false,
+      "isGround": false,
+      "hasPour": false
+    }
+  ]
+}
+```
+
+#### `mcp.rcp.checkNet`
+
+Runs return-current-path checks for a single net (matched case-insensitively, matching EasyEDA's net semantics). Adjacent findings along a trace are merged to keep replies compact.
+
+**Request:**
+
+- `net` (`string`, required): net name on the focused PCB.
+- `rules` (`object`, optional): overrides any subset of `defaultRules` (see below).
+- `refresh` (`boolean`, optional, default `false`): bypass the short 5-second decoded-copper cache to re-read board pours immediately after an edit.
+
+**`Finding` schema:**
+
+```ts
+type Finding = {
+  severity: 'error' | 'warning' | 'info';
+  kind:
+    | 'no_reference_plane'      // trace segment with no solid reference plane on the adjacent layer beneath it
+    | 'plane_split_crossing'    // trace crosses a gap/split between plane islands or pours
+    | 'plane_void'              // trace runs over a void/cutout (antipad, keepout) inside a reference plane
+    | 'near_plane_edge'         // trace runs within N × dielectric height of the reference plane edge
+    | 'layer_change_no_return'  // signal via changes reference plane with no return/stitching via within radius
+    | 'reference_net_change';   // reference plane changes net (e.g. GND → 3V3 or GND → 48V_PGND) along the route
+  net: string;
+  layerId: number;              // signal layer of the offending trace/via
+  referenceLayerId?: number;    // adjacent reference layer checked against
+  at: { x: number; y: number }; // location in mm
+  lengthMm?: number;            // affected trace length in mm, when applicable
+  detail: string;               // human-readable one-sentence explanation
+  primitiveIds?: string[];      // offending track/arc/via primitive IDs
+};
+```
+
+**Default rules:**
+
+| Rule | Default | Description |
+| --- | --- | --- |
+| `referenceNets` | `null` | Reference-plane net names (case-insensitive). `null` or `[]` auto-selects all ground nets (`GND`, `AGND`, `DGND`, `PGND`, `48V_PGND`, `ISO_GND`, `VSS`, …) that have pours/planes on the board. Pass e.g. `["GND"]` to restrict to specific nets. |
+| `returnViaRadiusMm` | `2.5` | Maximum distance (mm) from a layer-changing signal via to a valid return/stitching via (or through-hole pad) connecting both reference layers. |
+| `planeEdgeClearanceFactor` | `3` | Multiplier `N` applied to the adjacent dielectric height `h` for `near_plane_edge` (`N × h`). Set `0` to disable edge-clearance warnings. |
+| `minSegmentLengthMm` | `0.25` | Minimum affected trace length (mm) for `no_reference_plane`, `plane_void`, and `near_plane_edge` findings. (`plane_split_crossing`, `reference_net_change`, and `layer_change_no_return` are always reported regardless of gap width.) |
+| `skipNets` | `[]` | Net names (case-insensitive) to skip; returns `{ skipped: true, findings: [] }`. |
+
+#### `mcp.rcp.showFindings`
+
+Draws temporary indicator markers on the focused PCB canvas for human review. Does not modify the design or undo stack.
+
+**Request:**
+
+- `findings` (`array`, required, max 2000 items): each item accepts either `{ x, y, w?, h?, r?, severity? }` or a `Finding` object from `checkNet` (`{ at: { x, y }, severity? }`), all coordinates and sizes in **mm**. When `w`/`h` are provided, a rectangle is drawn; otherwise a circle (default radius `0.8 mm`).
+- `color` (`string | { r, g, b, alpha? }`, optional): named color (`red`, `yellow`, `green`, `cyan`, `blue`, `magenta`, `white`), `#RRGGBB`, or RGBA object. When omitted, errors render red, warnings yellow, and info cyan (using pure 0/255 channels with alpha 255 for EasyEDA Pro 3.2 and 4.x compatibility).
+- `lineWidth` (`number`, optional, default `3`): marker stroke width.
+- `zoom` (`boolean`, optional, default `false`): pan/zoom the canvas to the markers.
+- `clearExisting` (`boolean`, optional, default `true`): clears prior indicator markers first so retries are idempotent.
+
+**Reply (`data`):** `{ "shown": <count>, "unit": "mm" }`
+
+#### `mcp.rcp.clearMarkers`
+
+Removes all temporary indicator markers from the focused PCB. Idempotent.
+
+**Reply (`data`):** `{ "cleared": true, "unit": "mm" }`
 
 ## Testing in EasyEDA Pro and reading the logs
 

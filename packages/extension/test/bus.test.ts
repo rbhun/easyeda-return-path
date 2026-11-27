@@ -322,3 +322,29 @@ test('two activated instances handle a publishPublic request once and sync the r
 	assert.equal(mock.dialogs.length, 0);
 	assert.equal(mock.infoDialogs.length, 0);
 });
+
+test('the Return Path extension itself serves mcp.rcp.* on the public bus and lists them in About', async () => {
+	const mock = activateWith(demoBoard);
+	const info = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.info', {}) as any;
+	assert.equal(info.ok, true);
+	assert.equal(info.data.service, 'easyeda-return-path');
+	assert.equal(info.data.unit, 'mm');
+	assert.deepEqual(info.data.topics, ['mcp.rcp.info', 'mcp.rcp.listNets', 'mcp.rcp.checkNet', 'mcp.rcp.showFindings', 'mcp.rcp.clearMarkers']);
+
+	const nets = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.listNets', { includePower: true }) as any;
+	assert.equal(nets.ok, true);
+	assert.ok(nets.data.nets.some((n: { name: string }) => n.name === 'CLK'));
+
+	const check = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.checkNet', { net: 'clk' }) as any;
+	assert.equal(check.ok, true, check.error);
+	assert.equal(check.data.net, 'CLK');
+	assert.ok(Array.isArray(check.data.findings));
+
+	const cleared = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.clearMarkers', {}) as any;
+	assert.equal(cleared.ok, true);
+
+	ext.about();
+	const text = mock.infoDialogs.map((d: any) => JSON.stringify(d)).join('\n');
+	assert.match(text, /MCP bridge services/);
+	assert.match(text, /mcp\.rcp\.checkNet/);
+});

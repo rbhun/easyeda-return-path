@@ -12,6 +12,7 @@ import { addPinNames, readBoard, selectedNet, selectedPart, type SelectedPart } 
 import { clearOverlay, drawAnalysis, leftoverOverlay, overlayState, replaceCheckMarkers, toggleOverlay } from './overlay';
 import { autoOpenPanel, forwardCheckRedraw, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, releaseOverlay, report, shareLastRun, sharedLastRun } from './panel';
 import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
+import { getServiceStatus, registerRcpServices, RCP_TOPICS } from './rcp/service';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, withBack, type Ask } from './wizard';
 import { cancelWizardQuestion } from './wizard-window';
@@ -29,10 +30,19 @@ export function activate(status?: 'onStartupFinished', arg?: string): void {
 function ensureInitialized(): void {
 	initPanel(panelHost);
 	initPublicBus(publicExecutor);
+	try {
+		registerRcpServices();
+	}
+	catch (e) {
+		log(`mcp.rcp: registration failed: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+	}
 }
 
 export function about(): void {
-	eda.sys_Dialog.showInformationMessage(`${t('Return-path overlay v${1}', extensionConfig.version)}\n\n${t('Analyses, the overlay and its colours are in the panel: Return Path > Open Panel. If the editor froze, reopen it and use Return Path > Show Saved Log.')}`, t('About'));
+	ensureInitialized();
+	const topics = getServiceStatus().topics;
+	const bridge = `MCP bridge services (read-only):\n${(topics.length ? topics : [...RCP_TOPICS]).join('\n')}${topics.length ? '' : '\n(not registered: see the saved log)'}`;
+	eda.sys_Dialog.showInformationMessage(`${t('Return-path overlay v${1}', extensionConfig.version)}\n\n${t('Analyses, the overlay and its colours are in the panel: Return Path > Open Panel. If the editor froze, reopen it and use Return Path > Show Saved Log.')}\n\n${bridge}`, t('About'));
 }
 
 function confirm(content: string, title: string, ok: string): Promise<boolean> {
