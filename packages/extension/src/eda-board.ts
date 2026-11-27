@@ -1,5 +1,6 @@
 // Reads the open PCB through the EasyEDA Pro API into the core board model.
 // Almost every call used here is @beta, so all API access stays in this module and overlay.ts.
+import { planeFromDocument } from '@returnpath/cli/parse';
 import { projectPinNames } from '@returnpath/cli/project';
 import { unzipSync } from 'fflate';
 import {
@@ -347,6 +348,24 @@ async function readStackup(warnings: string[]): Promise<Board['stackup']> {
 		warnings.push(`This EasyEDA version does not give the layer stack to extensions; assuming a 1.6 mm board with dielectrics of ${gaps.map(g => `${g} mm`).join(', ')}.`);
 	}
 	return { copper, dielectrics };
+}
+
+/** Copper layers EasyEDA set up as a negative plane (内电层), not a signal layer with a pour. */
+async function usedPlaneLayers(): Promise<Set<number>> {
+	const ids = new Set<number>();
+	if (typeof eda.pcb_Layer?.getAllLayers !== 'function')
+		return ids;
+	try {
+		const all = await call('pcb_Layer.getAllLayers (plane layers)', () => eda.pcb_Layer.getAllLayers());
+		for (const l of all) {
+			if (l.type === 'PLANE' && (l.layerStatus as number | undefined) !== 0)
+				ids.add(l.id);
+		}
+	}
+	catch (e) {
+		log(`read board: plane layers not listed (${e instanceof Error ? e.message : String(e)})`, 'warn');
+	}
+	return ids;
 }
 
 
@@ -949,7 +968,43 @@ export async function readBoard(): Promise<Board> {
 	}
 	await step(`${pours.length} pours, fills and planes in total`);
 
-	const nets = [...new Set([...tracks.map(t => t.net), ...vias.map(v => v.net), ...pads.map(p => p.net)].filter(Boolean))].sort();
+	const planeIds = await usedPlaneLayers();
+	const planeCuts: Keepout[] = [];
+	// A line drawn on a negative plane removes copper. It is not a trace, and must not be painted back on.
+	for (let i = tracks.length - 1; i >= 0; i--) {
+		const t = tracks[i];
+		if (!planeIds.has(t.layer))
+			continue;
+		const cut = strokePath([t.a, t.b], Math.max(t.width, 0.05));
+		if (cut.length)
+			planeCuts.push({ id: `${t.id}-cut`, layer: t.layer, outline: cut });
+		tracks.splice(i, 1);
+	}
+	if (typeof eda.pcb_PrimitivePolyline?.getAll === 'function') {
+		for (const layer of planeIds) {
+			try {
+				const all = await call(`pcb_PrimitivePolyline.getAll (plane ${layer})`, () => eda.pcb_PrimitivePolyline.getAll(undefined, layer as never));
+				for (const pl of all) {
+					if ((pl.getState_Layer() as number) !== layer)
+						continue;
+					const width = Math.max(Number((pl as { getState_LineWidth?: () => number }).getState_LineWidth?.() ?? 0) * MIL, 0.05);
+					let n = 0;
+					for (const ring of decodeRings(pl.getState_Polygon().getSource(), conv, MIL)) {
+						if (ring.length < 2)
+							continue;
+						const closed = ring.length > 2 ? [...ring, ring[0]] : ring;
+						const cut = strokePath(closed, width);
+						if (cut.length)
+							planeCuts.push({ id: `${pl.getState_PrimitiveId()}#${n++}-cut`, layer, outline: cut });
+					}
+				}
+			}
+			catch (e) {
+				log(`read board: plane polylines on layer ${layer} not readable (${e instanceof Error ? e.message : String(e)})`, 'warn');
+			}
+		}
+	}
+
 	const copperPts = [
 		...tracks.flatMap(t => [t.a, t.b]),
 		...pads.map(p => p.at),
@@ -957,6 +1012,43 @@ export async function readBoard(): Promise<Board> {
 	];
 	const outline = await readOutline(outlineSegments, copperPts, warnings);
 	const keepouts = await readKeepouts(copperIds);
+	// The editor API has no plane-zone primitive. A plane with no pour here is a sheet whose net
+	// and outline live in the board document; keepouts and the lines above are cut out of it later.
+	const missingPlane = [...planeIds].filter(id => !pours.some(p => p.layer === id));
+	if (missingPlane.length && typeof eda.sys_FileManager?.getDocumentSource === 'function') {
+		try {
+			const text = await call('sys_FileManager.getDocumentSource (plane zones)', () => eda.sys_FileManager.getDocumentSource());
+			const doc = planeFromDocument(text ?? '', missingPlane);
+			const haveKeepout = new Set(keepouts.map(k => k.id));
+			for (const p of doc.pours) {
+				if (!planeIds.has(p.layer) || pours.some(q => q.layer === p.layer && q.net === p.net))
+					continue;
+				if (!p.outline.length && outline.length)
+					p.outline = outline;
+				pours.push(p);
+				log(`read board: plane layer ${p.layer} is a ${p.net} sheet${p.poured ? ' (rebuilt copper)' : ''}`);
+			}
+			for (const c of doc.cuts)
+				if (planeIds.has(c.layer))
+					planeCuts.push(c);
+			for (const k of doc.keepouts) {
+				if (haveKeepout.has(k.id))
+					continue;
+				if (k.layer !== MULTI_LAYER && !planeIds.has(k.layer))
+					continue;
+				keepouts.push(k);
+			}
+		}
+		catch (e) {
+			log(`read board: plane zones not readable from the document (${e instanceof Error ? e.message : String(e)})`, 'warn');
+		}
+	}
+	for (const id of planeIds) {
+		if (!pours.some(p => p.layer === id))
+			warnings.push(`Layer ${id} is a plane layer with no zone net, so its copper is not read.`);
+	}
+	keepouts.push(...planeCuts);
+	const nets = [...new Set([...tracks.map(t => t.net), ...vias.map(v => v.net), ...pads.map(p => p.net), ...pours.map(p => p.net)].filter(Boolean))].sort();
 	await step(`board outline ${outline.length ? `${outline.length} ring(s)` : 'missing'}, ${keepouts.length} pour keepouts`);
 	// The PCB is open now; the overlay drawn after a long solve may find no canvas to convert on.
 	await canvasOrigin();

@@ -52,6 +52,9 @@ export function* buildReferenceCopperSteps(board: Board, opts: RefCopperOptions)
       let fill: Paths;
       if (pour.poured) {
         fill = pour.poured;
+        // A rebuilt plane can be stale: a keepout or split line added after the last rebuild
+        // is still a hole. Signal pours already have those holes in their stored fill.
+        if (pour.name === 'plane' && keepouts.length) fill = difference(fill, keepouts);
       } else {
         fill = intersect(pour.outline, board.outline.length ? board.outline : pour.outline);
         fill = difference(fill, keepouts);

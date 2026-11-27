@@ -1,5 +1,8 @@
 import { unifyNetCase, assumedDielectricsMm, pouredScale, scalePaths, add, arcPoints, bbox, circle, decodeComplex, decodeRings, inflate, MULTI_LAYER, rect, rotate, strokePath, union, type Board, type Component, type CopperLayer, type Dielectric, type Keepout, type Pad, type Paths, type Pour, type Pt, type Track, type Via } from '@returnpath/core';
+import { planeFromDocument, planeLayerIds, readPlaneRecords } from './plane.js';
 import { parseRecords, type Rec } from './records.js';
+
+export { planeFromDocument };
 
 /** EasyEDA Pro PCB data is in mil. */
 export const MIL = 0.0254;
@@ -40,6 +43,7 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
 
   const stackup = buildStackup(recs, opts, warnings);
   const copperIds = new Set(stackup.copper.map((l) => l.id));
+  const planeIds = planeLayerIds(recs);
 
   const nets = new Set<string>();
   const tracks: Track[] = [];
@@ -63,7 +67,8 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
         const b = conv(num(r.endX), num(r.endY));
         const width = num(r.width) * MIL;
         const pts = r.type === 'ARC' ? [a, ...arcPoints(a, b, num(r.angle))] : [a, b];
-        const target = layer === LAYER_OUTLINE ? outlineSegs : copperIds.has(layer) ? tracks : null;
+        // A line on a plane layer is negative film: it cuts copper, it is not a trace.
+        const target = planeIds.has(layer) ? null : layer === LAYER_OUTLINE ? outlineSegs : copperIds.has(layer) ? tracks : null;
         if (!target) break;
         for (let i = 1; i < pts.length; i++)
           target.push({ id: pts.length > 2 ? `${r.id}#${i}` : r.id, net: str(r.netName), layer, a: pts[i - 1], b: pts[i], width });
@@ -94,7 +99,8 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
         break;
       case 'FILL': {
         const layer = num(r.layerId);
-        if (!copperIds.has(layer)) break;
+        // A fill on a plane layer is the zone, not a solid sheet. readPlaneRecords turns it into a pour.
+        if (planeIds.has(layer) || !copperIds.has(layer)) break;
         // Solid copper fills act like a pre-poured pour of their net.
         const fill = decodeComplex(r.path, conv, MIL);
         pours.push({ id: r.id, net: str(r.netName), layer, name: 'FILL', priority: -1, outline: fill, poured: fill });
@@ -123,6 +129,10 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
     }
   }
 
+  const plane = readPlaneRecords(recs, planeIds);
+  pours.push(...plane.pours);
+  keepouts.push(...plane.cuts);
+
   for (const p of pours) {
     const fills = pouredByPour.get(p.id);
     if (fills) {
@@ -130,8 +140,15 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
       p.poured = scalePaths(merged, pouredScale(p.outline, merged));
     }
   }
-  if (pours.some((p) => !p.poured))
+  const unpoured = pours.filter((p) => !p.poured);
+  if (unpoured.some((p) => p.name !== 'plane'))
     warnings.push('Some pours have no stored fill (POURED); their copper was recomputed from outlines with a uniform clearance.');
+  if (unpoured.some((p) => p.name === 'plane'))
+    warnings.push('A plane layer has no rebuilt copper; its sheet is the zone minus keepouts, split lines and the clearance around other nets.');
+  const zoned = new Set(plane.pours.map((p) => p.layer));
+  for (const id of planeIds) {
+    if (!zoned.has(id)) warnings.push(`Layer ${id} is a plane layer with no zone net, so its copper is not read.`);
+  }
 
   const components = buildComponents(recs, src.footprints ?? new Map(), copperIds, pads, warnings, src.pinNames);
   for (const t of tracks) nets.add(t.net);
@@ -148,6 +165,7 @@ export function parseEasyEdaPcb(src: Sources, opts: ParseOptions = {}): Board {
     outline = inflate([rect((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, b.maxX - b.minX, b.maxY - b.minY)], 1);
     warnings.push('No board outline found; using the copper bounding box.');
   }
+  for (const p of pours) if (p.name === 'plane' && !p.outline.length && outline.length) p.outline = outline;
 
   nets.delete('');
   return unifyNetCase({ outline, stackup, nets: [...nets].sort(), tracks, vias, pads, components, pours, keepouts, warnings });
