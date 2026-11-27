@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { analyzeNet, difference, dist, rect, strokePath, type Board, type Pad, type Path, type Track } from '../src/index.js';
+import { analyzeNet, difference, dist, pointInPaths, rect, strokePath, type Board, type Pad, type Path, type Track } from '../src/index.js';
 
 // Two-layer, h = 1.6 mm. The return is the least loop area, so it follows the trace instead of
 // shortcutting, snaps a small gap back onto the trace, and does not change layer through a via
@@ -99,4 +99,14 @@ test('a short hop on the other layer does not pull the return through an unconne
   const xs = an.returnPath.traces.flatMap((t) => t.pts.map((p) => p.x));
   assert.ok(Math.min(...xs) < 4 && Math.max(...xs) > 24, 'one line along the whole trace');
   assert.ok(!an.returnPath.traces.some((t) => t.pts.some((p) => dist(p, via.at) < 0.4)), 'does not dive into the unconnected via');
+});
+
+test('half the return current is the strip ±h around the trace', () => {
+  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
+  const an = analyzeNet(board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p))), 'SIG', { drivers: ['U1'] });
+  const h = 1.6;
+  const half = an.chains.flatMap((c) => c.half);
+  assert.ok(pointInPaths({ x: 15, y: 10 + 0.5 * h }, half), 'inside ±h');
+  assert.ok(!pointInPaths({ x: 15, y: 10 + 1.3 * h }, half), 'outside ±h');
+  assert.ok(pointInPaths({ x: 15, y: 10 + 1.3 * h }, an.chains.flatMap((c) => c.band)), 'the ±3h band still reaches there');
 });

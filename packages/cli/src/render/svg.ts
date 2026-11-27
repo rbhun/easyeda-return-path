@@ -1,6 +1,6 @@
 // Pipeline step 5 (prototype form): the overlay as a standalone SVG string. Pure, no I/O.
 // In the extension the same primitives become lines/fills on custom overlay layers.
-import { allCopper, bbox, intersect, MULTI_LAYER, type Analysis, type Board, type Finding, type Path, type Paths, type Pt, type Severity } from '@returnpath/core';
+import { allCopper, bbox, intersect, MULTI_LAYER, union, type Analysis, type Board, type Finding, type Path, type Paths, type Pt, type Severity } from '@returnpath/core';
 
 export interface ViewOptions {
   title: string;
@@ -107,6 +107,7 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
     el(`<path d="${d(covered)}" fill="#22c55e" fill-opacity="0.22" fill-rule="evenodd"/>`);
     el(`<path d="${d(c.bandUncovered)}" fill="url(#hatch)" fill-rule="evenodd"/>`);
   }
+  el(`<path d="${d(union(...chains.map((c) => c.half)))}" fill="none" stroke="#e2e8f0" stroke-width="1.25"/>`);
 
   // Detour loops beneath the traces.
   for (const c of chains)
@@ -204,6 +205,7 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
   const coplanar = chains.some((c) => c.ref?.coplanar);
   const bandName = coplanar && chains.every((c) => c.ref?.coplanar) ? 'coplanar band (3 gaps beside the trace clearance)' : coplanar ? '±3h / coplanar band' : '±3h band';
   const legend: [string, string][] = [
+    ['half', '50% of the return current, ±h around the trace'],
     ['band', `${bandName} with reference copper${coplanar ? '' : ' (≈80% of return current)'}`],
     ['hatch', `${bandName} without reference copper`],
     ['gap', 'trace over a gap / split (no copper under centreline)'],
@@ -216,7 +218,8 @@ export function renderOverlay(board: Board, an: Analysis, view: ViewOptions): st
   ];
   for (const [k, txt] of legend) {
     const x0 = px + 10;
-    if (k === 'band') el(`<rect x="${x0}" y="${py - 10}" width="22" height="12" fill="#22c55e" fill-opacity="0.35"/>`);
+    if (k === 'half') el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="#e2e8f0" stroke-width="1.25"/>`);
+    else if (k === 'band') el(`<rect x="${x0}" y="${py - 10}" width="22" height="12" fill="#22c55e" fill-opacity="0.35"/>`);
     else if (k === 'hatch') el(`<rect x="${x0}" y="${py - 10}" width="22" height="12" fill="url(#hatch)"/>`);
     else if (k === 'gap') el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="#ef4444" stroke-width="6"/>`);
     else if (k === 'return') el(`<line x1="${x0}" y1="${py - 4}" x2="${x0 + 22}" y2="${py - 4}" stroke="${RETURN_COLOR}" stroke-width="2.5"/>`);

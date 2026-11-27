@@ -389,7 +389,7 @@ test('panel: opens without blocking, runs DC from a button, shows the result the
 	const states = () => mock.published.filter(p => p.topic === 'returnpath.panel.state').map(p => p.message);
 	mock.panelSend({ cmd: 'hello' });
 	assert.equal(states().at(-1).overlay, 'none');
-	assert.equal(states().at(-1).roles.length, 8, 'before any run every role is listed');
+	assert.equal(states().at(-1).roles.length, 9, 'before any run every role is listed');
 
 	mock.panelSend({ cmd: 'dc' });
 	for (let i = 0; i < 400 && !(states().at(-1)?.result && !states().at(-1).busy); i++)

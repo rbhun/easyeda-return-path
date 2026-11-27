@@ -19,7 +19,7 @@ export const PALETTE = {
 } satisfies Record<string, Rgba>;
 export type ColourName = keyof typeof PALETTE;
 
-export const ROLES = ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'band'] as const;
+export const ROLES = ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'half', 'band'] as const;
 export type Role = typeof ROLES[number];
 
 export interface RoleStyle { colour: ColourName; width: number; visible: boolean }
@@ -32,6 +32,7 @@ export const DEFAULT_STYLE: Record<Role, RoleStyle> = {
 	returnInner: { colour: 'blue', width: 5, visible: true },
 	hop: { colour: 'white', width: 2, visible: true },
 	gap: { colour: 'red', width: 3, visible: true },
+	half: { colour: 'white', width: 1, visible: true },
 	band: { colour: 'white', width: 1, visible: false },
 };
 
@@ -47,6 +48,7 @@ export const ROLE_USE: Record<Role, ('hf' | 'dc')[]> = {
 	returnInner: ['hf'],
 	hop: ['hf'],
 	gap: ['hf', 'dc'],
+	half: ['hf'],
 	band: ['hf'],
 };
 
@@ -58,6 +60,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 	returnInner: 'Return current, inner layers',
 	hop: 'Hops (via, decap, cap, pin)',
 	gap: 'Gaps and bottleneck',
+	half: '50% of the return current (±h around the trace)',
 	band: '±3h band edges',
 };
 

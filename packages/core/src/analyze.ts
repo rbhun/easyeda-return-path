@@ -121,6 +121,8 @@ export interface ChainResult {
   refNets: string[];
   band: Paths;
   bandUncovered: Paths;
+  /** Outline of the strip ±h around the trace: half the return current in the plane under it. */
+  half: Paths;
   coverage: { trackId: string; a: Pt; b: Pt; ratio: number }[];
   /** Segments reported for too little reference copper (band-coverage findings). */
   thin: { a: Pt; b: Pt; ratio: number }[];
@@ -731,7 +733,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
       message: `${layerName(chain.layer)} trace has no reference copper: no pour on an adjacent layer and no coplanar pour beside it`,
       at: line.at(line.length / 2),
     });
-    return { chain, ref: null, refNets: [], band: [], bandUncovered: [], coverage: [], thin: [], gaps: [], quietGaps: [] };
+    return { chain, ref: null, refNets: [], band: [], bandUncovered: [], half: [], coverage: [], thin: [], gaps: [], quietGaps: [] };
   }
   if (ref.coplanar) stats.coplanarChains++;
   const lc = ctx.refCopper.get(ref.layer)!;
@@ -749,6 +751,12 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
 
   const strip = difference(strokePath(chain.pts, 2 * halfBand, true), keepout);
   const band = board.outline.length ? intersect(strip, board.outline) : strip;
+  // Within ±d of a trace at height h the plane carries (2/π)·atan(d/h) of the return current,
+  // which is exactly half at d = h. Coplanar current sits in the pour beside the trace; the band
+  // still uses the dielectric to the plane under it when there is one.
+  const h50 = (ref.coplanar ? referenceFor(board, chain.layer, ctx.refCopper)?.h : ref.h) ?? ref.h;
+  const halfStrip = strokePath(chain.pts, 2 * h50);
+  const half = board.outline.length ? intersect(halfStrip, board.outline) : halfStrip;
   const bandCopper = intersect(band, copper);
   const bandUncovered = difference(difference(band, bandCopper), antipads);
 
@@ -940,7 +948,7 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
   flush();
 
   const refNets = [...new Set(runs.map((r) => r.net).filter((x): x is string => !!x))];
-  return { chain, ref, refNets, band, bandUncovered, coverage, thin, gaps, quietGaps: minorGaps };
+  return { chain, ref, refNets, band, bandUncovered, half, coverage, thin, gaps, quietGaps: minorGaps };
 }
 
 /**
