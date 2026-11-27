@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.84] - 2026-11-27
+
+From Balazs: Inner1 is a PLANE layer, EasyEDA's negative plane, not a signal layer with a copper pour. The check saw nothing on L2.
+
+- **A plane layer is one sheet.** There is no POUR object for it, and the editor API has no plane-zone primitive, so the zone net and its outline are read from the board document. Copper is that zone (or the rebuilt fill, when the file has one) with keepouts, split lines and the clearance around other nets cut out. A line drawn on the plane removes copper. A plane with no zone net is left out, with a warning. The same sheet is used by the return-path overlay and by `mcp.rcp.checkNet`.
+
 ## [0.1.83] - 2026-11-27
 
 From Balazs: let an AI agent configure and start HF/DC analyses over the `mcp.rcp.*` bridge inside the existing Return Path extension, without modifying PCB copper or design primitives.

@@ -35,6 +35,8 @@ interface MockFixtureOptions {
   pouredUnitMil?: number;
   extraLines?: Array<{ id: string; net: string; layer: number; a: { x: number; y: number }; b: { x: number; y: number } }>;
   stackupMode?: 'getStackup' | 'physicalConfig' | 'fallback';
+  /** Inner1 is a PLANE layer between Top and Bottom, with this PCB document as its zone. */
+  planeDocument?: string;
 }
 
 function installMockEda(opts: MockFixtureOptions = {}) {
@@ -148,11 +150,19 @@ function installMockEda(opts: MockFixtureOptions = {}) {
             getStackup: async () => ({
               unit: 'mm',
               totalThickness: 1.6,
-              layers: [
-                { layerId: 1, layerName: 'Top Layer', kind: 'copper', thickness: 0.035, zIndex: 0 },
-                { layerId: 0, layerName: 'FR4 Core', kind: 'dielectric', thickness: 1.5, zIndex: 1 },
-                { layerId: 2, layerName: 'Bottom Layer', kind: 'copper', thickness: 0.035, zIndex: 2 },
-              ],
+              layers: opts.planeDocument
+                ? [
+                    { layerId: 1, layerName: 'Top Layer', kind: 'copper', thickness: 0.035, zIndex: 0 },
+                    { layerId: 0, layerName: 'Prepreg', kind: 'dielectric', thickness: 0.1, zIndex: 1 },
+                    { layerId: 15, layerName: 'Inner1', kind: 'copper', thickness: 0.035, zIndex: 2 },
+                    { layerId: 0, layerName: 'Core', kind: 'dielectric', thickness: 1.4, zIndex: 3 },
+                    { layerId: 2, layerName: 'Bottom Layer', kind: 'copper', thickness: 0.035, zIndex: 4 },
+                  ]
+                : [
+                    { layerId: 1, layerName: 'Top Layer', kind: 'copper', thickness: 0.035, zIndex: 0 },
+                    { layerId: 0, layerName: 'FR4 Core', kind: 'dielectric', thickness: 1.5, zIndex: 1 },
+                    { layerId: 2, layerName: 'Bottom Layer', kind: 'copper', thickness: 0.035, zIndex: 2 },
+                  ],
             }),
           }
         : {}),
@@ -172,7 +182,7 @@ function installMockEda(opts: MockFixtureOptions = {}) {
       getAllLayers: async () => [
         { id: 1, name: 'Top Layer', type: 'SIGNAL', layerStatus: 1 },
         { id: 2, name: 'Bottom Layer', type: 'SIGNAL', layerStatus: 1 },
-        { id: 15, name: 'Inner1', type: 'SIGNAL', layerStatus: 0 },
+        { id: 15, name: 'Inner1', type: opts.planeDocument ? 'PLANE' : 'SIGNAL', layerStatus: opts.planeDocument ? 1 : 0 },
       ],
       getTheNumberOfCopperLayers: async () => 2,
     },
@@ -201,6 +211,13 @@ function installMockEda(opts: MockFixtureOptions = {}) {
       getAllPrimitiveId: async () => [...pouredMap.keys()],
       get: async (id: string) => pouredMap.get(id),
     },
+    ...(opts.planeDocument !== undefined
+      ? {
+          sys_FileManager: {
+            getDocumentSource: async () => opts.planeDocument,
+          },
+        }
+      : {}),
   };
 
   (globalThis as unknown as { eda: unknown }).eda = mockEda;
@@ -313,6 +330,35 @@ test('mcp.rcp.checkNet detects split crossing even with EasyEDA 10-mil poured fi
   const bad = await env.call<CheckNetReplyData>('mcp.rcp.checkNet', { net: 'NONEXISTENT' });
   assert.equal(bad.ok, false);
   if (!bad.ok) assert.match(bad.error, /not found/);
+});
+
+test('mcp.rcp.checkNet treats an Inner1 PLANE layer as one sheet with keepouts cut out', async () => {
+  const mil = (mm: number) => mm / MIL;
+  const rec = (head: object, body: object) => `${JSON.stringify(head)}||${JSON.stringify(body)}|`;
+  const board = ['R', mil(0), mil(40), mil(50), mil(40), 0, 0];
+  const slot = ['R', mil(14), mil(24), mil(8), mil(8), 0, 0];
+  const doc = [
+    rec({ type: 'LAYER', id: '["LAYER",15]' }, { layerId: 15, layerType: 'PLANE', layerName: 'Inner1', use: true }),
+    rec({ type: 'POLY', id: 'outline' }, { layerId: 11, width: 6, path: board }),
+    rec({ type: 'FILL', id: 'zone' }, { netName: 'GND', layerId: 15, fillStyle: 2, path: board }),
+    rec({ type: 'REGION', id: 'slot' }, { layerId: 15, prohibitType: ['PLANE'], path: slot }),
+  ].join('\n');
+  const env = installMockEda({ planeDocument: doc });
+  const reply = await env.call<CheckNetReplyData>('mcp.rcp.checkNet', {
+    net: 'USB_DP',
+    rules: { planeEdgeClearanceFactor: 0 },
+  });
+  assert.equal(reply.ok, true);
+  if (!reply.ok) return;
+  const onInner = reply.data.findings.filter((f) => f.referenceLayerId === 15);
+  const gap = onInner.find((f) => f.kind === 'plane_void' || f.kind === 'plane_split_crossing');
+  assert.ok(gap, reply.data.findings.map((f) => `${f.kind} L${f.referenceLayerId} ${f.lengthMm} ${f.detail}`).join('\n'));
+  assert.ok((gap.lengthMm ?? 0) > 4 && (gap.lengthMm ?? 0) < 15, String(gap.lengthMm));
+  assert.ok(gap.detail.includes('Inner1'));
+  assert.equal(
+    reply.data.findings.filter((f) => f.kind === 'no_reference_plane' && f.referenceLayerId === 15).length,
+    0,
+  );
 });
 
 test('mcp.rcp.showFindings and mcp.rcp.clearMarkers draw temporary markers with canvas origin offset', async () => {

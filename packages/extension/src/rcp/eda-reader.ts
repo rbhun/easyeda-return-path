@@ -1,8 +1,11 @@
+import { planeFromDocument } from '@returnpath/cli/parse';
 import {
   arcPoints,
   area,
   assumedDielectricsMm,
   bbox,
+  buildReferenceCopper,
+  circle,
   decodeComplex,
   decodeRings,
   dist,
@@ -18,8 +21,11 @@ import {
   strokePath,
   union,
   MULTI_LAYER,
+  type Board,
   type CopperLayer,
   type Dielectric,
+  type Keepout,
+  type Pad,
   type Paths,
   type Pt,
   type Stackup,
@@ -32,7 +38,12 @@ import type { NetSummary, StackupEntry } from './types.js';
 export const MIL = 0.0254;
 const PCB_DOCUMENT_TYPE = 3;
 const LAYER_MULTI = 12;
+const LAYER_TOP = 1;
+const LAYER_BOTTOM = 2;
 const INNER_LAYER_START = 15;
+/** REGION rules that take copper off a plane: deprecated pour+plane, no pour, no inner plane. */
+const PLANE_PROHIBIT = new Set([4, 7, 8]);
+const NO_PLANES = 8;
 const MIN_COPPER_WIDTH_MM = 0.1;
 const CACHE_TTL_MS = 5_000;
 const POURED_FETCH_BUDGET_MS = 8_000;
@@ -508,6 +519,169 @@ async function readCopperByLayer(copperIds: Set<number>, warnings: string[]): Pr
   return byLayer;
 }
 
+/** Copper layers EasyEDA set up as a negative plane. Unused layers (status 0) are left out. */
+async function usedPlaneLayers(copperIds: Set<number>): Promise<Set<number>> {
+  const ids = new Set<number>();
+  if (typeof eda.pcb_Layer?.getAllLayers !== 'function') return ids;
+  try {
+    const all = await eda.pcb_Layer.getAllLayers();
+    for (const l of all) {
+      const t = typeof l.type === 'string' ? l.type.toUpperCase() : '';
+      if (t === 'PLANE' && (l.layerStatus as number | undefined) !== 0 && copperIds.has(l.id)) ids.add(l.id);
+    }
+  } catch {
+    // The layer list is optional; a board with no plane layers simply has none.
+  }
+  return ids;
+}
+
+async function documentText(): Promise<string | undefined> {
+  const api = eda.sys_FileManager;
+  if (typeof api?.getDocumentSource !== 'function') return undefined;
+  try {
+    return (await api.getDocumentSource()) ?? '';
+  } catch {
+    return undefined;
+  }
+}
+
+/** Keepouts and negative-film lines that remove copper from a plane layer. */
+async function planeCuts(
+  planeIds: Set<number>,
+  tracks: Track[],
+): Promise<Keepout[]> {
+  const cuts: Keepout[] = [];
+  for (const t of tracks) {
+    if (!planeIds.has(t.layer)) continue;
+    const outline = strokePath([t.a, t.b], Math.max(t.width, 0.05));
+    if (outline.length) cuts.push({ id: `${t.id}-cut`, layer: t.layer, outline });
+  }
+  if (typeof eda.pcb_PrimitivePolyline?.getAll === 'function') {
+    for (const layer of planeIds) {
+      try {
+        const all = (await eda.pcb_PrimitivePolyline.getAll(undefined, layer as never)) ?? [];
+        for (const pl of all) {
+          if ((pl.getState_Layer() as number) !== layer) continue;
+          const width = Math.max(Number((pl as { getState_LineWidth?: () => number }).getState_LineWidth?.() ?? 0) * MIL, 0.05);
+          let n = 0;
+          for (const ring of decodeRings(pl.getState_Polygon().getSource(), conv, MIL)) {
+            if (ring.length < 2) continue;
+            const closed = ring.length > 2 ? [...ring, ring[0]] : ring;
+            const outline = strokePath(closed, width);
+            if (outline.length) cuts.push({ id: `${pl.getState_PrimitiveId()}#${n++}-cut`, layer, outline });
+          }
+        }
+      } catch {
+        // A missing polyline list leaves the zone intact; region keepouts still apply.
+      }
+    }
+  }
+  if (typeof eda.pcb_PrimitiveRegion?.getAll === 'function') {
+    try {
+      for (const r of (await eda.pcb_PrimitiveRegion.getAll()) ?? []) {
+        const rules = (r.getState_RuleType() ?? []) as number[];
+        if (!rules.some((rule) => PLANE_PROHIBIT.has(rule))) continue;
+        const layer = r.getState_Layer() as number;
+        const outline = decodeComplex(r.getState_ComplexPolygon().getSource(), conv, MIL);
+        if (!outline.length) continue;
+        const id = r.getState_PrimitiveId();
+        const targets =
+          layer === LAYER_MULTI
+            ? rules.includes(NO_PLANES) && !rules.includes(7) && !rules.includes(4)
+              ? [...planeIds]
+              : [MULTI_LAYER]
+            : [layer];
+        for (const l of targets) {
+          if (l !== MULTI_LAYER && !planeIds.has(l)) continue;
+          if (l === LAYER_TOP || l === LAYER_BOTTOM) continue;
+          cuts.push({ id: targets.length > 1 ? `${id}@${l}` : id, layer: l, outline });
+        }
+      }
+    } catch {
+      // Regions are also read from the document below.
+    }
+  }
+  return cuts;
+}
+
+/**
+ * A PLANE layer is one sheet of copper, not a POUR. Where the editor API has no zone and no
+ * rebuilt copper, the sheet is the zone in the board document minus keepouts, split lines and
+ * the clearance around other nets.
+ */
+async function addPlaneLayerCopper(
+  byLayer: Map<number, Map<string, Paths>>,
+  copperIds: Set<number>,
+  stackup: Stackup,
+  tracks: Track[],
+  vias: Via[],
+  pads: CheckPad[],
+  warnings: string[],
+): Promise<Track[]> {
+  const planeIds = await usedPlaneLayers(copperIds);
+  if (!planeIds.size) return tracks.slice();
+  const cuts = await planeCuts(planeIds, tracks);
+  const signalTracks = tracks.filter((t) => !planeIds.has(t.layer));
+  const missing = [...planeIds].filter((id) => {
+    const have = byLayer.get(id);
+    return !have || ![...have.values()].some((paths) => paths.length);
+  });
+  if (!missing.length) return signalTracks;
+
+  const text = await documentText();
+  if (text === undefined) {
+    for (const id of missing) warnings.push(`Layer ${id} is a plane layer with no zone net, so its copper is not read.`);
+    return signalTracks;
+  }
+  const doc = planeFromDocument(text, missing);
+  const padsForSheet: Pad[] = pads.map((p) => ({
+    id: p.id,
+    net: p.net,
+    layer: p.layer,
+    number: '',
+    at: p.at,
+    shape: [circle(p.at, Math.max(p.holeDiameter / 2, 0.25))],
+    holeDiameter: p.holeDiameter,
+  }));
+  for (const layer of missing) {
+    const pours = doc.pours.filter((p) => p.layer === layer);
+    if (!pours.length) {
+      warnings.push(`Layer ${layer} is a plane layer with no zone net, so its copper is not read.`);
+      continue;
+    }
+    const outline = doc.outline.length ? doc.outline : pours.flatMap((p) => p.outline);
+    for (const p of pours) if (!p.outline.length && doc.outline.length) p.outline = doc.outline;
+    const board: Board = {
+      outline,
+      stackup,
+      nets: [],
+      tracks: signalTracks,
+      vias,
+      pads: padsForSheet,
+      components: [],
+      pours,
+      keepouts: [
+        ...cuts.filter((k) => k.layer === layer || k.layer === MULTI_LAYER),
+        ...doc.cuts.filter((k) => k.layer === layer),
+        ...doc.keepouts.filter((k) => k.layer === layer || k.layer === MULTI_LAYER),
+      ],
+      warnings: [],
+    };
+    const copper = buildReferenceCopper(board, { clearance: 0.25 });
+    const byNet = copper.get(layer)?.byNet;
+    if (!byNet?.size) continue;
+    let map = byLayer.get(layer);
+    if (!map) {
+      map = new Map<string, Paths>();
+      byLayer.set(layer, map);
+    }
+    for (const [net, paths] of byNet) {
+      if (paths.length) map.set(net, paths);
+    }
+  }
+  return signalTracks;
+}
+
 function canonicalizeNetNames(names: string[]): Map<string, string> {
   const counts = new Map<string, Map<string, number>>();
   for (const n of names) {
@@ -637,6 +811,20 @@ export async function readNetSummaries(): Promise<{ pcbUuid: string; nets: NetSu
     e.layers.add(layer);
   }
 
+  const planeIds = await usedPlaneLayers(copperIds);
+  if (planeIds.size) {
+    const text = await documentText();
+    if (text !== undefined) {
+      for (const p of planeFromDocument(text, [...planeIds]).pours) {
+        if (!planeIds.has(p.layer)) continue;
+        const e = ensure(p.net);
+        if (!e) continue;
+        e.hasPour = true;
+        e.layers.add(p.layer);
+      }
+    }
+  }
+
   const nets: NetSummary[] = [...acc.values()]
     .map((e) => ({
       name: e.name,
@@ -754,6 +942,9 @@ export async function readBoardForCheck(refresh = false): Promise<CachedBoardSna
   });
 
   const copperByLayer = await readCopperByLayer(copperIds, warnings);
+  const signalTracks = await addPlaneLayerCopper(copperByLayer, copperIds, stackup, tracks, vias, pads, warnings);
+  tracks.length = 0;
+  tracks.push(...signalTracks);
   for (const map of copperByLayer.values()) {
     for (const net of map.keys()) rawNames.push(net);
   }
