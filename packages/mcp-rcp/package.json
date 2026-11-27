@@ -1,0 +1,26 @@
+{
+  "name": "@returnpath/mcp-rcp",
+  "version": "0.1.81",
+  "description": "EasyEDA Pro extension exposing agent-callable return-current-path checks over the public message bus (mcp.rcp.*).",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "prebuild": "node -e \"for (const f of ['LICENSE', 'NOTICE']) require('node:fs').copyFileSync('../../' + f, f)\"",
+    "compile": "rimraf ./dist/ && tsx ./config/esbuild.ts",
+    "build": "npm run compile && node ./scripts/package.mjs",
+    "typecheck": "tsc -p . && tsc -p test",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@returnpath/core": "0.1.81"
+  },
+  "devDependencies": {
+    "@jlceda/pro-api-types": "^0.4.30",
+    "@returnpath/cli": "0.1.81",
+    "esbuild": "^0.24.2",
+    "fflate": "^0.8.3",
+    "jszip": "^3.10.1",
+    "rimraf": "^6.0.1"
+  }
+}

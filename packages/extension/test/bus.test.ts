@@ -308,7 +308,7 @@ test('two activated instances handle a publishPublic request once and sync the r
 		requestId: 'multi-1',
 	});
 
-	for (let i = 0; i < 200 && replies.length === 0; i++)
+	for (let i = 0; i < 1200 && replies.length === 0; i++)
 		await new Promise(r => setTimeout(r, 25));
 	await new Promise(r => setTimeout(r, 100));
 

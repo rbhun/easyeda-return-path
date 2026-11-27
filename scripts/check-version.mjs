@@ -11,7 +11,12 @@ const read = (p) => JSON.parse(readFileSync(p, 'utf8'));
 const errors = [];
 const version = read('packages/extension/extension.json').version;
 
-for (const p of ['packages/core/package.json', 'packages/cli/package.json', 'packages/extension/package.json']) {
+for (const p of ['packages/mcp-rcp/extension.json']) {
+  const ext = read(p);
+  if (ext.version !== version) errors.push(`${p}: version ${ext.version}, extension.json has ${version}`);
+}
+
+for (const p of ['packages/core/package.json', 'packages/cli/package.json', 'packages/extension/package.json', 'packages/mcp-rcp/package.json']) {
   const pkg = read(p);
   if (pkg.version !== version) errors.push(`${p}: version ${pkg.version}, extension.json has ${version}`);
   for (const [dep, v] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies }))

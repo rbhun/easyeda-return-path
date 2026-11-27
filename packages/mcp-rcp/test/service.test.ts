@@ -1,0 +1,387 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { rect, union, type Path, type Paths } from '@returnpath/core';
+import { activate, showStatus } from '../src/index.js';
+import { MAX_REPLY_BYTES, RCP_TOPICS, resetRcpServiceState } from '../src/service.js';
+import type {
+  CheckNetReplyData,
+  ClearMarkersReplyData,
+  InfoReplyData,
+  ListNetsReplyData,
+  ServiceEnvelope,
+  ShowFindingsReplyData,
+} from '../src/types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const MIL = 0.0254;
+const toMil = (mm: number) => mm / MIL;
+
+function ringToSource(ring: Path, unitScale = 1): unknown[] {
+  const [first, ...rest] = ring;
+  return [
+    toMil(first.x) / unitScale,
+    toMil(first.y) / unitScale,
+    'L',
+    ...rest.flatMap((p) => [toMil(p.x) / unitScale, toMil(p.y) / unitScale]),
+  ];
+}
+
+interface MockFixtureOptions {
+  documentType?: number;
+  pouredUnitMil?: number;
+  extraLines?: Array<{ id: string; net: string; layer: number; a: { x: number; y: number }; b: { x: number; y: number } }>;
+  stackupMode?: 'getStackup' | 'physicalConfig' | 'fallback';
+}
+
+function installMockEda(opts: MockFixtureOptions = {}) {
+  const rpcs = new Map<string, (msg: unknown) => Promise<unknown> | unknown>();
+  const dialogs: Array<{ content: string; title: string }> = [];
+  const generatedMarkers: Array<{ markers: IDMT_IndicatorMarkerShape[]; color: unknown; lineWidth?: number; zoom?: boolean }> = [];
+  let removeCount = 0;
+
+  const pouredUnit = opts.pouredUnitMil ?? 1;
+  const leftGnd: Paths = union([rect(10, 20, 18, 30)]); // x in [1, 19]
+  const rightGnd: Paths = union([rect(30, 20, 18, 30)]); // x in [21, 39]
+  const pourOutline = union([rect(20, 20, 38, 30)]);
+
+  const baseLines = [
+    { id: 'L1', net: 'USB_DP', layer: 1, a: { x: 5, y: 20 }, b: { x: 20, y: 20 } },
+    { id: 'L2', net: 'USB_DP', layer: 1, a: { x: 20, y: 20 }, b: { x: 35, y: 20 } },
+    { id: 'L3', net: 'USB_DM', layer: 1, a: { x: 5, y: 24 }, b: { x: 15, y: 24 } },
+    { id: 'L4', net: 'USB_DM', layer: 2, a: { x: 15, y: 24 }, b: { x: 15, y: 12 } },
+    { id: 'L5', net: '3V3', layer: 1, a: { x: 2, y: 2 }, b: { x: 12, y: 2 } },
+    ...(opts.extraLines ?? []),
+  ];
+
+  const lines = baseLines.map((l) => ({
+    getState_PrimitiveId: () => l.id,
+    getState_Net: () => l.net,
+    getState_Layer: () => l.layer,
+    getState_StartX: () => toMil(l.a.x),
+    getState_StartY: () => toMil(l.a.y),
+    getState_EndX: () => toMil(l.b.x),
+    getState_EndY: () => toMil(l.b.y),
+    getState_LineWidth: () => toMil(0.15),
+  }));
+
+  const vias = [
+    {
+      getState_PrimitiveId: () => 'V_DM',
+      getState_Net: () => 'USB_DM',
+      getState_X: () => toMil(15),
+      getState_Y: () => toMil(24),
+      getState_HoleDiameter: () => toMil(0.3),
+      getState_Diameter: () => toMil(0.6),
+      getState_ViaType: () => 0,
+    },
+  ];
+
+  const pours = [
+    {
+      getState_PrimitiveId: () => 'POUR_GND_BOT',
+      getState_PourName: () => 'GND_BOT',
+      getState_Net: () => 'GND',
+      getState_Layer: () => 2,
+      getState_PourPriority: () => 0,
+      getState_ComplexPolygon: () => ({ getSource: () => [ringToSource(pourOutline[0], 1)] }),
+    },
+  ];
+
+  const pouredMap = new Map<string, unknown>([
+    [
+      'POURED_1',
+      {
+        getState_PrimitiveId: () => 'POURED_1',
+        getState_PourPrimitiveId: () => 'POUR_GND_BOT',
+        getState_Layer: () => 2,
+        getState_PourFills: () => [
+          { fill: true, path: { getSource: () => [ringToSource(leftGnd[0], pouredUnit)] } },
+          { fill: true, path: { getSource: () => [ringToSource(rightGnd[0], pouredUnit)] } },
+        ],
+      },
+    ],
+  ]);
+
+  const stackupMode = opts.stackupMode ?? 'getStackup';
+
+  const mockEda = {
+    sys_MessageBus: {
+      rpcServicePublic: (topic: string, fn: (msg: unknown) => Promise<unknown> | unknown) => {
+        rpcs.set(topic, fn);
+      },
+      rpcCallPublic: async (topic: string, msg: unknown) => {
+        const fn = rpcs.get(topic);
+        if (!fn) throw undefined;
+        return await fn(msg);
+      },
+    },
+    sys_Dialog: {
+      showInformationMessage: (content: string, title: string) => {
+        dialogs.push({ content, title });
+      },
+    },
+    dmt_SelectControl: {
+      getCurrentDocumentInfo: async () =>
+        opts.documentType === -1
+          ? null
+          : { documentType: opts.documentType ?? 3, uuid: 'pcb-test-uuid', tabId: 'tab-1' },
+    },
+    dmt_EditorControl: {
+      generateIndicatorMarkers: async (
+        markers: IDMT_IndicatorMarkerShape[],
+        color: unknown,
+        lineWidth?: number,
+        zoom?: boolean,
+      ) => {
+        generatedMarkers.push({ markers, color, lineWidth, zoom });
+        return true;
+      },
+      removeIndicatorMarkers: async () => {
+        removeCount += 1;
+        return true;
+      },
+    },
+    pcb_Document: {
+      convertDataOriginToCanvasOrigin: async () => ({ x: 100, y: -50 }),
+    },
+    pcb_Layer: {
+      ...(stackupMode === 'getStackup'
+        ? {
+            getStackup: async () => ({
+              unit: 'mm',
+              totalThickness: 1.6,
+              layers: [
+                { layerId: 1, layerName: 'Top Layer', kind: 'copper', thickness: 0.035, zIndex: 0 },
+                { layerId: 0, layerName: 'FR4 Core', kind: 'dielectric', thickness: 1.5, zIndex: 1 },
+                { layerId: 2, layerName: 'Bottom Layer', kind: 'copper', thickness: 0.035, zIndex: 2 },
+              ],
+            }),
+          }
+        : {}),
+      ...(stackupMode === 'physicalConfig'
+        ? {
+            getCurrentPhysicalStackingConfiguration: async () => ({
+              name: '2L-1.6mm',
+              layerCount: 3,
+              list: [
+                { layerId: 1, layerName: 'Top Layer', kind: 'copper', thickness: 0.035, unit: 'mm' },
+                { layerId: 0, layerName: 'Core', kind: 'dielectric', thickness: 1.5, unit: 'mm' },
+                { layerId: 2, layerName: 'Bottom Layer', kind: 'copper', thickness: 0.035, unit: 'mm' },
+              ],
+            }),
+          }
+        : {}),
+      getAllLayers: async () => [
+        { id: 1, name: 'Top Layer', type: 'SIGNAL', layerStatus: 1 },
+        { id: 2, name: 'Bottom Layer', type: 'SIGNAL', layerStatus: 1 },
+        { id: 15, name: 'Inner1', type: 'SIGNAL', layerStatus: 0 },
+      ],
+      getTheNumberOfCopperLayers: async () => 2,
+    },
+    pcb_Net: {
+      getAllNetsName: async () => ['GND', '3V3', 'USB_DP', 'USB_DM'],
+    },
+    pcb_PrimitiveLine: {
+      getAll: async () => lines,
+    },
+    pcb_PrimitiveArc: {
+      getAll: async () => [],
+    },
+    pcb_PrimitiveVia: {
+      getAll: async () => vias,
+    },
+    pcb_PrimitivePad: {
+      getAll: async () => [],
+    },
+    pcb_PrimitiveFill: {
+      getAll: async () => [],
+    },
+    pcb_PrimitivePour: {
+      getAll: async () => pours,
+    },
+    pcb_PrimitivePoured: {
+      getAllPrimitiveId: async () => [...pouredMap.keys()],
+      get: async (id: string) => pouredMap.get(id),
+    },
+  };
+
+  (globalThis as unknown as { eda: unknown }).eda = mockEda;
+  resetRcpServiceState();
+  activate();
+
+  return {
+    call: <T>(topic: string, msg?: unknown) =>
+      mockEda.sys_MessageBus.rpcCallPublic(topic, msg) as Promise<ServiceEnvelope<T>>,
+    rpcs,
+    dialogs,
+    generatedMarkers,
+    getRemoveCount: () => removeCount,
+  };
+}
+
+test('extension.json has valid unique UUID, onStartupFinished activation, Apache-2.0, and Status menus', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extension.json'), 'utf8'));
+  assert.match(manifest.uuid, /^[a-f0-9]{32}$/);
+  assert.notEqual(manifest.uuid, 'e718233f3c1e439386a1bb93c284c392', 'must not reuse mcp-demo-service uuid');
+  assert.notEqual(manifest.uuid, 'cfe3a38bdd3044659ee9f3eadd5ebbc8', 'must not reuse easyeda-return-path uuid');
+  assert.equal(manifest.license, 'Apache-2.0');
+  assert.equal(manifest.activationEvents?.onStartupFinished, true);
+  assert.equal(manifest.headerMenus?.home?.[0]?.menuItems?.[0]?.registerFn, 'showStatus');
+  assert.equal(manifest.headerMenus?.pcb?.[0]?.menuItems?.[0]?.registerFn, 'showStatus');
+});
+
+test('registers all 5 mcp.rcp.* topics matching bridge topic regex and exposes globalThis.showStatus', () => {
+  const env = installMockEda();
+  const topicPattern = /^mcp\.[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
+  for (const topic of RCP_TOPICS) {
+    assert.ok(topicPattern.test(topic), `topic ${topic} must satisfy bridge regex`);
+    assert.ok(env.rpcs.has(topic), `topic ${topic} should be registered on public bus`);
+  }
+  assert.equal(typeof (globalThis as unknown as { showStatus?: unknown }).showStatus, 'function');
+
+  showStatus();
+  assert.equal(env.dialogs.length, 1);
+  assert.match(env.dialogs[0].content, /mcp\.rcp\.info/);
+  assert.match(env.dialogs[0].content, /mcp\.rcp\.checkNet/);
+  assert.match(env.dialogs[0].content, /mcp\.rcp\.clearMarkers/);
+});
+
+test('returns { ok: false, error } when a PCB document is not focused', async () => {
+  const env = installMockEda({ documentType: 1 });
+  const reply = await env.call<InfoReplyData>('mcp.rcp.info', {});
+  assert.equal(reply.ok, false);
+  if (!reply.ok) assert.match(reply.error, /Focus a PCB document first/);
+});
+
+test('mcp.rcp.info returns stackup, copperLayers, unit, and defaultRules across stackup API variants', async () => {
+  for (const stackupMode of ['getStackup', 'physicalConfig', 'fallback'] as const) {
+    const env = installMockEda({ stackupMode });
+    const reply = await env.call<InfoReplyData>('mcp.rcp.info', null);
+    assert.equal(reply.ok, true);
+    if (!reply.ok) continue;
+    assert.equal(reply.data.pcbUuid, 'pcb-test-uuid');
+    assert.equal(reply.data.copperLayers, 2);
+    assert.equal(reply.data.unit, 'mm');
+    assert.equal(reply.data.stackup.filter((s) => s.type === 'copper').length, 2);
+    assert.equal(reply.data.defaultRules.returnViaRadiusMm, 2.5);
+    assert.equal(reply.data.defaultRules.planeEdgeClearanceFactor, 3);
+    assert.deepEqual(reply.data.topics, [...RCP_TOPICS]);
+  }
+});
+
+test('mcp.rcp.listNets pages results and flags power/ground nets', async () => {
+  const env = installMockEda();
+
+  // Default includePower=false filters out GND and 3V3.
+  const sigPage = await env.call<ListNetsReplyData>('mcp.rcp.listNets', { offset: 0, limit: 1 });
+  assert.equal(sigPage.ok, true);
+  if (sigPage.ok) {
+    assert.equal(sigPage.data.unit, 'mm');
+    assert.equal(sigPage.data.total, 2);
+    assert.equal(sigPage.data.totalAll, 4);
+    assert.equal(sigPage.data.hasMore, true);
+    assert.equal(sigPage.data.nets.length, 1);
+    assert.equal(sigPage.data.nets[0].isPower, false);
+    assert.equal(sigPage.data.nets[0].isGround, false);
+  }
+
+  // includePower=true includes GND and 3V3 with flags set.
+  const allPage = await env.call<ListNetsReplyData>('mcp.rcp.listNets', { includePower: true, limit: 20 });
+  assert.equal(allPage.ok, true);
+  if (allPage.ok) {
+    assert.equal(allPage.data.total, 4);
+    assert.equal(allPage.data.hasMore, false);
+    const gnd = allPage.data.nets.find((n) => n.name === 'GND');
+    const pwr = allPage.data.nets.find((n) => n.name === '3V3');
+    assert.equal(gnd?.isGround, true);
+    assert.equal(gnd?.hasPour, true);
+    assert.equal(pwr?.isPower, true);
+  }
+});
+
+test('mcp.rcp.checkNet detects split crossing even with EasyEDA 10-mil poured fill units', async () => {
+  const env = installMockEda({ pouredUnitMil: 10 });
+  const reply = await env.call<CheckNetReplyData>('mcp.rcp.checkNet', {
+    net: 'usb_dp',
+    rules: { planeEdgeClearanceFactor: 0 },
+  });
+  assert.equal(reply.ok, true);
+  if (reply.ok) {
+    assert.equal(reply.data.net, 'USB_DP');
+    assert.equal(reply.data.unit, 'mm');
+    assert.equal(reply.data.segmentsChecked, 2);
+    const splits = reply.data.findings.filter((f) => f.kind === 'plane_split_crossing');
+    assert.equal(splits.length, 1);
+    assert.ok(Math.abs(splits[0].at.x - 20) < 0.3);
+    assert.deepEqual(splits[0].primitiveIds?.sort(), ['L1', 'L2']);
+    assert.ok(Buffer.byteLength(JSON.stringify(reply), 'utf8') <= MAX_REPLY_BYTES);
+  }
+
+  // Missing net returns { ok: false, error }.
+  const bad = await env.call<CheckNetReplyData>('mcp.rcp.checkNet', { net: 'NONEXISTENT' });
+  assert.equal(bad.ok, false);
+  if (!bad.ok) assert.match(bad.error, /not found/);
+});
+
+test('mcp.rcp.showFindings and mcp.rcp.clearMarkers draw temporary markers with canvas origin offset', async () => {
+  const env = installMockEda();
+  const showReply = await env.call<ShowFindingsReplyData>('mcp.rcp.showFindings', {
+    findings: [
+      { x: 10, y: 20, w: 2, h: 1 },
+      { at: { x: 25, y: 20 }, severity: 'warning' },
+    ],
+    color: 'red',
+  });
+  assert.equal(showReply.ok, true);
+  if (showReply.ok) {
+    assert.equal(showReply.data.shown, 2);
+    assert.equal(showReply.data.unit, 'mm');
+  }
+  // Idempotent: cleared existing markers before drawing.
+  assert.equal(env.getRemoveCount(), 1);
+  assert.equal(env.generatedMarkers.length, 1);
+  assert.equal(env.generatedMarkers[0].markers.length, 2);
+  assert.equal(env.generatedMarkers[0].markers[0].type, 'rectangle');
+  assert.equal(env.generatedMarkers[0].markers[1].type, 'circle');
+  // Check canvasOrigin offset (+100, -50 mil) was applied to x=25mm, y=20mm.
+  const circleMarker = env.generatedMarkers[0].markers[1];
+  assert.ok(Math.abs((circleMarker.x ?? 0) - (toMil(25) + 100)) < 1e-6);
+  assert.ok(Math.abs((circleMarker.y ?? 0) - (toMil(20) - 50)) < 1e-6);
+
+  const clearReply = await env.call<ClearMarkersReplyData>('mcp.rcp.clearMarkers', {});
+  assert.equal(clearReply.ok, true);
+  if (clearReply.ok) {
+    assert.equal(clearReply.data.cleared, true);
+    assert.equal(clearReply.data.unit, 'mm');
+  }
+  assert.equal(env.getRemoveCount(), 2);
+});
+
+test('mcp.rcp.checkNet truncates oversized findings cleanly below the 256 KiB bridge limit', async () => {
+  const extraLines = [];
+  for (let i = 0; i < 1200; i++) {
+    const x = 60 + (i % 60) * 5;
+    const y = 60 + Math.floor(i / 60) * 5;
+    extraLines.push({
+      id: `HUGE_${i}_${'x'.repeat(30)}`,
+      net: 'HUGE_NET',
+      layer: 1,
+      a: { x, y },
+      b: { x: x + 2, y },
+    });
+  }
+  const env = installMockEda({ extraLines });
+  const reply = await env.call<CheckNetReplyData>('mcp.rcp.checkNet', { net: 'HUGE_NET' });
+  assert.equal(reply.ok, true);
+  if (reply.ok) {
+    const bytes = Buffer.byteLength(JSON.stringify(reply), 'utf8');
+    assert.ok(bytes <= MAX_REPLY_BYTES, `expected reply <= ${MAX_REPLY_BYTES} bytes, got ${bytes}`);
+    assert.equal(reply.data.truncated, true);
+    assert.ok(reply.data.findings.length > 0);
+    assert.ok(reply.data.findings.length < 1200);
+  }
+});
