@@ -138,5 +138,10 @@
 	"${1} (through ${2})": "${1}（经 ${2}）",
 	"Return Path panel: ${1} failed: ${2}. Details are in the log.": "Return Path 面板：${1} 失败：${2}。详情见日志。",
 	"Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer. White lines ±h from the trace bound half the return current in the plane under it. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).": "电流画在其实际流经的位置，颜色表示其流经的铜层。正向（信号走线）：${1}，并在其经过的每个过孔上画一个圆。回流：${2}；在另一层铜皮中流动时画在走线上，在走线本层的铺铜中流动时画在走线旁边。走线两侧 ±h 的白线标出其下方平面中一半回流电流的范围。虚线 ${3}：在层间或进入器件的跳转（过孔、去耦电容、桥接电容、IC 引脚）。走线上的 ${4}：跨越间隙，或参考铜不足所需的一半（较小的不足只在结果中列出）。",
-	"50% of the return current (±h around the trace)": "回流电流的 50%（走线两侧 ±h）"
+	"50% of the return current (±h around the trace)": "回流电流的 50%（走线两侧 ±h）",
+	"Noted return loop (between h² and 9h²)": "需注意的回流环路（h² 到 9h²）",
+	"Flagged return loop (9h² or more)": "需处理的回流环路（9h² 及以上）",
+	"Solver error (outside ±h, not an excursion)": "求解异常（超出 ±h，且不是一次偏移）",
+	"Minor cuts, vias, closure and choke points": "小切口、回流过孔、驱动端闭合与瓶颈",
+	"Check marks: yellow hatch is a noted loop, red a flagged loop, magenta a stretch left outside ±h. White ticks and circles are minor cuts, return vias, the driver closure and choke points.": "检查标记：黄色阴影为需注意的环路，红色为需处理的环路，品红为留在 ±h 之外的一段。白色短线和圆标记小切口、回流过孔、驱动端闭合和瓶颈。"
 }

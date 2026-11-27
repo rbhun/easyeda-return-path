@@ -43,6 +43,20 @@ test('board info: header names are matched loosely, Excel semicolon files and qu
   assert.match(parseBoardInfoCsv('net,kind\nA,clock\n').warnings[0], /first column must be "row"/);
 });
 
+test('board info: edge class and drive type round-trip, and a bad cell is reported', () => {
+  const { info, warnings } = parseBoardInfoCsv('row,net,edge,drive\nnet,CS,normal,push-pull\nnet,SDA,slow,open-drain\nnet,X,quick,both\n');
+  assert.equal(netInfo(info, 'CS')!.edge, 'normal');
+  assert.equal(netInfo(info, 'CS')!.drive, 'push-pull');
+  assert.equal(netInfo(info, 'SDA')!.drive, 'open-drain');
+  assert.deepEqual(warnings, [
+    'line 4: edge "quick" is not fast, normal or slow',
+    'line 4: drive "both" is not push-pull or open-drain',
+  ]);
+  const back = parseBoardInfoCsv(formatBoardInfoCsv(info));
+  assert.equal(netInfo(back.info, 'SDA')!.edge, 'slow');
+  assert.equal(netInfo(back.info, 'SDA')!.drive, 'open-drain');
+});
+
 test('board info: currents, voltages and protocols', () => {
   assert.equal(parseAmps('150mA'), 0.15);
   assert.equal(parseAmps('0,2'), 0.2);

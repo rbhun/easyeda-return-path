@@ -19,7 +19,7 @@ export const PALETTE = {
 } satisfies Record<string, Rgba>;
 export type ColourName = keyof typeof PALETTE;
 
-export const ROLES = ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'half', 'band'] as const;
+export const ROLES = ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'half', 'band', 'checkNote', 'checkFlag', 'checkError', 'checkMark'] as const;
 export type Role = typeof ROLES[number];
 
 export interface RoleStyle { colour: ColourName; width: number; visible: boolean }
@@ -34,6 +34,10 @@ export const DEFAULT_STYLE: Record<Role, RoleStyle> = {
 	gap: { colour: 'red', width: 3, visible: true },
 	half: { colour: 'white', width: 1, visible: true },
 	band: { colour: 'white', width: 1, visible: false },
+	checkNote: { colour: 'yellow', width: 1, visible: true },
+	checkFlag: { colour: 'red', width: 2, visible: true },
+	checkError: { colour: 'magenta', width: 3, visible: true },
+	checkMark: { colour: 'white', width: 2, visible: true },
 };
 
 /** Inner layers take these in turn while returnInner keeps its default colour; one, as the others mark the top and other layers. */
@@ -50,6 +54,10 @@ export const ROLE_USE: Record<Role, ('hf' | 'dc')[]> = {
 	gap: ['hf', 'dc'],
 	half: ['hf'],
 	band: ['hf'],
+	checkNote: ['hf'],
+	checkFlag: ['hf'],
+	checkError: ['hf'],
+	checkMark: ['hf'],
 };
 
 export const ROLE_LABELS: Record<Role, string> = {
@@ -62,6 +70,10 @@ export const ROLE_LABELS: Record<Role, string> = {
 	gap: 'Gaps and bottleneck',
 	half: '50% of the return current (±h around the trace)',
 	band: '±3h band edges',
+	checkNote: 'Noted return loop (between h² and 9h²)',
+	checkFlag: 'Flagged return loop (9h² or more)',
+	checkError: 'Solver error (outside ±h, not an excursion)',
+	checkMark: 'Minor cuts, vias, closure and choke points',
 };
 
 const KEY = 'overlayStyle';

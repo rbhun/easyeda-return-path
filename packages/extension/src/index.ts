@@ -3,14 +3,14 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, guessRailGroup, hfApplicability, hfCandidates, netInfo, railInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, uniqueNets, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, railLabel, railNetsOf, resolveDcInput, resolveNet, sameNet, type Board, type BoardInfo, type DcSetupInput, type Finding, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, assignChokes, buildDcSetup, checkReturn, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrive, guessDrivers, guessEdge, guessRailGroup, hfApplicability, hfCandidates, netInfo, railInfo, reportLines, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, uniqueNets, viewOf, withNet, withProps, worseEnd, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, railLabel, railNetsOf, resolveDcInput, resolveNet, sameNet, type Board, type BoardInfo, type CheckView, type DcSetupInput, type Finding, type NetCheck, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { boardInfo } from './board-info';
 import { initPublicBus, type ParsedDcRequest, type ParsedHfRequest, type PublicDcResult, type PublicHfResult, type PublicRunExecutor } from './bus';
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet, selectedPart, type SelectedPart } from './eda-board';
-import { clearOverlay, drawAnalysis, leftoverOverlay, overlayState, toggleOverlay } from './overlay';
-import { autoOpenPanel, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, releaseOverlay, report, shareLastRun, sharedLastRun } from './panel';
+import { clearOverlay, drawAnalysis, leftoverOverlay, overlayState, replaceCheckMarkers, toggleOverlay } from './overlay';
+import { autoOpenPanel, forwardCheckRedraw, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, releaseOverlay, report, shareLastRun, sharedLastRun } from './panel';
 import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, withBack, type Ask } from './wizard';
@@ -246,7 +246,28 @@ async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: num
 	}
 	await ask.close();
 	const out = await executeHfAnalysis(board, net, { drivers, hz: opts.hz, info, draw: true, timeBudgetMs: HF_BUDGET_MS, rememberRun: true });
-	await report(title, out.lines);
+	await report(title, out.lines, { score: out.score });
+}
+
+const CHECKS_KEY = 'hfReturnChecks';
+/** The analysis text under the score, kept so a rescore does not drop it. */
+let lastDetail: string[] = [];
+
+function readChecks(): NetCheck[] {
+	try {
+		const raw = readStored(CHECKS_KEY);
+		const v = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw;
+		if (!Array.isArray(v))
+			return [];
+		return v.filter((c): c is NetCheck => !!c && typeof c === 'object' && typeof (c as NetCheck).net === 'string' && typeof (c as NetCheck).edge === 'string' && Array.isArray((c as NetCheck).terms) && Array.isArray((c as NetCheck).excursions) && typeof (c as NetCheck).h === 'number');
+	}
+	catch {
+		return [];
+	}
+}
+
+async function writeChecks(checks: NetCheck[]): Promise<void> {
+	await writeStored(CHECKS_KEY, JSON.stringify(checks));
 }
 
 /** Shared non-interactive HF execution used by both the panel/wizard flow and the public message bus. */
@@ -254,7 +275,7 @@ async function executeHfAnalysis(
 	board: Board,
 	net: string,
 	opts: { drivers: string[]; hz?: number; info: BoardInfo; draw: boolean; timeBudgetMs: number; rememberRun: boolean },
-): Promise<{ summary: string; lines: string[]; findings: Finding[]; hf: PublicHfResult }> {
+): Promise<{ summary: string; lines: string[]; findings: Finding[]; hf: PublicHfResult; score: CheckView }> {
 	const title = t('Return path');
 	const known = netInfo(opts.info, net);
 	const { drivers } = opts;
@@ -262,10 +283,31 @@ async function executeHfAnalysis(
 		await remember({ kind: 'hf', net, drivers, hz: opts.hz });
 	const ownTracks = board.tracks.filter(tr => tr.net === net).length;
 	log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias, driver ${drivers.join(', ') || 'none'}`);
-	const analysis = await runSteps(analyzeNetSteps(board, net, { drivers }), { title, timeBudgetMs: opts.timeBudgetMs, percent: hfPercent() });
-	log(`${net}: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${+Number(v).toFixed(3)}`).join(' ')}`);
+	const edge = known?.edge ?? guessEdge(net);
+	const drive = known?.drive ?? guessDrive(board, net);
+	const solve = (ds: string[]) => runSteps(analyzeNetSteps(board, net, { drivers: ds }), { title, timeBudgetMs: opts.timeBudgetMs, percent: hfPercent() });
+	let analysis;
+	let checked: NetCheck;
+	if (drivers.length >= 2) {
+		const ends: { analysis: Awaited<ReturnType<typeof solve>>; check: NetCheck }[] = [];
+		for (const d of drivers) {
+			const an = await solve([d]);
+			ends.push({ analysis: an, check: checkReturn(board, an, { driver: d, edge, drive }) });
+		}
+		checked = worseEnd(ends.map(e => e.check));
+		analysis = ends.reduce((a, b) => (a.check.score <= b.check.score ? a : b)).analysis;
+	}
+	else {
+		analysis = await solve(drivers);
+		checked = checkReturn(board, analysis, { driver: drivers[0], edge, drive });
+	}
+	const all = assignChokes(board, [...readChecks().filter(c => !sameNet(c.net, net)), checked]);
+	await writeChecks(all);
+	const mine = all.find(c => sameNet(c.net, net)) ?? checked;
+	const score = viewOf(all);
+	log(`${net}: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${+Number(v).toFixed(3)}`).join(' ')}; score ${mine.score} (${mine.status}), r ${mine.r.toFixed(3)}`);
 	const drawn = opts.draw
-		? await timed('draw markers', () => drawAnalysis(analysis, board), d => `${d.markers} markers`)
+		? await timed('draw markers', () => drawAnalysis(analysis, board, mine), d => `${d.markers} markers`)
 		: { markers: 0, forwardLayers: [] as string[], returnLayers: [] as string[] };
 	const ownLength = board.tracks.filter(tr => tr.net === net).reduce((sum, tr) => sum + Math.hypot(tr.b.x - tr.a.x, tr.b.y - tr.a.y), 0);
 	const kind = kindOf(net, classifySignal(net, board.pads.filter(p => p.net === net).map(p => p.pinName)), known) ?? GENERIC;
@@ -281,8 +323,8 @@ async function executeHfAnalysis(
 		known.receivers?.length && t('receivers ${1}', known.receivers.join(', ')),
 		known.notes,
 	].filter(Boolean).join('; ');
-	recordResult('hf', { drivers, stats: analysis.stats, findings: analysis.findings, markers: drawn.markers, returnLayers: drawn.returnLayers, boardWarnings: board.warnings });
-	const lines = [
+	recordResult('hf', { drivers, stats: analysis.stats, findings: analysis.findings, markers: drawn.markers, returnLayers: drawn.returnLayers, boardWarnings: board.warnings, score: mine.score, status: mine.status, r: mine.r, rW: mine.rW });
+	const detail = [
 		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
 		opts.hz || known?.speedHz ? signal.message : `${signal.message} ${t('(The usual speed of this kind of line; HF check asks for the speed.)')}`,
 		noted ? t('Board info: ${1}.', noted) : '',
@@ -295,9 +337,16 @@ async function executeHfAnalysis(
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
 		...board.warnings.map(w => `warning: ${w}`),
 	].filter(Boolean);
+	lastDetail = detail;
+	const lines = [
+		...detail,
+		t('Check marks: yellow hatch is a noted loop, red a flagged loop, magenta a stretch left outside ±h. White ticks and circles are minor cuts, return vias, the driver closure and choke points.'),
+		score.header,
+		...reportLines(mine),
+	];
 	recordResult('report', lines);
 	return {
-		summary: lines[0],
+		summary: detail[0],
 		lines,
 		findings: analysis.findings,
 		hf: {
@@ -309,7 +358,12 @@ async function executeHfAnalysis(
 			returnLayers: drawn.returnLayers,
 			markers: drawn.markers,
 			warnings: [...board.warnings],
+			score: mine.score,
+			status: mine.status,
+			r: mine.r,
+			rW: mine.rW,
 		},
+		score,
 	};
 }
 
@@ -731,7 +785,7 @@ const publicExecutor: PublicRunExecutor = {
 			timeBudgetMs: req.timeoutMs ?? HF_BUDGET_MS,
 			rememberRun: req.draw,
 		});
-		await report(t('Return path'), out.lines, { open: false, toast: false });
+		await report(t('Return path'), out.lines, { open: false, toast: false, score: out.score });
 		return out;
 	},
 	runDc: async (req: ParsedDcRequest) => {
@@ -822,6 +876,32 @@ const publicExecutor: PublicRunExecutor = {
 };
 
 const panelHost = {
+	setNetProp: async (m: { net: string; edge?: 'fast' | 'normal' | 'slow'; drive?: 'push-pull' | 'open-drain' }) => {
+		const bi = await boardInfo();
+		const patch: Partial<NetInfo> = {};
+		if (m.edge)
+			patch.edge = m.edge;
+		if (m.drive)
+			patch.drive = m.drive;
+		if (patch.edge || patch.drive)
+			await bi.save(withNet(bi.info, m.net, patch), `${m.net}: ${[patch.edge, patch.drive].filter(Boolean).join(', ')}`);
+		const checks = readChecks();
+		const i = checks.findIndex(c => sameNet(c.net, m.net));
+		if (i < 0)
+			return;
+		checks[i] = withProps(checks[i], { edge: m.edge, drive: m.drive });
+		await writeChecks(checks);
+		const view = viewOf(checks);
+		const mine = checks[i];
+		if (!forwardCheckRedraw(m.net))
+			await replaceCheckMarkers(mine);
+		await report(t('Return path'), [view.header, ...reportLines(mine), ...lastDetail], { score: view, toast: false });
+	},
+	redrawNet: async (net: string) => {
+		const check = readChecks().find(c => sameNet(c.net, net));
+		if (check)
+			await replaceCheckMarkers(check);
+	},
 	run: async (cmd: 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel') => {
 		const actions = { hf: showReturnPath, dc: showDcReturn, trace: showForSelectedTrace, rerun: rerunForSelection, toggle: toggleReturnPath, clear: clearReturnPath, cancel: async () => cancelAnalysis() };
 		await actions[cmd]();

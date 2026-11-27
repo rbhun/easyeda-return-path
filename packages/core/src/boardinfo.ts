@@ -24,6 +24,10 @@ export interface NetInfo {
   reference?: string;
   /** Impedance or length target, e.g. `90 Ω diff, ±0.5 mm`. */
   target?: string;
+  /** How fast the edge is: fast clocks weigh more in the return score. */
+  edge?: 'fast' | 'normal' | 'slow';
+  /** Push-pull drivers also close through the supply decap; open-drain does not. */
+  drive?: 'push-pull' | 'open-drain';
   notes?: string;
 }
 
@@ -56,7 +60,7 @@ export interface BoardInfo {
 export const emptyBoardInfo = (): BoardInfo => ({ nets: [], loads: [], layers: [] });
 
 export const BOARD_INFO_COLUMNS = [
-  'row', 'net', 'kind', 'protocol', 'speed', 'driver_part', 'driver_pin', 'driver_pin_name', 'receivers', 'diff_partner', 'reference', 'target',
+  'row', 'net', 'kind', 'protocol', 'speed', 'driver_part', 'driver_pin', 'driver_pin_name', 'receivers', 'diff_partner', 'reference', 'target', 'edge', 'drive',
   'voltage', 'source_part', 'source_pin', 'load_part', 'load_pin', 'typical_current', 'peak_current',
   'layer', 'pours', 'splits', 'notes',
 ] as const;
@@ -66,7 +70,8 @@ type Column = typeof BOARD_INFO_COLUMNS[number];
 const ALIASES: Record<string, Column> = {
   type: 'row', rowtype: 'row', speedhz: 'speed', frequency: 'speed', bitrate: 'speed', driver: 'driver_part', driverpart: 'driver_part', driverpin: 'driver_pin',
   driverpinname: 'driver_pin_name', diffpair: 'diff_partner', diffpartner: 'diff_partner', diffpairpartner: 'diff_partner', reference: 'reference',
-  intendedreference: 'reference', target: 'target', impedancelengthtarget: 'target', impedance: 'target', source: 'source_part', sourcepart: 'source_part',
+  intendedreference: 'reference', target: 'target', impedancelengthtarget: 'target', impedance: 'target', edgeclass: 'edge',
+  drivetype: 'drive', source: 'source_part', sourcepart: 'source_part',
   sourcepin: 'source_pin', load: 'load_part', loadpart: 'load_part', loadpin: 'load_pin', typical: 'typical_current', typicalcurrent: 'typical_current',
   peak: 'peak_current', peakcurrent: 'peak_current', splits: 'splits', splitsstargrounds: 'splits', stargrounds: 'splits', note: 'notes',
 };
@@ -194,6 +199,16 @@ export function parseBoardInfoCsv(text: string): ParsedBoardInfo {
       if (cells.diff_partner) n.diffPartner = cells.diff_partner;
       if (cells.reference) n.reference = cells.reference;
       if (cells.target) n.target = cells.target;
+      if (cells.edge) {
+        const edge = cells.edge.toLowerCase();
+        if (edge === 'fast' || edge === 'normal' || edge === 'slow') n.edge = edge;
+        else warnings.push(`line ${line}: edge "${cells.edge}" is not fast, normal or slow`);
+      }
+      if (cells.drive) {
+        const drive = cells.drive.toLowerCase().replace(/[\s_]+/g, '-');
+        if (drive === 'push-pull' || drive === 'open-drain') n.drive = drive;
+        else warnings.push(`line ${line}: drive "${cells.drive}" is not push-pull or open-drain`);
+      }
       if (notes) n.notes = notes;
       info.nets = [...info.nets.filter(x => !sameNet(x.net, n.net)), n];
     }
@@ -238,7 +253,7 @@ export function formatBoardInfoCsv(info: BoardInfo): string {
     out.push(line({
       row: 'net', net: n.net, kind: n.kind, protocol: n.protocol, speed: n.speedHz ? formatHz(n.speedHz) : undefined,
       driver_part: n.driver ? (n.driver.parts.length ? n.driver.parts.join(';') : 'none') : undefined, driver_pin: n.driver?.pin, driver_pin_name: n.driver?.pinName,
-      receivers: n.receivers?.join(';'), diff_partner: n.diffPartner, reference: n.reference, target: n.target, notes: n.notes,
+      receivers: n.receivers?.join(';'), diff_partner: n.diffPartner, reference: n.reference, target: n.target, edge: n.edge, drive: n.drive, notes: n.notes,
     }));
   }
   for (const l of info.loads) {

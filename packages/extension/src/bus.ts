@@ -68,6 +68,11 @@ export interface PublicHfResult {
 	returnLayers: string[];
 	markers: number;
 	warnings: string[];
+	/** 0–100. Present once the return-path check has scored the net. */
+	score?: number;
+	status?: 'Good' | 'Fair' | 'Needs work';
+	r?: number;
+	rW?: number;
 }
 
 export interface PublicDcResult {

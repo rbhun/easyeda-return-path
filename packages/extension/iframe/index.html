@@ -70,6 +70,36 @@
 			}
 			#result .warn { color: #ffd166; }
 			#result .err, #state.err { color: #ff6b6b; }
+			.good { color: #3dd68c; }
+			.fair { color: #ffd166; }
+			.work { color: #ff6b6b; }
+			#score { margin: 0 0 8px; }
+			#score .head { font-weight: 600; margin-bottom: 6px; }
+			.net {
+				margin: 0 0 6px;
+				padding: 6px 8px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: var(--panel);
+			}
+			.nethead {
+				display: flex;
+				justify-content: space-between;
+				gap: 8px;
+				width: 100%;
+				padding: 0;
+				border: 0;
+				background: transparent;
+				color: inherit;
+				font: inherit;
+				text-align: left;
+				cursor: pointer;
+			}
+			.meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 4px; color: var(--muted); }
+			.meta select { width: auto; }
+			.find { margin: 2px 0 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+			.find:hover { color: var(--accent); }
+			.find .fix { display: block; color: var(--muted); }
 			.muted { color: var(--muted); }
 			table { width: 100%; border-collapse: collapse; }
 			td { padding: 3px 0; vertical-align: middle; }
@@ -121,6 +151,7 @@
 		</div>
 
 		<h2>Result</h2>
+		<div id="score"></div>
 		<pre id="result" class="muted">No result yet.</pre>
 
 		<h2>Lines: show, colour, width</h2>
@@ -199,6 +230,7 @@
 					$('clear').disabled = !!s.busy;
 					$('lastRun').textContent = s.lastRun ? 'Last: ' + s.lastRun : '';
 
+					drawScore(s.result && s.result.score);
 					var pre = $('result');
 					pre.textContent = '';
 					if (s.result) {
@@ -272,6 +304,95 @@
 						tr.appendChild(colour);
 						tr.appendChild(width);
 						body.appendChild(tr);
+					});
+				}
+
+				function statusClass(status) {
+					return status === 'Good' ? 'good' : status === 'Fair' ? 'fair' : 'work';
+				}
+
+				function zoom(at) {
+					if (at) send({ cmd: 'zoom', at: { x: at.x, y: at.y } });
+				}
+
+				function lineButton(text, at, fix) {
+					var b = document.createElement('button');
+					b.className = 'find';
+					b.appendChild(document.createTextNode(text));
+					if (fix) {
+						var s = document.createElement('span');
+						s.className = 'fix';
+						s.textContent = fix;
+						b.appendChild(s);
+					}
+					b.onclick = function () { zoom(at); };
+					return b;
+				}
+
+				function drawScore(score) {
+					var box = $('score');
+					box.textContent = '';
+					if (!score || !score.rows) return;
+					var head = document.createElement('div');
+					head.className = 'head ' + statusClass(score.status);
+					head.textContent = score.header;
+					box.appendChild(head);
+					score.rows.forEach(function (row, i) {
+						var card = document.createElement('div');
+						card.className = 'net';
+						var open = i === 0;
+						var btn = document.createElement('button');
+						btn.className = 'nethead';
+						var name = document.createElement('span');
+						name.textContent = row.net + (row.driver ? ' · ' + row.driver : '');
+						var mark = document.createElement('b');
+						mark.className = statusClass(row.status);
+						mark.textContent = row.score + ' ' + row.status;
+						btn.appendChild(name);
+						btn.appendChild(mark);
+						var body = document.createElement('div');
+						var meta = document.createElement('div');
+						meta.className = 'meta';
+						function pick(kind, value, options) {
+							var sel = document.createElement('select');
+							sel.setAttribute('aria-label', row.net + ' ' + kind);
+							options.forEach(function (o) {
+								var opt = document.createElement('option');
+								opt.value = o[0];
+								opt.textContent = o[1];
+								if (o[0] === value) opt.selected = true;
+								sel.appendChild(opt);
+							});
+							sel.onchange = function () {
+								var msg = { cmd: 'netprop', net: row.net };
+								msg[kind] = sel.value;
+								send(msg);
+							};
+							return sel;
+						}
+						meta.appendChild(pick('edge', row.edge, [['fast', 'Fast'], ['normal', 'Normal'], ['slow', 'Slow']]));
+						meta.appendChild(pick('drive', row.drive, [['push-pull', 'Push-pull'], ['open-drain', 'Open-drain']]));
+						var nums = document.createElement('span');
+						nums.textContent = row.lengthMm.toFixed(1) + ' mm · r ' + row.r.toFixed(2) + ' · r_w ' + row.rW.toFixed(2);
+						meta.appendChild(nums);
+						body.appendChild(meta);
+						(row.also || []).forEach(function (a) {
+							var other = document.createElement('div');
+							other.className = 'muted';
+							other.textContent = 'Other end ' + a.driver + ': ' + a.score + '/100.';
+							body.appendChild(other);
+						});
+						(row.points || []).forEach(function (p) {
+							body.appendChild(lineButton('-' + p.points + '  ' + p.text, p.at, p.fix));
+						});
+						(row.findings || []).forEach(function (f) {
+							body.appendChild(lineButton(f.grade + ' ' + f.type + ' ' + f.value + ' — ' + f.text, f.at));
+						});
+						body.hidden = !open;
+						btn.onclick = function () { body.hidden = !body.hidden; };
+						card.appendChild(btn);
+						card.appendChild(body);
+						box.appendChild(card);
 					});
 				}
 
