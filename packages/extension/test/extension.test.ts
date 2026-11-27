@@ -38,8 +38,8 @@ test('menu action reads the board through the API and draws temporary markers', 
 	const mock = await run([]);
 	assert.equal(mock.messages.length, 1);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
-	assert.match(mock.messages[0], /^CLK: 8 finding\(s\)/);
-	assert.match(mock.messages[0], /Current drawn where it flows, in the colour of the copper layer it flows in\. Forward \(the signal trace\): Top Layer yellow, Bottom Layer green, with a circle on each via it passes through\. Return: Inner1 blue, Top Layer magenta, Inner2 blue; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer\. Dashed white: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
+	assert.match(mock.messages[0], /^CLK: 12 finding\(s\)/);
+	assert.match(mock.messages[0], /Current drawn where it flows, in the colour of the copper layer it flows in\. Forward \(the signal trace\): Top Layer yellow, Bottom Layer green, with a circle on each via it passes through\. Return: Top Layer magenta, Inner1 blue; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer\. Dashed white: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
 	assert.match(mock.messages[0], /^CLK: clock at 16 MHz\. Edges ≈ 2\.0 ns .* it acts as a transmission line/m);
 	const pick = mock.wizardPages.find(p => /^Net to check and its speed/.test(p.prompt))!;
 	assert.equal(pick.kind, 'nets', 'net and speed on one page');
@@ -63,7 +63,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	const signal = of(COLORS.signal);
 	assert.ok([signal, of(COLORS.signalOther)].every(s => s.some(m => m.shape.type === 'line') && s.every(m => m.width === 2)), 'the signal trace drawn thin over its return, in the colour of its layer');
 	assert.equal(signal.filter(m => m.shape.type === 'circle').length, 2, 'a circle on each of the two vias CLK passes through');
-	assert.ok(of(COLORS.hop).filter(m => m.shape.type === 'circle').length >= 5, 'a circle at each hop target: C2 twice, the GND via, the decap, two IC pins');
+	assert.equal(of(COLORS.hop).filter(m => m.shape.type === 'circle').length, 4, 'a circle on each ground pin and on the driver loop (decap and supply pin)');
 
 	const count = mock.markers.length;
 	await ext.showReturnPath();
@@ -141,7 +141,7 @@ test('net names in another letter case are the same net, as in EasyEDA: the sele
 	(globalThis as Record<string, unknown>).eda = mock.eda;
 	await ext.showReturnPath();
 	assert.equal(mock.wizardPages.find(p => p.kind === 'nets')?.value, 'CLK', 'the selected clk is the board net CLK');
-	assert.match(mock.messages[0], /^CLK: 8 finding\(s\)/);
+	assert.match(mock.messages[0], /^CLK: 12 finding\(s\)/);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
 	assert.match(mock.messages[0], /warning: Nets CLK and clk differ only in letter case; EasyEDA takes them as one net, analysed as CLK\./);
 	assert.match(mock.messages[0], /warning: Nets GND and gnd differ only in letter case/);

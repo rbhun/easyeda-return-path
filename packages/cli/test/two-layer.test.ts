@@ -37,7 +37,7 @@ test('2-layer coplanar: CLK returns in the Top pour beside it and detours around
   assert.equal(ref.layer, TOP);
   assert.equal(ref.coplanar, true);
   assert.ok(ref.h > 0.2 && ref.h < 0.35, `trace-to-pour gap ${ref.h}`);
-  assert.deepEqual(kinds(coplanar, 'CLK'), ['loop-closure', 'loop-closure', 'slot-crossing']);
+  assert.deepEqual(kinds(coplanar, 'CLK'), ['loop-closure', 'loop-closure', 'return-detour', 'return-length', 'slot-crossing']);
   const gap = an.chains[0].gaps.find((g) => g.kind === 'slot')!;
   assert.ok(gap.a.x > 29.5 && gap.b.x < 32, 'gap at the Top pour break');
   // CLK's own clearance splits the pour into halves above and below it; the return goes round an end of the break.
@@ -54,7 +54,7 @@ test('2-layer coplanar: DATA on Bottom is coplanar too; its vias need GND stitch
     assert.equal(v.transitions[0].kind, 'stitching-via');
     assert.ok(v.transitions[0].loopArea! > v.transitions[0].distance! * 1.4, 'vertical loop spans the full 1.5 mm core');
   }
-  assert.deepEqual(kinds(coplanar, 'DATA'), ['loop-closure', 'loop-closure', 'slot-crossing', 'via-return', 'via-return']);
+  assert.deepEqual(kinds(coplanar, 'DATA'), ['loop-closure', 'loop-closure', 'return-length', 'slot-crossing', 'via-return', 'via-return']);
 });
 
 test('2-layer without a Top pour: CLK references the Bottom pour 1.5 mm below and crosses its slot', () => {
@@ -63,7 +63,7 @@ test('2-layer without a Top pour: CLK references the Bottom pour 1.5 mm below an
   assert.equal(ref.layer, BOTTOM);
   assert.ok(!ref.coplanar);
   assert.equal(ref.h, 1.5);
-  assert.deepEqual(kinds(bottomOnly, 'CLK'), ['loop-closure', 'loop-closure', 'slot-crossing']);
+  assert.deepEqual(kinds(bottomOnly, 'CLK'), ['loop-closure', 'loop-closure', 'return-detour', 'return-length', 'slot-crossing']);
   const gap = an.chains[0].gaps[0];
   assert.ok(gap.a.x > 39.5 && gap.b.x < 41.7);
   assert.ok(gap.detour!.path.some((p) => p.y > 13.8), 'detour passes the upper end of the slot');
@@ -144,7 +144,8 @@ test('2-layer half pour: CLK is coplanar while the Top pour runs beside it, then
   const split = an.chains[0].chain.pts.at(-1)!;
   assert.ok(split.x > 29 && split.x < 30.5, `split at the pour edge, x = ${split.x}`);
   assert.equal(an.chains[1].chain.cutVia?.net, 'GND');
-  assert.ok(an.returnPath.jumps.some((j) => j.kind === 'via' && j.label === 'GND via'), 'return drops through the GND via');
+  const past = an.returnPath.traces.filter((t) => t.pts.some((p) => p.x > split.x + 1));
+  assert.ok(past.length && past.every((t) => t.layer === BOTTOM), 'past the top pour the return is on the bottom');
   // No via of the pour's net at the split: the return cannot change layers there, so the whole run keeps one reference.
   const noVia = { ...halfTop, vias: halfTop.vias.filter((v) => !(v.net === 'GND' && Math.abs(v.at.x - 29.5) < 0.01)) };
   const one = analyzeNet(noVia, 'CLK');

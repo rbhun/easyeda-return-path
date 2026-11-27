@@ -238,6 +238,10 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 	}
 	for (const j of an.returnPath.jumps)
 		hop.push(...dashed(j.from, j.to), dot(j.to, 0.4));
+	// A minor cut is a small mark where the trace crosses other copper and the return is drawn straight
+	// across it. A detour whose loop area is at least 9h² is a larger red mark.
+	for (const m of an.returnPath.marks ?? [])
+		gap.push(dot(m.at, m.kind === 'flagged' ? 0.9 : 0.3));
 	// The signal itself in the colour of its layer, and the vias it passes through from one layer to another.
 	const top = board.stackup.copper[0]?.id;
 	const forwardTop: Marker[] = [];

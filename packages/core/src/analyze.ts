@@ -37,6 +37,12 @@ export interface AnalyzeOptions {
   drivers?: string[];
   /** Extra return length round a gap, mm: below `ignore` the gap is not reported, below `warn` it is a warning. */
   slotDetour: { ignore: number; warn: number };
+  /** Raster pitch of the return solve, mm. 3 mil. */
+  returnGridMm: number;
+  /** Dielectric height for the loop-area cost, mm. 0 reads the stackup and falls back to 1.6 mm. */
+  returnHeightMm: number;
+  /** Added to d/h in the return cost, so following the trace costs this per millimetre. */
+  returnEps: number;
 }
 
 export const defaultOptions: AnalyzeOptions = {
@@ -54,6 +60,9 @@ export const defaultOptions: AnalyzeOptions = {
   maxCoplanarGap: 1.0,
   driverDecap: { good: 4, warn: 10 },
   slotDetour: { ignore: 1, warn: 5 },
+  returnGridMm: 3 * 0.0254,
+  returnHeightMm: 0,
+  returnEps: 0.02,
 };
 
 export type Severity = 'error' | 'warn' | 'ok';
@@ -269,7 +278,7 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
       refCopper: new Map(),
       chains: [],
       vias: [],
-      returnPath: { traces: [], jumps: [], drivers: [] },
+      returnPath: { traces: [], jumps: [], drivers: [], marks: [], transitions: [], length: 0 },
       findings: [{ severity: 'warn', kind: 'no-tracks', message: `${net} has no tracks: it is not routed, or its pads are joined only by pours or touching copper, so there is no trace whose return could be followed`, at: pad?.at ?? { x: 0, y: 0 } }],
       stats: { segments: 0, chains: 0, vias: 0, pours: board.pours.length, refVertices: 0, samples: 0, sampleStep: opts.sampleStep, coplanarChains: 0, detours: 0, detourNodes: 0, detoursTooComplex: 0 },
     };
@@ -311,7 +320,7 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     yield { phase: 'vias', fraction: i / ownVias.length };
     vias.push(analyzeVia(ctx, via, tracks, results, findings));
   }
-  const returnPath = yield* buildReturnPath(board, net, results, vias, ctx, findings, opts);
+  const returnPath = yield* buildReturnPath(board, net, results, vias, ctx, findings, opts, refCopper);
   return { net, refCopper, chains: results, vias, returnPath, findings, stats };
 }
 
