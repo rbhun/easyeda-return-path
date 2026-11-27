@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { analyzeNet, difference, dist, pointInPaths, rect, strokePath, type Board, type Pad, type Path, type Track } from '../src/index.js';
+import { analyzeNet, difference, dist, distPointSeg, pointInPaths, rect, strokePath, type Board, type Pad, type Path, type Track } from '../src/index.js';
 
 // Two-layer, h = 1.6 mm. The return is the least loop area, so it follows the trace instead of
 // shortcutting, snaps a small gap back onto the trace, and does not change layer through a via
@@ -99,6 +99,23 @@ test('a short hop on the other layer does not pull the return through an unconne
   const xs = an.returnPath.traces.flatMap((t) => t.pts.map((p) => p.x));
   assert.ok(Math.min(...xs) < 4 && Math.max(...xs) > 24, 'one line along the whole trace');
   assert.ok(!an.returnPath.traces.some((t) => t.pts.some((p) => dist(p, via.at) < 0.4)), 'does not dive into the unconnected via');
+});
+
+test('the return goes around a via hole instead of across it', () => {
+  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
+  const hole = { id: 'hole', net: '3V3', at: { x: 15, y: 10 }, drill: 0.6, diameter: 1.0, stitching: false };
+  const an = analyzeNet(
+    board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p)), [hole]),
+    'SIG',
+    { drivers: ['U1'] },
+  );
+  const pts = an.returnPath.traces.flatMap((t) => t.pts);
+  assert.ok(pts.length > 2, 'a return is drawn');
+  for (const t of an.returnPath.traces)
+    for (let i = 1; i < t.pts.length; i++) {
+      const d = distPointSeg(hole.at, t.pts[i - 1], t.pts[i]);
+      assert.ok(d >= hole.diameter / 2 - 0.02, `segment passes ${d.toFixed(3)} mm from the via centre`);
+    }
 });
 
 test('an outline that misses the trace still draws the return', () => {
