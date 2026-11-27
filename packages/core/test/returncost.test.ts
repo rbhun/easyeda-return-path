@@ -101,6 +101,20 @@ test('a short hop on the other layer does not pull the return through an unconne
   assert.ok(!an.returnPath.traces.some((t) => t.pts.some((p) => dist(p, via.at) < 0.4)), 'does not dive into the unconnected via');
 });
 
+test('an outline that misses the trace still draws the return', () => {
+  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
+  const b = board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p)));
+  // A footprint shape on the outline layer, far from the trace. The real pour is unchanged.
+  b.outline = [rect(0, 0, 2, 2)];
+  const an = analyzeNet(b, 'SIG', { drivers: ['U1'] });
+  assert.ok(an.returnPath.length > 20, `return drawn along the trace, got ${an.returnPath.length.toFixed(1)} mm`);
+  assert.ok(!an.findings.some((f) => f.kind === 'return-path'), 'no "ground copper does not join" error');
+  const ratios = an.chains.flatMap((c) => c.coverage.map((x) => x.ratio));
+  assert.ok(ratios.some((r) => r > 0.5), `coverage measured on the pour, got ${ratios.map((r) => r.toFixed(2)).join(',')}`);
+  const h = 1.6;
+  assert.ok(pointInPaths({ x: 15, y: 10 + 0.5 * h }, an.chains.flatMap((c) => c.half)), 'the ±h band is not clipped away');
+});
+
 test('half the return current is the strip ±h around the trace', () => {
   const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
   const an = analyzeNet(board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p))), 'SIG', { drivers: ['U1'] });

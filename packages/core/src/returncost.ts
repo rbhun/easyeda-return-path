@@ -162,21 +162,47 @@ class Heap {
   }
 }
 
-function bounds(board: Board, tracks: Track[]): { minX: number; minY: number; maxX: number; maxY: number } {
-  const pts = board.outline.flat();
-  const src = pts.length ? pts : [...tracks.flatMap((t) => [t.a, t.b])];
+function boxOf(pts: Pt[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const p of src) {
+  for (const p of pts) {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
     minX = Math.min(minX, p.x);
     minY = Math.min(minY, p.y);
     maxX = Math.max(maxX, p.x);
     maxY = Math.max(maxY, p.y);
   }
-  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
-  return { minX, minY, maxX, maxY };
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
+
+/**
+ * Grid extent. The board outline when it actually meets this net, so the raster covers the pour.
+ * An outline that misses the trace (a footprint shape the polyline API put on the outline layer,
+ * instead of the board) would otherwise put the grid somewhere else and the return would not be drawn.
+ */
+function bounds(board: Board, tracks: Track[]): { minX: number; minY: number; maxX: number; maxY: number } {
+  const nets = new Set(tracks.map((t) => t.net));
+  const comps = new Set(board.pads.filter((p) => p.net && nets.has(p.net) && p.componentId).map((p) => p.componentId!));
+  const local = boxOf([
+    ...tracks.flatMap((t) => [t.a, t.b]),
+    ...board.pads.filter((p) => (p.net && nets.has(p.net)) || (p.componentId && comps.has(p.componentId))).map((p) => p.at),
+  ]);
+  const outline = boxOf(board.outline.flat());
+  if (!local) return outline ?? { minX: 0, minY: 0, maxX: 1, maxY: 1 };
+  const meets = outline && local.minX <= outline.maxX && outline.minX <= local.maxX && local.minY <= outline.maxY && outline.minY <= local.maxY;
+  if (meets && outline) {
+    return {
+      minX: Math.min(local.minX, outline.minX),
+      minY: Math.min(local.minY, outline.minY),
+      maxX: Math.max(local.maxX, outline.maxX),
+      maxY: Math.max(local.maxY, outline.maxY),
+    };
+  }
+  // Room for a detour and a ground pad a little off the trace.
+  const m = 15;
+  return { minX: local.minX - m, minY: local.minY - m, maxX: local.maxX + m, maxY: local.maxY + m };
 }
 
 function copperPaths(board: Board, ref: Map<number, LayerCopper>, layer: number, nets: Set<string>): Paths {

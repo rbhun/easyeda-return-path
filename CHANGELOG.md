@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.75] - 2026-11-27
+
+From Balazs: on CS, EasyEDA said the ground copper does not join the two ends, so no return was drawn, and every stretch was reported as carrying 0% of the return current.
+
+- **An outline that misses the trace is not the board.** The return grid and the coverage bands use the board outline only when the outline actually contains the trace. A shape that does not (a footprint polyline on the outline layer, which the polyline API can return instead of the board outline) put the grid off the copper and clipped the bands away, so the check reported 0% and drew no return. When the polylines do not cover the copper and the document source does, the board read uses the document source.
+
 ## [0.1.74] - 2026-11-27
 
 From Balazs: show where half the return current flows, around the trace.

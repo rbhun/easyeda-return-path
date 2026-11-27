@@ -168,6 +168,31 @@ test('board outline: when the polyline API leaves out the BOARD_OUTLINE polyline
 	assert.ok(mock.logs.some(l => /board outline from the document source: 1 ring/.test(l.message)));
 });
 
+test('board outline: a polyline that misses the copper is set aside for the document source', async () => {
+	const { readBoard } = await import('../src/eda-board.ts');
+	const xs = board.tracks.flatMap(t => [t.a.x, t.b.x]);
+	const ys = board.tracks.flatMap(t => [t.a.y, t.b.y]);
+	const minX = Math.min(...xs);
+	const maxX = Math.max(...xs);
+	const minY = Math.min(...ys);
+	const maxY = Math.max(...ys);
+	const mil = 0.0254;
+	const x = Math.floor(minX / mil) - 200;
+	const y = Math.ceil(maxY / mil) + 200;
+	const w = Math.ceil((maxX - minX) / mil) + 400;
+	const h = Math.ceil((maxY - minY) / mil) + 400;
+	const line = `{"type":"POLY","ticket":9,"id":"e9"}||{"layerId":11,"path":["R",${x},${y},${w},${h},0,0],"polyType":"BOARD_OUTLINE"}|`;
+	const decoy = [[{ x: -100, y: -100 }, { x: -90, y: -100 }, { x: -90, y: -90 }, { x: -100, y: -90 }]];
+	const mock = createMockEda({ ...board, outline: decoy }, '3V3');
+	(globalThis as Record<string, unknown>).eda = mock.eda;
+	(mock.eda as Record<string, unknown>).sys_FileManager = { getDocumentSource: async () => `{"type":"DOCHEAD"}||{}|\n${line}\n` };
+	const b = await readBoard();
+	const ring = b.outline.flat();
+	assert.ok(ring.some(p => p.x < minX && p.y > maxY) && ring.some(p => p.x > maxX && p.y < minY), 'the document outline covers the copper');
+	assert.ok(!ring.some(p => p.x < -50), 'the footprint polyline is not the board outline');
+	assert.ok(mock.logs.some(l => /does not cover the copper/.test(l.message)));
+});
+
 test('a netlist without pin names is skipped on later runs, after an upgrade too', async () => {
 	const { addPinNames, readBoard } = await import('../src/eda-board.ts');
 	const storage = new Map<string, unknown>([['netlistWithoutPinNames', '0.1.16']]);
