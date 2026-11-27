@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.73] - 2026-11-27
+
+From Balazs: the return took the shortest path, so it jumped through ground vias that are not connected, turned back on itself, and on the rack display SD0 ran around the board outline instead of the 10 mm under the pin.
+
+- **Least loop area, not shortest distance.** The poured ground copper, ground tracks and ground pads are rasterised at 3 mil. A step costs 0.02 + d/h, where d is the distance to the signal and h the dielectric height read from the stackup (else 1.6 mm). Following the trace, including its corners, is nearly free, and a shortcut pays the area it encloses. The line changes layer only at a ground via or through-hole pad that touches ground copper on both layers. It is one line, from the driving part's ground pad to the signal pin at the other end.
+- **A cut is judged by the area it encloses.** Under h² the excursion is drawn back on the trace, with a small red mark where that crosses other copper. From h² up to 9h² the detour is kept. At 9h² and over it is kept and flagged, and the result gives the extra area in mm² and mil². A pocket the search enters and leaves through the same cell is not drawn, so the line does not turn 180° there. The line is the straight segments of that path.
+- **The result names the path.** The total length, each detour with its extra area, and each layer change with how far that via is from the trace.
+
 ## [0.1.72] - 2026-11-27
 
 From Balazs: after the return reaches the ground pin it loops under the SD0 pin, and at C12 it turns sharp corners. High-speed current does not do that. The same pins count as ground as in the DC check.
