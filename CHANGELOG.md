@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.76] - 2026-11-27
+
+From Balazs: on CS, the drawn return crossed a via. Current cannot travel through the hole.
+
+- **The return goes around a via.** A via pad is drawn solid, so the pour covered the drill and the line was taken straight across the hole. The pad is left out of the copper the return may walk, and a short cut is not drawn back onto the trace when that line would cross the pad. A ground via is still only a change of layer, from the copper just outside the pad.
+
 ## [0.1.75] - 2026-11-27
 
 From Balazs: on CS, EasyEDA said the ground copper does not join the two ends, so no return was drawn, and every stretch was reported as carrying 0% of the return current.

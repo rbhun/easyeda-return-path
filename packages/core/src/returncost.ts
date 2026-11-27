@@ -301,6 +301,18 @@ function straighten(pts: Path, tol: number): Path {
   return pts.filter((_, i) => keep[i]);
 }
 
+/** Cells whose centre lies inside a drill are not copper. */
+function clearHole(g: Grid, mask: Uint8Array, at: Pt, radius: number): void {
+  if (!(radius > 0)) return;
+  const i0 = Math.max(0, Math.floor((at.x - radius - g.x0) / g.cell));
+  const i1 = Math.min(g.nx - 1, Math.ceil((at.x + radius - g.x0) / g.cell));
+  const j0 = Math.max(0, Math.floor((at.y - radius - g.y0) / g.cell));
+  const j1 = Math.min(g.ny - 1, Math.ceil((at.y + radius - g.y0) / g.cell));
+  for (let j = j0; j <= j1; j++)
+    for (let i = i0; i <= i1; i++)
+      if (dist(cellCentre(g, i, j), at) <= radius) mask[j * g.nx + i] = 0;
+}
+
 function nearestCell(g: Grid, copper: Uint8Array, at: Pt, radius: number): number {
   const i0 = Math.max(0, Math.floor((at.x - radius - g.x0) / g.cell));
   const i1 = Math.min(g.nx - 1, Math.ceil((at.x + radius - g.x0) / g.cell));
@@ -472,10 +484,16 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
     for (const t of board.tracks) if (t.layer === copper.id && nets.has(t.net)) fillTrack(g, w, t.a, t.b, t.width);
     for (const p of board.pads) if ((p.layer === copper.id || p.layer === MULTI_LAYER) && p.net && nets.has(p.net)) fillPaths(g, w, p.shape.length ? p.shape : []);
     const mask = new Uint8Array(N);
+    for (let c = 0; c < N; c++) if (w[c] > 0) mask[c] = 1;
+    // A via pad drawn solid covers its drill, so the line was taken straight across the
+    // hole. The pad is blocked and the return stays in the pour around it. A ground via
+    // is still only a change of layer, linked below from the copper just outside the pad.
+    for (const v of board.vias) clearHole(g, mask, v.at, Math.max(v.diameter, v.drill) / 2 + cell);
+    for (const p of board.pads) if (p.holeDiameter > 0) clearHole(g, mask, p.at, p.holeDiameter / 2 + cell);
     let any = false;
-    for (let c = 0; c < N; c++) if (w[c] > 0) {
-      mask[c] = 1;
+    for (let c = 0; c < N; c++) if (mask[c]) {
       any = true;
+      break;
     }
     if (any) layers.push({ id: copper.id, z: copper.z, copper: mask });
   }
@@ -512,7 +530,7 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
         addVia(b * N + cells[b], a * N + cells[a], cost);
       }
   };
-  for (const v of board.vias) if (nets.has(v.net)) link(v.at, v.diameter / 2 + cell);
+  for (const v of board.vias) if (nets.has(v.net)) link(v.at, v.diameter / 2 + 2 * cell);
   for (const p of board.pads) if (p.layer === MULTI_LAYER && p.net && nets.has(p.net)) link(p.at, Math.max(p.holeDiameter / 2, 0.3) + cell);
   yield tick;
 
@@ -673,7 +691,7 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
   // that actually continues. A real detour goes around and does not come back through its entrance.
   const route = dropRevisits(raw);
 
-  const drawn = post(route, lines, tracks, g, h, cell, layers, board.vias.filter((v) => v.net === signal));
+  const drawn = post(route, lines, tracks, g, h, cell, layers, board.vias.filter((v) => v.net === signal), board.vias);
   const notes: CostReport['notes'] = [];
   const length = drawn.pts.reduce((s, p, i) => (i ? s + dist(p, drawn.pts[i - 1]) : 0), 0);
   if (drawn.pts.length) notes.push({ severity: 'ok', kind: 'return-length', message: `Return path ${length.toFixed(1)} mm`, at: drawn.pts[0] });
@@ -724,6 +742,7 @@ function post(
   cell: number,
   layers: GLayer[],
   signalVias: { at: Pt; diameter: number }[],
+  holes: { at: Pt; drill: number; diameter: number }[],
 ): { pts: Path; tagged: Tagged[]; marks: CostMark[]; detours: { at: Pt; area: number }[]; vias: CostVia[] } {
   // On the projected trace: the seeded cells. Anything past one cell has left it.
   const left = (d: number) => d > cell * 1.25;
@@ -747,7 +766,13 @@ function post(
     const from = Math.max(0, i - 1);
     for (let k = from; k < Math.min(j, raw.length - 1); k++) area += dist(raw[k], raw[k + 1]) * 0.5 * (raw[k].d + raw[k + 1].d);
     const arc = back ? signalArc(lines, raw[i - 1], raw[j]) : null;
-    if (back && arc && area < h2) {
+    // A small excursion is drawn back on the trace. Not when that line would cross a via:
+    // the pad covers the drill in the pour, and the hole is empty, so the return stays around it.
+    const acrossHole = arc !== null && holes.some((v) => {
+      const r = Math.max(v.diameter, v.drill) / 2;
+      return r > 0 && arc!.some((p, k) => k > 0 && distPointSeg(v.at, arc![k - 1], p) < r);
+    });
+    if (back && arc && area < h2 && !acrossHole) {
       for (const p of arc) {
         const last = tagged[tagged.length - 1];
         if (!last || dist(last, p) > cell * 0.4) tagged.push({ ...p, layer: raw[i].layer, detour: false });
