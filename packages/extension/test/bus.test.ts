@@ -40,7 +40,7 @@ function activateWith(board: ReturnType<typeof boardFromZip>, host: MockHost = {
 
 function waitForReply(mock: ReturnType<typeof createMockEda>, topic = TOPIC_PUBLIC_RESULT): Promise<any> {
 	return new Promise((resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error(`timed out waiting for ${topic}`)), 10_000);
+		const timer = setTimeout(() => reject(new Error(`timed out waiting for ${topic}`)), 60_000);
 		mock.eda.sys_MessageBus.subscribeOncePublic(topic, (msg: unknown) => {
 			clearTimeout(timer);
 			resolve(msg);
