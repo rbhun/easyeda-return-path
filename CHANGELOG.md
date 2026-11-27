@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.74] - 2026-11-27
+
+From Balazs: show where half the return current flows, around the trace.
+
+- **The 50% band.** In the plane under a trace the return current spreads as 1/(1 + (x/h)²), so half of it is within ±h of the trace and about 80% within the ±3h band already computed. The check draws that ±h outline in white around the trace. It is on by default; the wider ±3h edges stay hidden until they are shown in the panel.
+
 ## [0.1.73] - 2026-11-27
 
 From Balazs: the return took the shortest path, so it jumped through ground vias that are not connected, turned back on itself, and on the rack display SD0 ran around the board outline instead of the 10 mm under the pin.

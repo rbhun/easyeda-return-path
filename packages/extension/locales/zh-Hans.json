@@ -73,7 +73,6 @@
 	"No routed signal nets on this board: only ground, supply, plane and bias nets have tracks.": "此板上没有已布线的信号网络：只有地、电源、平面和偏置网络有走线。",
 	"Other candidate sources are left out of the solve.": "其他候选源不参与求解。",
 	"Other speed…": "其他速率…",
-	"Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).": "电流画在其实际流经的位置，颜色表示其流经的铜层。正向（信号走线）：${1}，并在其经过的每个过孔上画一个圆。回流：${2}；在另一层铜皮中流动时画在走线上，在走线本层的铺铜中流动时画在走线旁边。虚线 ${3}：在层间或进入器件的跳转（过孔、去耦电容、桥接电容、IC 引脚）。走线上的 ${4}：跨越间隙，或参考铜不足所需的一半（较小的不足只在结果中列出）。",
 	"Run files need file access: allow \"External Interaction\" for this extension in Advanced > Extension Manager (desktop client).": "运行文件需要文件访问权限：请在 高级 > 扩展管理器 中为此扩展允许“外部交互”（桌面客户端）。",
 	"Run folder": "运行文件夹",
 	"Speed": "速率",
@@ -137,5 +136,7 @@
 	"Sample saved as ${1}: edit it and load it here.": "示例已保存为 ${1}：编辑后在此加载。",
 	"${1} continues through series parts to the nets below. Ticked nets are solved with it as one rail, the parts between them taken as shorts; untick all to solve ${1} alone.": "${1} 经串联元件延续到下列网络。勾选的网络与它作为同一电源轨一起求解，其间的元件视为短路；全部取消勾选则只求解 ${1}。",
 	"${1} (through ${2})": "${1}（经 ${2}）",
-	"Return Path panel: ${1} failed: ${2}. Details are in the log.": "Return Path 面板：${1} 失败：${2}。详情见日志。"
+	"Return Path panel: ${1} failed: ${2}. Details are in the log.": "Return Path 面板：${1} 失败：${2}。详情见日志。",
+	"Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer. White lines ±h from the trace bound half the return current in the plane under it. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).": "电流画在其实际流经的位置，颜色表示其流经的铜层。正向（信号走线）：${1}，并在其经过的每个过孔上画一个圆。回流：${2}；在另一层铜皮中流动时画在走线上，在走线本层的铺铜中流动时画在走线旁边。走线两侧 ±h 的白线标出其下方平面中一半回流电流的范围。虚线 ${3}：在层间或进入器件的跳转（过孔、去耦电容、桥接电容、IC 引脚）。走线上的 ${4}：跨越间隙，或参考铜不足所需的一半（较小的不足只在结果中列出）。",
+	"50% of the return current (±h around the trace)": "回流电流的 50%（走线两侧 ±h）"
 }

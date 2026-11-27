@@ -1,6 +1,6 @@
 // Draws an analysis as temporary indicator markers: nothing is stored in the document or the
 // undo history (design decision D6). Markers have no fill, so regions are drawn as outlines.
-import { dist, lerp, type Analysis, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
+import { dist, lerp, union, type Analysis, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { MIL } from './eda-board';
 import { log, readStored, writeStored } from './runner';
@@ -193,7 +193,8 @@ export interface HfDrawn {
  * Replaces the overlay with the given analysis: the return path in a colour per signal layer, the
  * signal trace and the vias it passes through;
  * dashed hops (via, decap, bridging cap, IC pin); red over the trace where it crosses a gap or is
- * short of reference copper; the band edges (hidden by default). Colours and widths come from the style (style.ts).
+ * short of reference copper; the ±h outline where half the return current flows, and the ±3h band
+ * edges (hidden by default). Colours and widths come from the style (style.ts).
  */
 export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>): Promise<HfDrawn> {
 	const { segs, outline, dot, dashed } = await markerKit();
@@ -207,11 +208,14 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 		return g.markers;
 	};
 	const band = group('band', 'band');
+	const half = group('half', 'half');
 	const gap = group('gap', 'gap');
 	const hop = group('hop', 'hop');
 
 	for (const c of an.chains) {
 		band.push(...outline(c.band));
+	// One outline for the whole net. Separate chains would each draw their own end caps where the trace changes layer.
+	half.push(...outline(union(...an.chains.map((c) => c.half))));
 		// Red runs along the trace where it is short of reference copper, rather than outlining every
 		// uncovered piece of the band, which on a busy board breaks up into fragments.
 		for (const th of c.thin) {
@@ -258,7 +262,7 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 		if (v.transitions.length)
 			forwardTop.push(dot(v.via.at, v.via.diameter / 2 + 0.15));
 	}
-	const ordered = [groups.get('band')!, ...returns.values(), groups.get('gap')!, { role: 'forwardOther' as Role, markers: forwardOther }, { role: 'forwardTop' as Role, markers: forwardTop }, groups.get('hop')!];
+	const ordered = [groups.get('band')!, groups.get('half')!, ...returns.values(), groups.get('gap')!, { role: 'forwardOther' as Role, markers: forwardOther }, { role: 'forwardTop' as Role, markers: forwardTop }, groups.get('hop')!];
 
 	return { markers: await drawGroups(ordered), returnLayers, forwardLayers };
 }

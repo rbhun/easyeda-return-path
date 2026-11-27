@@ -39,7 +39,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.equal(mock.messages.length, 1);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
 	assert.match(mock.messages[0], /^CLK: 12 finding\(s\)/);
-	assert.match(mock.messages[0], /Current drawn where it flows, in the colour of the copper layer it flows in\. Forward \(the signal trace\): Top Layer yellow, Bottom Layer green, with a circle on each via it passes through\. Return: Top Layer magenta, Inner1 blue; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer\. Dashed white: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
+	assert.match(mock.messages[0], /Current drawn where it flows, in the colour of the copper layer it flows in\. Forward \(the signal trace\): Top Layer yellow, Bottom Layer green, with a circle on each via it passes through\. Return: Top Layer magenta, Inner1 blue; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer\. White lines ±h from the trace bound half the return current in the plane under it\. Dashed white: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
 	assert.match(mock.messages[0], /^CLK: clock at 16 MHz\. Edges ≈ 2\.0 ns .* it acts as a transmission line/m);
 	const pick = mock.wizardPages.find(p => /^Net to check and its speed/.test(p.prompt))!;
 	assert.equal(pick.kind, 'nets', 'net and speed on one page');
@@ -176,7 +176,8 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	const hopColour = JSON.stringify(COLORS.hop);
 	const without = await hf();
 	assert.match(without.result.lines.join('\n'), /Driver: not chosen/);
-	const hopsWithout = mock.markers.filter(m => JSON.stringify(m.color) === hopColour).length;
+	const hopMarks = (ms: typeof mock.markers) => ms.filter(m => JSON.stringify(m.color) === hopColour && m.width === 2);
+	const hopsWithout = hopMarks(mock.markers).length;
 	assert.deepEqual(JSON.parse(mock.storage.get('boardInfo:demo-project') as string).nets, [{ net: 'CLK', driver: { parts: [] } }], 'the answer None is saved to the board info');
 	mock.storage.delete('boardInfo:demo-project');
 
@@ -186,7 +187,8 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	assert.ok(done.result.lines.includes('Driver: U1. Its other edge is drawn dashed white from its ground pin through the decap to its supply pin.'), done.result.lines.join('\n'));
 	assert.ok(done.result.lines.some((l: string) => /^\[warn\] U1 \(driver\): .* decap C1 into U1 pad 3 \(3V3\)/.test(l)));
 	assert.equal(done.lastRun, 'HF check: CLK at 16 MHz, driver U1');
-	assert.deepEqual(done.roles.map((r: { role: string }) => r.role), ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'band'], 'every HF role in the panel');
+	assert.deepEqual(done.roles.map((r: { role: string }) => r.role), ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'half', 'band'], 'every HF role in the panel');
+	assert.equal(done.roles.find((r: { role: string }) => r.role === 'half').visible, true, 'the 50% band is shown');
 	assert.equal(done.roles.find((r: { role: string }) => r.role === 'band').visible, false, 'band edges start hidden');
 	const asked = mock.wizardPages.filter(p => /Which part drives CLK/.test(p.prompt));
 	assert.equal(asked.length, 2, 'the HF check button asks for the driver in the wizard window');
@@ -194,13 +196,14 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	assert.ok(!mock.iframes.has('returnPathWizard'), 'the wizard window is closed while the analysis runs');
 	const html = readFileSync(new URL('../iframe/index.html', import.meta.url), 'utf8');
 	assert.match(html, /<button id="hf"[^>]*>HF check<\/button>/);
-	const hops = mock.markers.filter(m => JSON.stringify(m.color) === hopColour).length;
+	const hops = hopMarks(mock.markers).length;
 	assert.ok(hops > hopsWithout, 'the two driver legs are drawn as hops');
 
 	mock.panelSend({ cmd: 'style', style: { hop: { colour: 'cyan', width: 3 } } });
-	for (let i = 0; i < 40 && mock.markers.some(m => JSON.stringify(m.color) === hopColour); i++)
+	for (let i = 0; i < 40 && hopMarks(mock.markers).length; i++)
 		await new Promise(r => setTimeout(r, 25));
-	assert.equal(mock.markers.filter(m => JSON.stringify(m.color) === hopColour).length, 0, 'driver legs restyled with the other hops');
+	assert.equal(hopMarks(mock.markers).length, 0, 'driver legs restyled with the other hops');
+	assert.ok(mock.markers.some(m => JSON.stringify(m.color) === hopColour && m.width === 1), 'the 50% band stays white');
 	const restyled = mock.markers.filter(m => JSON.stringify(m.color) === JSON.stringify(PALETTE.cyan));
 	assert.equal(restyled.length, hops, 'no return runs in Bottom copper on this board, so cyan is the hops alone');
 	assert.ok(restyled.every(m => m.width === 3));
