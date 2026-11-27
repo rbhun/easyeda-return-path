@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.81] - 2026-11-27
+
+Added a new sibling EasyEDA Pro extension package (`packages/mcp-rcp`, `@returnpath/mcp-rcp` / `easyeda-mcp-rcp`) that exposes read-only, per-net return-current-path checks on EasyEDA's public message bus (`mcp.rcp.*`) for AI agents via `easyeda-mcp-pro`'s `easyeda_extension_call` bridge.
+
+- **Public message-bus topics (`mcp.rcp.*`).** Registers `mcp.rcp.info`, `mcp.rcp.listNets`, `mcp.rcp.checkNet`, `mcp.rcp.showFindings`, and `mcp.rcp.clearMarkers` via `eda.sys_MessageBus.rpcServicePublic` on startup (`activationEvents.onStartupFinished: true`), returning plain JSON `{ ok: true, data }` / `{ ok: false, error }` envelopes in millimetres (`mm`) bounded safely under the 256 KiB bridge reply limit.
+- **Per-net return-path geometry checks.** Detects `no_reference_plane`, `plane_split_crossing`, `plane_void`, `near_plane_edge`, `layer_change_no_return`, and `reference_net_change` with mm locations and primitive IDs, merges adjacent findings along traces, supports custom rules (`referenceNets`, `returnViaRadiusMm`, `planeEdgeClearanceFactor`, `minSegmentLengthMm`, `skipNets`), and handles EasyEDA Pro stackup fallbacks and 10-mil poured copper scaling.
+- **Temporary canvas markers & Status menu.** `showFindings` and `clearMarkers` draw and clear temporary indicator markers without mutating the board, and the Home/PCB `MCP Return Path → Status...` menu reports the installed version and registered topics.
+
 ## [0.1.80] - 2026-11-27
 
 From Balazs: put the scores at the top of the results window.
