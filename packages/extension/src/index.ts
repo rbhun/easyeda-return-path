@@ -13,6 +13,7 @@ import { clearOverlay, drawAnalysis, leftoverOverlay, overlayState, replaceCheck
 import { autoOpenPanel, forwardCheckRedraw, forwardOverlayCommand, initPanel, panelReady, openPanel, publishState, releaseOverlay, report, shareLastRun, sharedLastRun } from './panel';
 import { beginRun, boardSizes, cancelRunning, checkpoint, chosenRunFolder, endRun, guarded, log, logFileProblem, logFilePath, logStartup, readStored, recordResult, runFolderStatus, runSteps, savedLog, saveLogAs, setRunFolder as storeRunFolder, timed, toast, unwrittenRun, writeStored, writeUnwrittenRun } from './runner';
 import { getServiceStatus, registerRcpServices, RCP_TOPICS } from './rcp/service';
+import type { RcpHost } from './rcp/types';
 import { roleColour } from './style';
 import { dialogAsk, loggedAsk, runDcWizard, withBack, type Ask } from './wizard';
 import { cancelWizardQuestion } from './wizard-window';
@@ -31,7 +32,7 @@ function ensureInitialized(): void {
 	initPanel(panelHost);
 	initPublicBus(publicExecutor);
 	try {
-		registerRcpServices();
+		registerRcpServices(rcpHost);
 	}
 	catch (e) {
 		log(`mcp.rcp: registration failed: ${e instanceof Error ? e.message : String(e)}`, 'warn');
@@ -41,7 +42,7 @@ function ensureInitialized(): void {
 export function about(): void {
 	ensureInitialized();
 	const topics = getServiceStatus().topics;
-	const bridge = `MCP bridge services (read-only):\n${(topics.length ? topics : [...RCP_TOPICS]).join('\n')}${topics.length ? '' : '\n(not registered: see the saved log)'}`;
+	const bridge = `MCP bridge services (no PCB edits):\n${(topics.length ? topics : [...RCP_TOPICS]).join('\n')}${topics.length ? '' : '\n(not registered: see the saved log)'}`;
 	eda.sys_Dialog.showInformationMessage(`${t('Return-path overlay v${1}', extensionConfig.version)}\n\n${t('Analyses, the overlay and its colours are in the panel: Return Path > Open Panel. If the editor froze, reopen it and use Return Path > Show Saved Log.')}\n\n${bridge}`, t('About'));
 }
 
@@ -882,6 +883,37 @@ const publicExecutor: PublicRunExecutor = {
 			await remember({ kind: 'dc', input: dcInput });
 		await report(t('DC return current'), out.lines, { open: false, toast: false });
 		return out;
+	},
+};
+
+const rcpHost: RcpHost = {
+	executor: publicExecutor,
+	getLastRun: () => lastRun(),
+	getBoardScore: () => {
+		const checks = readChecks();
+		return checks.length ? viewOf(checks) : undefined;
+	},
+	onNetPropsChanged: async (changes) => {
+		const checks = readChecks();
+		let touched = false;
+		let lastUpdated: NetCheck | undefined;
+		for (const m of changes) {
+			const i = checks.findIndex(c => sameNet(c.net, m.net));
+			if (i < 0)
+				continue;
+			checks[i] = withProps(checks[i], { edge: m.edge, drive: m.drive });
+			lastUpdated = checks[i];
+			touched = true;
+		}
+		if (!touched)
+			return;
+		await writeChecks(checks);
+		const view = viewOf(checks);
+		if (lastUpdated) {
+			if (!forwardCheckRedraw(lastUpdated.net))
+				await replaceCheckMarkers(lastUpdated);
+			await report(t('Return path'), [view.header, ...reportLines(lastUpdated), ...lastDetail], { open: false, score: view, toast: false });
+		}
 	},
 };
 

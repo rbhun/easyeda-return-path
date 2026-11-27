@@ -329,7 +329,18 @@ test('the Return Path extension itself serves mcp.rcp.* on the public bus and li
 	assert.equal(info.ok, true);
 	assert.equal(info.data.service, 'easyeda-return-path');
 	assert.equal(info.data.unit, 'mm');
-	assert.deepEqual(info.data.topics, ['mcp.rcp.info', 'mcp.rcp.listNets', 'mcp.rcp.checkNet', 'mcp.rcp.showFindings', 'mcp.rcp.clearMarkers']);
+	assert.deepEqual(info.data.topics, [
+		'mcp.rcp.info',
+		'mcp.rcp.listNets',
+		'mcp.rcp.checkNet',
+		'mcp.rcp.showFindings',
+		'mcp.rcp.clearMarkers',
+		'mcp.rcp.getConfig',
+		'mcp.rcp.setConfig',
+		'mcp.rcp.startAnalysis',
+		'mcp.rcp.getAnalysis',
+		'mcp.rcp.cancelAnalysis',
+	]);
 
 	const nets = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.listNets', { includePower: true }) as any;
 	assert.equal(nets.ok, true);
@@ -347,4 +358,305 @@ test('the Return Path extension itself serves mcp.rcp.* on the public bus and li
 	const text = mock.infoDialogs.map((d: any) => JSON.stringify(d)).join('\n');
 	assert.match(text, /MCP bridge services/);
 	assert.match(text, /mcp\.rcp\.checkNet/);
+	assert.match(text, /mcp\.rcp\.getConfig/);
+	assert.match(text, /mcp\.rcp\.startAnalysis/);
+});
+
+test('mcp.rcp.getConfig and setConfig read/write boardInfo, rules, hf/dc options, and overlayStyle idempotently', async () => {
+	const mock = activateWith(demoBoard);
+
+	const initial = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.getConfig', {}) as any;
+	assert.equal(initial.ok, true, initial.error);
+	assert.equal(initial.data.unit, 'mm');
+	assert.equal(initial.data.project.id, 'demo-project');
+	assert.deepEqual(initial.data.boardInfo, { nets: [], loads: [], layers: [] });
+	assert.equal(initial.data.rules.returnViaRadiusMm, 2.5);
+	assert.deepEqual(initial.data.hf.nets, []);
+	assert.equal(initial.data.hf.draw, true);
+
+	const payload = {
+		boardInfo: {
+			nets: [
+				{ net: 'CLK', kind: 'clock', speed: '25 MHz', driver: 'U1', edge: 'fast', drive: 'push-pull' },
+			],
+			loads: [
+				{ net: '3V3', voltage: '3V3', source: 'U1', load: 'U2', typicalCurrent: '150mA' },
+			],
+			layers: [
+				{ layer: 'Bottom', pours: 'GND', splits: 'none' },
+			],
+		},
+		rules: {
+			returnViaRadiusMm: 4.0,
+			skipNets: ['RESET'],
+		},
+		hf: {
+			nets: ['CLK'],
+			draw: true,
+			timeoutMs: 30_000,
+		},
+		dc: {
+			rail: '3V3',
+			ground: 'GND',
+			source: 'U1',
+			loads: ['U2'],
+			currents: { U2: '150mA' },
+			draw: false,
+		},
+		overlayStyle: {
+			hop: { colour: 'cyan', width: 3 },
+		},
+	};
+
+	const set1 = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.setConfig', payload) as any;
+	assert.equal(set1.ok, true, set1.error);
+	assert.deepEqual(set1.data.updated, ['boardInfo', 'rules', 'hf', 'dc', 'overlayStyle']);
+	assert.equal(set1.data.config.boardInfo.nets[0].net, 'CLK');
+	assert.equal(set1.data.config.boardInfo.nets[0].speedHz, 25_000_000);
+	assert.deepEqual(set1.data.config.boardInfo.nets[0].driver, { parts: ['U1'] });
+	assert.equal(set1.data.config.boardInfo.loads[0].typicalA, 0.15);
+	assert.equal(set1.data.config.rules.returnViaRadiusMm, 4);
+	assert.deepEqual(set1.data.config.hf.nets, ['CLK']);
+	assert.equal(set1.data.config.dc.currents.U2, 0.15);
+	assert.equal(set1.data.config.overlayStyle.hop.colour, 'cyan');
+	assert.equal(set1.data.config.overlayStyle.hop.width, 3);
+
+	// Idempotency: applying the exact same setConfig again yields identical config state.
+	const set2 = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.setConfig', payload) as any;
+	assert.equal(set2.ok, true, set2.error);
+	assert.deepEqual(set2.data.config, set1.data.config);
+
+	// Rules set via setConfig are applied automatically by mcp.rcp.checkNet.
+	const check = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.checkNet', { net: 'CLK' }) as any;
+	assert.equal(check.ok, true, check.error);
+	assert.equal(check.data.rulesApplied.returnViaRadiusMm, 4);
+
+	// Invalid input returns { ok: false, error } without mutating saved config.
+	const bad = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.setConfig', { hf: { timeoutMs: -5 } }) as any;
+	assert.equal(bad.ok, false);
+	assert.match(bad.error, /timeoutMs/);
+
+	// Replace & reset work cleanly.
+	const reset = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.setConfig', { reset: true, boardInfo: null, overlayStyle: 'reset' }) as any;
+	assert.equal(reset.ok, true, reset.error);
+	assert.deepEqual(reset.data.config.boardInfo, { nets: [], loads: [], layers: [] });
+	assert.equal(reset.data.config.rules.returnViaRadiusMm, 2.5);
+	assert.deepEqual(reset.data.config.hf.nets, []);
+	assert.equal(reset.data.config.overlayStyle.hop.colour, 'white');
+});
+
+test('mcp.rcp.startAnalysis runs HF using configured defaults, draws overlay, supports idempotency and rescoring', async () => {
+	const mock = activateWith(demoBoard);
+	const expected = analyzeNet(demoBoard, 'CLK', { drivers: ['U1'] }).findings;
+
+	// Configure CLK + HF target nets via mcp.rcp.setConfig.
+	const cfg = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.setConfig', {
+		boardInfo: {
+			nets: [{ net: 'CLK', kind: 'clock', speed: '25 MHz', driver: 'U1', edge: 'fast', drive: 'push-pull' }],
+		},
+		hf: { nets: ['CLK'], draw: true },
+	}) as any;
+	assert.equal(cfg.ok, true, cfg.error);
+
+	// Start HF analysis omitting net/drivers/speed: uses configured hf.nets and boardInfo.
+	const run = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		requestId: 'hf-clk-demo',
+		waitMs: 15_000,
+	}) as any;
+	assert.equal(run.ok, true, run.error);
+	assert.equal(run.data.status, 'completed');
+	assert.equal(run.data.kind, 'hf');
+	assert.equal(run.data.requestId, 'hf-clk-demo');
+	assert.equal(run.data.unit, 'mm');
+	assert.equal(run.data.result.batch, false);
+	assert.equal(run.data.result.hf.net, 'CLK');
+	assert.deepEqual(run.data.result.hf.drivers, ['U1']);
+	assert.equal(run.data.result.hf.signal.hz, 25_000_000);
+	assert.equal(run.data.result.findings.length, expected.length);
+	assert.ok(run.data.result.hf.markers > 0, 'draws temporary overlay markers like the UI');
+	assert.ok(mock.markers.length > 0);
+	assert.equal(mock.dialogs.length, 0);
+	assert.equal(mock.infoDialogs.length, 0);
+
+	// Idempotent retry with same requestId returns the exact same job without re-running.
+	const retry = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		requestId: 'hf-clk-demo',
+	}) as any;
+	assert.equal(retry.ok, true, retry.error);
+	assert.equal(retry.data.jobId, run.data.jobId);
+	assert.equal(retry.data.status, 'completed');
+
+	// getConfig now reflects lastRun from the UI-equivalent analysis.
+	const afterCfg = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.getConfig', {}) as any;
+	assert.equal(afterCfg.ok, true);
+	assert.equal(afterCfg.data.lastRun?.kind, 'hf');
+	assert.equal(afterCfg.data.lastRun?.net, 'CLK');
+
+	// Updating edge class via setConfig rescores the stored HF check without re-solving.
+	const slowRes = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.setConfig', {
+		boardInfo: { nets: [{ net: 'CLK', edge: 'slow' }] },
+	}) as any;
+	assert.equal(slowRes.ok, true, slowRes.error);
+});
+
+test('mcp.rcp.startAnalysis runs DC using configured defaults and rejects oversized HF batches', async () => {
+	const mock = activateWith(dcBoard);
+
+	const cfg = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.setConfig', {
+		dc: { rail: '3V3', draw: false },
+	}) as any;
+	assert.equal(cfg.ok, true, cfg.error);
+
+	const dcRun = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'dc',
+		requestId: 'dc-3v3-demo',
+		waitMs: 30_000,
+	}) as any;
+	assert.equal(dcRun.ok, true, dcRun.error);
+	assert.equal(dcRun.data.status, 'completed');
+	assert.equal(dcRun.data.kind, 'dc');
+	assert.equal(dcRun.data.result.dc.rail, '3V3');
+	assert.equal(dcRun.data.result.dc.ground, 'GND');
+	assert.equal(dcRun.data.result.dc.source, 'U1');
+	assert.ok(dcRun.data.result.dc.nets.some((n: { role: string }) => n.role === 'supply'));
+	assert.equal(mock.dialogs.length, 0);
+
+	// Oversized HF batch (> 10 nets) is rejected cleanly.
+	const tooMany = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		nets: Array.from({ length: 11 }, (_, i) => `SIG_${i}`),
+	}) as any;
+	assert.equal(tooMany.ok, false);
+	assert.match(tooMany.error, /maximum of 10/);
+});
+
+test('mcp.rcp.startAnalysis returns a pollable running handle when exceeding waitMs, supports getAnalysis & cancelAnalysis', async () => {
+	const mock = activateWith(demoBoard);
+
+	// Delay pcb_PrimitiveLine.getAll so the analysis stays running past waitMs=0.
+	let releaseRead!: () => void;
+	const readGate = new Promise<void>(r => { releaseRead = r; });
+	const origGetAll = mock.eda.pcb_PrimitiveLine.getAll;
+	mock.eda.pcb_PrimitiveLine.getAll = async () => {
+		await readGate;
+		return origGetAll();
+	};
+
+	const started = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		net: 'CLK',
+		drivers: ['U1'],
+		draw: false,
+		requestId: 'slow-hf-1',
+		waitMs: 0,
+	}) as any;
+	assert.equal(started.ok, true, started.error);
+	assert.equal(started.data.status, 'running');
+	assert.equal(started.data.pollTopic, 'mcp.rcp.getAnalysis');
+	const jobId = started.data.jobId;
+
+	// A different request while running is rejected cleanly, naming the active jobId.
+	const busy = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		net: 'CLK',
+		requestId: 'slow-hf-2',
+		waitMs: 0,
+	}) as any;
+	assert.equal(busy.ok, false);
+	assert.match(busy.error, new RegExp(jobId));
+
+	// Retrying with the SAME requestId while running is idempotent and returns the same handle.
+	const same = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		net: 'CLK',
+		requestId: 'slow-hf-1',
+		waitMs: 0,
+	}) as any;
+	assert.equal(same.ok, true);
+	assert.equal(same.data.jobId, jobId);
+	assert.equal(same.data.status, 'running');
+
+	// Release the board read and long-poll via mcp.rcp.getAnalysis until completed.
+	releaseRead();
+	const polled = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.getAnalysis', {
+		jobId,
+		waitMs: 15_000,
+	}) as any;
+	assert.equal(polled.ok, true, polled.error);
+	assert.equal(polled.data.status, 'completed');
+	assert.equal(polled.data.result.hf.net, 'CLK');
+
+	// List recent jobs via mcp.rcp.getAnalysis({ list: true }).
+	const listed = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.getAnalysis', { list: true }) as any;
+	assert.equal(listed.ok, true);
+	assert.equal(listed.data.activeJobId, null);
+	assert.ok(listed.data.jobs.some((j: { jobId: string }) => j.jobId === jobId));
+
+	// Cancel on an already-completed job is idempotent.
+	const cancelDone = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.cancelAnalysis', { jobId }) as any;
+	assert.equal(cancelDone.ok, true);
+	assert.equal(cancelDone.data.cancelled, false);
+	assert.equal(cancelDone.data.status, 'completed');
+
+	// Start another paused job and cancel it while running.
+	let releaseRead2!: () => void;
+	const readGate2 = new Promise<void>(r => { releaseRead2 = r; });
+	mock.eda.pcb_PrimitiveLine.getAll = async () => {
+		await readGate2;
+		return origGetAll();
+	};
+	const started2 = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		nets: ['CLK', 'MISSING_NET'],
+		draw: false,
+		waitMs: 0,
+	}) as any;
+	assert.equal(started2.ok, true);
+	assert.equal(started2.data.status, 'running');
+
+	const cancelNow = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.cancelAnalysis', { jobId: started2.data.jobId }) as any;
+	assert.equal(cancelNow.ok, true);
+	assert.equal(cancelNow.data.cancelled, true);
+	assert.equal(cancelNow.data.status, 'cancelling');
+
+	releaseRead2();
+	const afterCancel = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.getAnalysis', {
+		jobId: started2.data.jobId,
+		waitMs: 15_000,
+	}) as any;
+	assert.equal(afterCancel.ok, true, afterCancel.error);
+	assert.equal(afterCancel.data.status, 'cancelled');
+
+	mock.eda.pcb_PrimitiveLine.getAll = origGetAll;
+});
+
+test('mcp.rcp.startAnalysis runs a small HF batch and rejects when no PCB is focused', async () => {
+	const mock = activateWith(demoBoard);
+	const batch = await mock.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		nets: ['CLK', 'NO_SUCH_NET'],
+		draw: false,
+		waitMs: 15_000,
+	}) as any;
+	assert.equal(batch.ok, true, batch.error);
+	assert.equal(batch.data.status, 'completed');
+	assert.equal(batch.data.result.batch, true);
+	assert.equal(batch.data.result.total, 2);
+	assert.equal(batch.data.result.completed, 1);
+	assert.equal(batch.data.result.failed, 1);
+	assert.equal(batch.data.result.nets[0].ok, true);
+	assert.equal(batch.data.result.nets[0].net, 'CLK');
+	assert.equal(batch.data.result.nets[1].ok, false);
+
+	// No PCB focused rejects cleanly even with waitMs=0.
+	const noPcb = activateWith(demoBoard, { documentInfo: null });
+	const err = await noPcb.eda.sys_MessageBus.rpcCallPublic('mcp.rcp.startAnalysis', {
+		kind: 'hf',
+		net: 'CLK',
+		waitMs: 0,
+	}) as any;
+	assert.equal(err.ok, false);
+	assert.match(err.error, /Focus a PCB document first/);
 });

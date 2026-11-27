@@ -8,7 +8,7 @@ EasyEDA Pro extension built on the official [pro-api-sdk](https://github.com/eas
 2. In EasyEDA Pro (≥ 4.1.93 for the stackup and undo-group APIs), import `packages/extension/build/dist/easyeda-return-path_v<version>.eext` (the version is in `extension.json`; see the root `CHANGELOG.md`) as a local extension in the Extension Manager. CI uploads each pull request's build as the artifact `easyeda-return-path_v<version><letter>` (`a` for the first build of a version, then `b`, `c`, ...), and every version on main is published as the GitHub Release `v<version>` with the `.eext` attached.
 3. In a PCB, open **Return Path → Open Panel...**. Press **HF check** in the panel, pick the net and its speed. A selected track, via or pad preselects its net. **Clear** removes the drawing.
 
-The extension also serves the read-only `mcp.rcp.*` commands to AI agents on the bridge (see [Agent bridge](#agent-bridge-mcprcp)). The menu has **Open Panel...**, **Load Board Info...**, **Save Board Info...**, **Run Folder...**, **Show Saved Log...** and **About...**; the analyses, the overlay and its colours are in the panel.
+The extension also serves the `mcp.rcp.*` commands on the bridge so AI agents can inspect nets, configure analysis options, and start/poll HF and DC analyses without editing the PCB (see [Agent bridge](#agent-bridge-mcprcp)). The menu has **Open Panel...**, **Load Board Info...**, **Save Board Info...**, **Run Folder...**, **Show Saved Log...** and **About...**; the analyses, the overlay and its colours are in the panel.
 
 The analysis runs in ~30 ms slices and hands control back to the editor between them, so the UI stays responsive. A progress bar shows the current phase; closing it, or **Cancel** in the panel (the **Selected trace** button while a run is going), stops the run (so does **Clear**). The high-frequency check stops with a message after 60 s, the DC solve after 120 s. Nets with more than 4000 track segments, or boards whose reference copper has more than 500 000 polygon vertices, are refused up front. A slot detour with more than 1500 copper corners in its search window is reported as too complex instead of being traced.
 
@@ -50,14 +50,14 @@ It reads tracks, arcs, vias, free and component pads, pours, computed pour fills
 
 ## Agent bridge (`mcp.rcp.*`)
 
-The Return Path extension itself answers read-only, per-net return-current-path checks on EasyEDA's public message bus, so an AI agent can call them through the [`easyeda-mcp-pro`](https://github.com/oaslananka/easyeda-mcp-pro) bridge (`easyeda_extension_call`). There is no second extension: upgrade Return Path and the topics are there.
+The Return Path extension itself exposes `mcp.rcp.*` commands on EasyEDA's public message bus, so an AI agent can inspect nets, read and update analysis configuration, run fast geometry checks, and start/poll/cancel full HF and DC analyses through the [`easyeda-mcp-pro`](https://github.com/oaslananka/easyeda-mcp-pro) bridge (`easyeda_extension_call`). There is no second extension: upgrade Return Path and the topics are there.
 
 ```text
 agent --easyeda_extension_call--> easyeda-mcp-pro --bridge--> MCP Pro Bridge extension
       --eda.sys_MessageBus.rpcCallPublic(topic, msg)--> Return Path (this extension) --> JSON reply
 ```
 
-The extension performs the geometry analysis and returns compact, plain JSON findings in **millimetres (`mm`)**. The agent decides which nets to check, aggregates and ranks violations, and can highlight chosen findings on the PCB canvas with temporary indicator markers that never modify the design. The check code is in `src/rcp/`; it is separate from the HF/DC analyses in the panel and from the `returnpath.run` bus.
+None of the bridge commands ever modify PCB copper, nets, or design primitives — configuration is stored in the extension's own settings (`sys_Storage`) and overlays are drawn only as temporary indicator markers. All geometry coordinates, lengths, thicknesses, and radii are in **millimetres (`mm`)**.
 
 ### Install, upgrade and verify (desktop EasyEDA Pro)
 
@@ -67,7 +67,7 @@ EasyEDA Pro caches extension code aggressively: re-importing an unchanged versio
 2. In **Advanced -> Extension Manager -> Installed**, remove the old **Return Path** entry. If you installed the short-lived `MCP Return Path` / `Return-Current-Path Checker (MCP)` extension from 0.1.81, remove that too: it is retired, and its topics would clash with the ones Return Path now registers.
 3. Fully quit EasyEDA Pro (**Cmd+Q**) and reopen it.
 4. Import the `.eext` (**Extension Manager -> Import**), then fully quit and reopen once more so the startup activation runs on the new bundle.
-5. Open any PCB and choose **Return Path -> About...**. It shows the version and the five `mcp.rcp.*` topics.
+5. Open any PCB and choose **Return Path -> About...**. It shows the version and all 10 `mcp.rcp.*` topics.
 
 ### Calling from Claude Desktop via `easyeda-mcp-pro`
 
@@ -83,6 +83,58 @@ EasyEDA Pro caches extension code aggressively: re-importing an unchanged versio
 2. Fully quit (**Cmd+Q**) and reopen Claude Desktop.
 3. Focus a PCB document in EasyEDA Pro and call through `easyeda_extension_call`:
 
+Configure analysis defaults (board info, rules, target nets, HF/DC options):
+
+```json
+{
+  "topic": "mcp.rcp.setConfig",
+  "message": {
+    "boardInfo": {
+      "nets": [{ "net": "USB_DP", "kind": "diff pair", "protocol": "USB", "speed": "12 MHz", "driver": "U1", "edge": "fast" }],
+      "loads": [{ "net": "3V3", "voltage": "3V3", "source": "U1", "load": "U2", "typicalCurrent": "150mA" }]
+    },
+    "rules": { "returnViaRadiusMm": 2.5 },
+    "hf": { "nets": ["USB_DP", "USB_DM"], "draw": true },
+    "dc": { "rail": "3V3", "ground": "GND", "draw": true }
+  },
+  "timeoutMs": 10000,
+  "confirmWrite": true
+}
+```
+
+Start an HF or DC analysis (returns the result immediately if it finishes within `waitMs`, or a `running` job handle to poll with `mcp.rcp.getAnalysis`):
+
+```json
+{
+  "topic": "mcp.rcp.startAnalysis",
+  "message": { "kind": "hf", "net": "USB_DP", "requestId": "hf-usb-dp-1", "waitMs": 15000 },
+  "timeoutMs": 25000,
+  "confirmWrite": true
+}
+```
+
+```json
+{
+  "topic": "mcp.rcp.startAnalysis",
+  "message": { "kind": "dc", "rail": "3V3", "requestId": "dc-3v3-1", "waitMs": 5000 },
+  "timeoutMs": 15000,
+  "confirmWrite": true
+}
+```
+
+Poll if `status` is `"running"` (optional long-poll `waitMs`):
+
+```json
+{
+  "topic": "mcp.rcp.getAnalysis",
+  "message": { "jobId": "rcp-1-abc123", "waitMs": 15000 },
+  "timeoutMs": 25000,
+  "confirmWrite": true
+}
+```
+
+Fast geometry checks and markers still work directly too:
+
 ```json
 { "topic": "mcp.rcp.info", "message": {}, "timeoutMs": 10000, "confirmWrite": true }
 ```
@@ -95,20 +147,12 @@ EasyEDA Pro caches extension code aggressively: re-importing an unchanged versio
 { "topic": "mcp.rcp.checkNet", "message": { "net": "USB_DP" }, "timeoutMs": 20000, "confirmWrite": true }
 ```
 
-```json
-{ "topic": "mcp.rcp.showFindings", "message": { "findings": [{ "x": 12.5, "y": 8.2 }], "color": "red" }, "timeoutMs": 10000, "confirmWrite": true }
-```
-
-```json
-{ "topic": "mcp.rcp.clearMarkers", "message": {}, "timeoutMs": 10000, "confirmWrite": true }
-```
-
 ### Hard guarantees
 
-- **Public bus namespace:** all services register under `mcp.rcp.*` via `eda.sys_MessageBus.rpcServicePublic` when the Return Path extension starts (`activationEvents: { "onStartupFinished": true }`), next to its own `returnpath.run` / `returnpath.result` topics.
+- **Public bus namespace:** all 10 services register under `mcp.rcp.*` via `eda.sys_MessageBus.rpcServicePublic` when the Return Path extension starts (`activationEvents: { "onStartupFinished": true }`), reusing the same analysis engine and `returnpath.run` executor as the UI.
 - **Envelope:** every topic returns `{ "ok": true, "data": ... }` on success or `{ "ok": false, "error": "..." }` on failure (errors are returned as data, never thrown across the bus).
 - **Plain JSON & ≤ 256 KiB:** replies are strictly plain JSON (no functions, class instances, or non-finite numbers) and are bounded below 240 KiB (safely under the bridge's 256 KiB transport limit).
-- **Read-only & idempotent:** analysis calls never mutate the PCB. `showFindings` and `clearMarkers` only manage temporary indicator markers (`dmt_EditorControl.generateIndicatorMarkers` / `removeIndicatorMarkers`), which are never saved into the document or undo history. Retrying any call after a timeout is safe.
+- **No PCB mutations & idempotent handlers:** none of the topics edit PCB copper, nets, or undo history. `setConfig` writes only to the extension's own storage (`sys_Storage`); overlays use temporary indicator markers only. Pass `requestId` on `startAnalysis` so retrying after a bridge timeout returns the existing job handle/result instead of starting a duplicate run. `setConfig`, `getConfig`, `getAnalysis`, `cancelAnalysis`, `showFindings`, and `clearMarkers` are all idempotent.
 - **Units:** EasyEDA stores PCB coordinates in `mil`. All coordinates, lengths, thicknesses, and radii in requests and replies are in **`mm`**, and every reply states `"unit": "mm"`.
 
 ### Topics
@@ -120,6 +164,11 @@ EasyEDA Pro caches extension code aggressively: re-importing an unchanged versio
 | `mcp.rcp.checkNet` | `{ net, rules?, refresh? }` | `{ net, unit, skipped?, reason?, segmentsChecked, viasChecked, referenceNetsUsed, rulesApplied, summary, findings, truncated?, warnings? }` |
 | `mcp.rcp.showFindings` | `{ findings, color?, lineWidth?, zoom?, clearExisting? }` | `{ shown, unit }` |
 | `mcp.rcp.clearMarkers` | `null` or `{}` | `{ cleared, unit }` |
+| `mcp.rcp.getConfig` | `null` or `{}` | `{ unit, project, boardInfo, rules, hf, dc, overlayStyle, lastRun, activeJob, truncated? }` |
+| `mcp.rcp.setConfig` | `{ mode?, reset?, boardInfo?, rules?, hf?, dc?, overlayStyle? }` | `{ unit, updated, config }` |
+| `mcp.rcp.startAnalysis` | `{ kind: "hf" \| "dc", requestId?, waitMs?, includeLines?, net?, nets?, speed?, speedHz?, drivers?, rail?, railNets?, ground?, source?, loads?, currents?, focus?, draw?, timeoutMs? }` | `{ jobId, requestId?, kind, status, unit, startedAt, finishedAt?, durationMs, progress, pollTopic?, result?, error?, truncated? }` |
+| `mcp.rcp.getAnalysis` | `{ jobId?, requestId?, waitMs?, includeLines?, list? }` | Same job envelope as `startAnalysis`, or `{ unit, activeJobId, jobs }` when `list: true` |
+| `mcp.rcp.cancelAnalysis` | `null` or `{ jobId?, requestId? }` | `{ unit, cancelled, jobId, status }` |
 
 #### `mcp.rcp.info`
 
@@ -130,7 +179,7 @@ Returns extension metadata, active PCB UUID, copper layer count, physical stacku
   "ok": true,
   "data": {
     "service": "easyeda-return-path",
-    "version": "0.1.82",
+    "version": "0.1.83",
     "pcbUuid": "pcb-uuid",
     "copperLayers": 4,
     "stackup": [
@@ -155,7 +204,12 @@ Returns extension metadata, active PCB UUID, copper layer count, physical stacku
       "mcp.rcp.listNets",
       "mcp.rcp.checkNet",
       "mcp.rcp.showFindings",
-      "mcp.rcp.clearMarkers"
+      "mcp.rcp.clearMarkers",
+      "mcp.rcp.getConfig",
+      "mcp.rcp.setConfig",
+      "mcp.rcp.startAnalysis",
+      "mcp.rcp.getAnalysis",
+      "mcp.rcp.cancelAnalysis"
     ]
   }
 }
@@ -260,6 +314,74 @@ Draws temporary indicator markers on the focused PCB canvas for human review. Do
 Removes all temporary indicator markers from the focused PCB. Idempotent.
 
 **Reply (`data`):** `{ "cleared": true, "unit": "mm" }`
+
+#### `mcp.rcp.getConfig`
+
+Reads the active project's stored Return Path analysis configuration as plain JSON:
+
+- `project`: `{ id, name }` for the active EasyEDA project.
+- `boardInfo`: `{ nets, loads, layers }` — the exact per-project board info shared with the UI's HF and DC wizards (net kinds, protocols, speeds, drivers, edge/drive classes, rail voltages, sources, load currents, layer pours/splits).
+- `rules`: effective `CheckRules` used by `mcp.rcp.checkNet` (stored overrides merged onto `DEFAULT_CHECK_RULES`).
+- `hf`: `{ nets, speedHz?, drivers?, draw, timeoutMs }` — default target signal nets and HF options used when `startAnalysis({ kind: "hf" })` omits them.
+- `dc`: `{ rail?, railNets?, ground?, source?, loads?, currents?, focus?, draw, timeoutMs }` — default DC options used when `startAnalysis({ kind: "dc" })` omits them.
+- `overlayStyle`: current role colours, widths, and visibility (`forwardTop`, `returnTop`, `hop`, `gap`, …).
+- `lastRun`: the last HF or DC run recorded by the extension (or `null`).
+- `activeJob`: currently running MCP analysis job summary (or `null`).
+
+#### `mcp.rcp.setConfig`
+
+Updates the active project's analysis configuration in extension storage (`sys_Storage`) without modifying the PCB design. Idempotent.
+
+**Request:**
+
+- `mode` (`"merge" | "replace"`, default `"merge"`): `"merge"` merges provided fields into existing config (`mergeBoardInfo` for `boardInfo`); `"replace"` replaces each provided section wholesale.
+- `reset` (`boolean`, optional): when `true`, resets `rules`, `hf`, and `dc` to defaults before applying any fields in the same request.
+- `boardInfo` (`{ nets?, loads?, layers? } | null`, optional): updates per-project `BoardInfo` (shared with the UI). Accepts human-friendly shorthands (`speed: "16 MHz"`, `driver: "U1"` or `["U1", "U2"]` or `"none"`, `voltage: "3V3"`, `source: "U1"`, `load: "U2"`, `typicalCurrent: "150mA"`). Changing `edge` (`"fast" | "normal" | "slow"`) or `drive` (`"push-pull" | "open-drain"`) on an already-checked net immediately rescores its stored HF check without re-solving. Pass `null` to clear `boardInfo`.
+- `rules` (`Partial<CheckRules> | null`, optional): sets persistent default rules for `mcp.rcp.checkNet`. Pass `null` to reset to `DEFAULT_CHECK_RULES`.
+- `hf` (`{ nets?, speed?, speedHz?, drivers?, draw?, timeoutMs? } | null`, optional): sets default target signal nets and HF options (`draw` defaults to `true`, `timeoutMs` clamped to `1000..300000`). Pass `null` to reset.
+- `dc` (`{ rail?, railNets?, ground?, source?, loads?, currents?, focus?, draw?, timeoutMs? } | null`, optional): sets default DC options (`currents` accepts amp numbers or strings like `"150mA"`, e.g. `{ "U2": "150mA" }` or `"U2=150mA"`). Pass `null` to reset.
+- `overlayStyle` (`Partial<Record<Role, { colour?, width?, visible? }>> | "reset"`, optional): updates overlay role styling (valid colours: `red`, `yellow`, `green`, `cyan`, `blue`, `magenta`, `white`; widths `1..10`).
+
+**Reply (`data`):** `{ "unit": "mm", "updated": [...], "config": <same shape as getConfig> }`
+
+#### `mcp.rcp.startAnalysis`
+
+Starts a full HF or DC return-path analysis through the extension's existing solver and `returnpath.run` pipeline (same scoring, overlay drawing, `lastRun`, and panel reporting as the UI, with zero blocking dialogs).
+
+**Request:**
+
+- `kind` (`"hf" | "dc"`, required): which analysis to run.
+- `requestId` (`string`, optional): idempotency key. Retrying with the same `requestId` (while running or after completion) returns the existing job handle/result instead of starting a second analysis.
+- `waitMs` (`number`, default `5000`, range `0..55000`): how long to wait for completion before returning a pollable `"running"` handle. Fast single-net HF runs usually finish within `waitMs` and return `status: "completed"` in one call; slower DC solves or multi-net batches return `status: "running"` with `jobId` and `pollTopic: "mcp.rcp.getAnalysis"`. Pass `0` for immediate fire-and-poll.
+- `includeLines` (`boolean`, default `true`): include human-readable report `lines` in the reply (set `false` for smaller replies).
+- **HF fields** (`kind: "hf"`):
+  - `net` (`string`) OR `nets` (`string[]`, max **10** nets per batch): which signal net(s) to analyse. When both are omitted, uses `config.hf.nets`. Split larger net sets into batches of up to 10.
+  - `speed` (`string | number`) / `speedHz` (`number`), `drivers` (`string | string[]`) / `source` (`string`): optional overrides (otherwise uses `boardInfo` and automatic signal/driver recognition).
+- **DC fields** (`kind: "dc"`):
+  - `rail` (`string`, falls back to `config.dc.rail`), `railNets` (`string[]`), `ground` (`string`), `source` (`string`), `loads` (`string[]`), `currents` (`Record<string, number | string> | string`), `focus` (`string`). Omitted fields fall back to `config.dc`, `boardInfo`, and board inference.
+- `draw` (`boolean`, optional): whether to draw the temporary overlay on the PCB canvas (defaults to `config.hf.draw` / `config.dc.draw`, which default to `true`).
+- `timeoutMs` (`number`, optional, `1000..300000`): per-net HF or DC solver time budget.
+
+**Reply (`data`):** `{ jobId, requestId?, kind, status: "running" | "completed" | "failed" | "cancelled", unit: "mm", startedAt, finishedAt?, durationMs, progress: { completed, total, currentNet? }, pollTopic?, result?, error?, truncated? }`
+
+#### `mcp.rcp.getAnalysis`
+
+Polls an analysis job started by `mcp.rcp.startAnalysis`, or lists recent jobs. Read-only and idempotent.
+
+**Request:**
+
+- `jobId` (`string`, optional) or `requestId` (`string`, optional): which job to fetch. When both are omitted, returns the currently running job or the most recent job.
+- `waitMs` (`number`, default `0`, range `0..55000`): optional long-poll duration when the job is still `"running"`.
+- `includeLines` (`boolean`, default `true`): whether to include report `lines`.
+- `list` (`boolean`, optional): when `true`, returns `{ unit: "mm", activeJobId, jobs }` with compact summaries of up to 20 recent jobs.
+
+#### `mcp.rcp.cancelAnalysis`
+
+Cancels a running analysis job (or the currently active analysis). Idempotent: calling on an idle or already-finished job returns `{ ok: true, data: { cancelled: false, ... } }`.
+
+**Request:** `null` or `{ jobId?, requestId? }`
+
+**Reply (`data`):** `{ "unit": "mm", "cancelled": true | false, "jobId": "..." | null, "status": "cancelling" | "completed" | "failed" | "cancelled" | "idle" | "not_found" }`
 
 ## Testing in EasyEDA Pro and reading the logs
 

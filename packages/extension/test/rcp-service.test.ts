@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { rect, union, type Path, type Paths } from '@returnpath/core';
 import { MAX_REPLY_BYTES, RCP_TOPICS, registerRcpServices, resetRcpServiceState } from '../src/rcp/service.js';
 import type {
+  AnalysisJobReplyData,
   CheckNetReplyData,
   ClearMarkersReplyData,
   InfoReplyData,
@@ -224,9 +225,10 @@ test('the Return Path extension.json stays the one shipped extension and activat
   assert.equal(fs.existsSync(path.join(__dirname, '..', '..', 'mcp-rcp')), false, 'no separate mcp-rcp extension package');
 });
 
-test('registers all 5 mcp.rcp.* topics matching the bridge topic regex, once per message bus', () => {
+test('registers all 10 mcp.rcp.* topics matching the bridge topic regex, once per message bus', () => {
   const env = installMockEda();
   const topicPattern = /^mcp\.[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
+  assert.equal(RCP_TOPICS.length, 10);
   for (const topic of RCP_TOPICS) {
     assert.ok(topicPattern.test(topic), `topic ${topic} must satisfy bridge regex`);
     assert.ok(env.rpcs.has(topic), `topic ${topic} should be registered on public bus`);
@@ -369,5 +371,56 @@ test('mcp.rcp.checkNet truncates oversized findings cleanly below the 256 KiB br
     assert.equal(reply.data.truncated, true);
     assert.ok(reply.data.findings.length > 0);
     assert.ok(reply.data.findings.length < 1200);
+  }
+});
+
+test('mcp.rcp.startAnalysis truncates oversized analysis replies cleanly below the 256 KiB bridge limit', async () => {
+  const env = installMockEda();
+  registerRcpServices({
+    executor: {
+      runHf: async (req) => ({
+        summary: `${req.net}: 2500 findings`,
+        lines: Array.from({ length: 200 }, (_, i) => `line ${i} ${'z'.repeat(80)}`),
+        findings: Array.from({ length: 2500 }, (_, i) => ({
+          kind: 'gap' as const,
+          severity: 'error' as const,
+          message: `Gap ${i} ${'m'.repeat(120)}`,
+          at: { x: i, y: i },
+          layer: 1,
+          lengthMm: 1.5,
+        })),
+        hf: {
+          net: req.net,
+          drivers: req.drivers ?? [],
+          signal: { type: 'clock', hz: 25_000_000, kneeHz: 50_000_000, criticalMm: 100, lengthMm: 20, transmissionLine: false },
+          stats: { lengthMm: 20, coveredPct: 50, maxDetourMm: 5, gapCount: 2500, viaCount: 0, returnViaCount: 0 } as never,
+          forwardLayers: ['Top'],
+          returnLayers: ['Bottom'],
+          markers: 0,
+          warnings: [],
+        },
+      }),
+      runDc: async () => {
+        throw new Error('unused');
+      },
+    },
+  });
+
+  const reply = await env.call<AnalysisJobReplyData>('mcp.rcp.startAnalysis', {
+    kind: 'hf',
+    net: 'BIG_CLK',
+    waitMs: 5_000,
+  });
+  assert.equal(reply.ok, true);
+  if (reply.ok) {
+    const bytes = Buffer.byteLength(JSON.stringify(reply), 'utf8');
+    assert.ok(bytes <= MAX_REPLY_BYTES, `expected reply <= ${MAX_REPLY_BYTES} bytes, got ${bytes}`);
+    assert.equal(reply.data.status, 'completed');
+    assert.equal(reply.data.truncated, true);
+    assert.ok(reply.data.result && 'batch' in reply.data.result && !reply.data.result.batch);
+    if (reply.data.result && 'batch' in reply.data.result && !reply.data.result.batch) {
+      assert.ok(reply.data.result.findings.length > 0);
+      assert.ok(reply.data.result.findings.length < 2500);
+    }
   }
 });
