@@ -35,7 +35,7 @@ npm workspaces, TypeScript, Node ≥ 20.17.
 |---|---|
 | [`packages/core`](packages/core) | Pure geometry core: board model, reference copper, coverage, detours, via returns (pipeline steps 1–4), and the DC rail guess and resistive solve. No I/O, no Node or DOM APIs. |
 | [`packages/cli`](packages/cli) | Offline tool: EasyEDA Pro file parser, SVG/PNG overlay renderer, JSON report, synthetic test boards. See its [README](packages/cli/README.md). |
-| [`packages/extension`](packages/extension) | EasyEDA Pro extension (official pro-api-sdk template): reads the board through the API, runs the core and draws a temporary overlay. It also serves read-only `mcp.rcp.*` return-path checks to AI agents over the `easyeda-mcp-pro` bridge: upgrade Return Path and add `mcp.rcp.*` to `BRIDGE_EXTENSION_RPC_TOPICS`, no second extension. See its [README](packages/extension/README.md). |
+| [`packages/extension`](packages/extension) | EasyEDA Pro extension (official pro-api-sdk template): reads the board through the API, runs the core and draws a temporary overlay. It also serves `mcp.rcp.*` topics over the `easyeda-mcp-pro` bridge so AI agents can inspect nets, configure analysis options, and start/poll HF and DC analyses without editing the PCB: upgrade Return Path and add `mcp.rcp.*` to `BRIDGE_EXTENSION_RPC_TOPICS`, no second extension. See its [README](packages/extension/README.md). |
 
 ```bash
 npm ci

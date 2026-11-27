@@ -2,6 +2,13 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.83] - 2026-11-27
+
+From Balazs: let an AI agent configure and start HF/DC analyses over the `mcp.rcp.*` bridge inside the existing Return Path extension, without modifying PCB copper or design primitives.
+
+- **Read and set analysis configuration (`mcp.rcp.getConfig`, `mcp.rcp.setConfig`).** Exposes the extension's per-project `boardInfo` (signal net kinds, protocols, speeds, drivers, edge/drive classes, DC rail sources, loads, currents, layer notes), default `mcp.rcp.checkNet` rules, HF/DC run defaults (including target net lists), and overlay role styles as plain JSON in extension storage (`sys_Storage`). Supports `merge`, `replace`, and `reset`, rescores stored HF checks immediately when `edge` or `drive` changes, and applies stored rules in `mcp.rcp.checkNet`.
+- **Start, poll, and cancel HF/DC analyses (`mcp.rcp.startAnalysis`, `mcp.rcp.getAnalysis`, `mcp.rcp.cancelAnalysis`).** Reuses the extension's existing `returnpath.run` / HF & DC solver pipeline (same scoring, overlay drawing, `lastRun`, and panel updates as the UI, with zero dialogs). Supports single HF nets, small HF batches (up to 10 nets per call), and DC rails. Waits up to `waitMs` (default 5 s) and returns either the finished result immediately or a pollable `running` handle (`jobId`, `pollTopic: "mcp.rcp.getAnalysis"`). Retrying with the same `requestId` is idempotent, and all replies stay strictly plain JSON `{ ok, data | error }` below 240 KiB.
+
 ## [0.1.82] - 2026-11-27
 
 From Balazs: one extension only. The `mcp.rcp.*` bridge commands now live in the existing Return Path extension, and the separate `mcp-rcp` extension is gone.

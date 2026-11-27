@@ -1,6 +1,7 @@
 import { netKey } from '@returnpath/core';
 import extensionConfig from '../../extension.json' with { type: 'json' };
 import { checkNetGeometry, summarizeFindings } from './checker.js';
+import { getEffectiveCheckRules, getRcpConfig, setRcpConfig } from './config.js';
 import {
   clearBoardCache,
   readBoardForCheck,
@@ -9,16 +10,29 @@ import {
   requireFocusedPcb,
   snapshotToCheckInput,
 } from './eda-reader.js';
+import {
+  cancelAnalysisJob,
+  getActiveJobSummary,
+  getAnalysisJob,
+  resetJobState,
+  startAnalysisJob,
+} from './jobs.js';
 import { clearFindingMarkers, showFindingMarkers } from './markers.js';
 import {
   DEFAULT_CHECK_RULES,
+  type AnalysisJobReplyData,
+  type CancelAnalysisReplyData,
   type CheckNetReplyData,
   type CheckNetRequest,
   type ClearMarkersReplyData,
   type InfoReplyData,
+  type ListAnalysisJobsReplyData,
   type ListNetsReplyData,
   type ListNetsRequest,
+  type RcpConfigData,
+  type RcpHost,
   type ServiceEnvelope,
+  type SetConfigReplyData,
   type ShowFindingsReplyData,
   type ShowFindingsRequest,
 } from './types.js';
@@ -32,6 +46,11 @@ export const RCP_TOPICS = [
   'mcp.rcp.checkNet',
   'mcp.rcp.showFindings',
   'mcp.rcp.clearMarkers',
+  'mcp.rcp.getConfig',
+  'mcp.rcp.setConfig',
+  'mcp.rcp.startAnalysis',
+  'mcp.rcp.getAnalysis',
+  'mcp.rcp.cancelAnalysis',
 ] as const;
 
 export type RcpTopic = (typeof RCP_TOPICS)[number];
@@ -44,6 +63,7 @@ const MAX_LIST_LIMIT = 200;
 let registeredTopics: string[] = [];
 let registeredAt: string | null = null;
 let registeredBus: unknown = null;
+let currentHost: RcpHost | undefined;
 
 function utf8ByteLength(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
@@ -92,6 +112,34 @@ function enforceReplyBudget<T extends Record<string, unknown>>(
   }
 
   throw new Error(`Reply exceeded the ${Math.floor(MAX_REPLY_BYTES / 1024)} KiB payload budget.`);
+}
+
+function enforceConfigBudget(data: RcpConfigData): RcpConfigData {
+  const plain = toPlainJson(data);
+  if (utf8ByteLength({ ok: true, data: plain }) <= MAX_REPLY_BYTES) {
+    return plain;
+  }
+  const nets = plain.boardInfo.nets;
+  let lo = 0;
+  let hi = nets.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate: RcpConfigData = {
+      ...plain,
+      boardInfo: { ...plain.boardInfo, nets: nets.slice(0, mid) },
+      truncated: true,
+    };
+    if (utf8ByteLength({ ok: true, data: candidate }) <= MAX_REPLY_BYTES) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return {
+    ...plain,
+    boardInfo: { ...plain.boardInfo, nets: nets.slice(0, lo) },
+    truncated: true,
+  };
 }
 
 async function handleInfo(): Promise<InfoReplyData> {
@@ -152,7 +200,8 @@ async function handleCheckNet(message: unknown): Promise<CheckNetReplyData> {
     throw new Error(`Net "${net}" not found on the focused PCB.`);
   }
 
-  const res = checkNetGeometry(snapshotToCheckInput(snap), resolved, req.rules ?? null);
+  const rules = await getEffectiveCheckRules(req.rules ?? null);
+  const res = checkNetGeometry(snapshotToCheckInput(snap), resolved, rules);
   const payload: CheckNetReplyData = {
     net: res.net,
     unit: 'mm',
@@ -184,6 +233,37 @@ async function handleClearMarkers(): Promise<ClearMarkersReplyData> {
   return clearFindingMarkers();
 }
 
+async function handleGetConfig(): Promise<RcpConfigData> {
+  const cfg = await getRcpConfig(currentHost, getActiveJobSummary());
+  return enforceConfigBudget(cfg);
+}
+
+async function handleSetConfig(message: unknown): Promise<SetConfigReplyData> {
+  const reply = await setRcpConfig(message, currentHost, getActiveJobSummary());
+  const plain = toPlainJson(reply);
+  if (utf8ByteLength({ ok: true, data: plain }) <= MAX_REPLY_BYTES) {
+    return plain;
+  }
+  return {
+    ...plain,
+    config: enforceConfigBudget(plain.config),
+  };
+}
+
+async function handleStartAnalysis(message: unknown): Promise<AnalysisJobReplyData> {
+  return startAnalysisJob(message, currentHost, MAX_REPLY_BYTES);
+}
+
+async function handleGetAnalysis(
+  message: unknown,
+): Promise<AnalysisJobReplyData | ListAnalysisJobsReplyData> {
+  return getAnalysisJob(message, MAX_REPLY_BYTES);
+}
+
+function handleCancelAnalysis(message: unknown): CancelAnalysisReplyData {
+  return cancelAnalysisJob(message);
+}
+
 function serve<T>(topic: RcpTopic, handler: (message: unknown) => Promise<T> | T): void {
   eda.sys_MessageBus.rpcServicePublic(topic, async (message: unknown): Promise<ServiceEnvelope<T>> => {
     try {
@@ -207,11 +287,17 @@ function serve<T>(topic: RcpTopic, handler: (message: unknown) => Promise<T> | T
 }
 
 /** Registers the mcp.rcp.* services once per editor message-bus object; a new editor session registers again. */
-export function registerRcpServices(): void {
+export function registerRcpServices(host?: RcpHost): void {
+  if (host !== undefined) {
+    currentHost = host;
+  }
   const bus = eda.sys_MessageBus;
   if (registeredAt && registeredBus === bus) return;
   if (typeof bus?.rpcServicePublic !== 'function') {
     throw new Error('eda.sys_MessageBus.rpcServicePublic is not available in this EasyEDA Pro version.');
+  }
+  if (registeredBus !== bus) {
+    resetJobState();
   }
   registeredBus = bus;
   registeredTopics = [];
@@ -220,6 +306,11 @@ export function registerRcpServices(): void {
   serve('mcp.rcp.checkNet', handleCheckNet);
   serve('mcp.rcp.showFindings', handleShowFindings);
   serve('mcp.rcp.clearMarkers', handleClearMarkers);
+  serve('mcp.rcp.getConfig', handleGetConfig);
+  serve('mcp.rcp.setConfig', handleSetConfig);
+  serve('mcp.rcp.startAnalysis', handleStartAnalysis);
+  serve('mcp.rcp.getAnalysis', handleGetAnalysis);
+  serve('mcp.rcp.cancelAnalysis', handleCancelAnalysis);
   registeredAt = new Date().toISOString();
 }
 
@@ -237,10 +328,12 @@ export function getServiceStatus(): {
   };
 }
 
-/** Test helper to reset module-level registration and board cache between test cases. */
+/** Test helper to reset module-level registration, job history, and board cache between test cases. */
 export function resetRcpServiceState(): void {
   registeredTopics = [];
   registeredAt = null;
   registeredBus = null;
+  currentHost = undefined;
   clearBoardCache();
+  resetJobState();
 }
