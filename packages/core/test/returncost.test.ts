@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { analyzeNet, difference, dist, distPointSeg, pointInPaths, rect, strokePath, type Board, type Pad, type Path, type Track } from '../src/index.js';
+import { analyzeNet, difference, dist, distPointSeg, pointInPaths, rect, strokePath, type Board, type Pad, type Path, type Pt, type Track } from '../src/index.js';
+import { collapseTightHairpins, HAIRPIN_SPAN_MM } from '../src/returncost.js';
 
 // Two-layer, h = 1.6 mm. The return is the least loop area, so it follows the trace instead of
 // shortcutting, snaps a small gap back onto the trace, and does not change layer through a via
@@ -61,6 +62,68 @@ test('the return follows a U instead of cutting across its mouth', () => {
   const len = an.returnPath.length;
   assert.ok(len > 30, `the long way round, not the 26 mm shortcut: ${len.toFixed(1)} mm`);
   assert.ok(an.returnPath.traces.every((t) => t.layer === BOT), 'on the ground pour under the trace');
+});
+
+/** True when a polyline reverses heading within `spanMm` of path length. */
+function hasTightHairpin(pts: Pt[], spanMm = HAIRPIN_SPAN_MM): boolean {
+  const reverse = -0.5;
+  const step = (a: Pt, b: Pt) => {
+    const L = dist(a, b);
+    return L > 1e-12 ? { x: (b.x - a.x) / L, y: (b.y - a.y) / L } : null;
+  };
+  for (let i = 0; i < pts.length - 1; i++) {
+    const hi = step(pts[i], pts[i + 1]);
+    if (!hi) continue;
+    let arc = 0;
+    for (let j = i + 1; j < pts.length - 1; j++) {
+      arc += dist(pts[j], pts[j + 1]);
+      if (arc > spanMm) break;
+      if (j < i + 2) continue;
+      const hj = step(pts[j], pts[j + 1]);
+      if (hj && hi.x * hj.x + hi.y * hj.y <= reverse) return true;
+    }
+  }
+  return false;
+}
+
+test('collapseTightHairpins removes a 180° spur under 25 mil', () => {
+  // Go east, hairpin within ~20 mil, go west a touch, then continue east — different cells in vs out.
+  const mil = 0.0254;
+  const hairpin: Pt[] = [
+    { x: 0, y: 0 },
+    { x: 5, y: 0 },
+    { x: 5.1, y: 0 },
+    { x: 5.1, y: 10 * mil },
+    { x: 5.0, y: 10 * mil },
+    { x: 4.9, y: 10 * mil },
+    { x: 4.9, y: 0 },
+    { x: 5.2, y: 0 },
+    { x: 10, y: 0 },
+  ];
+  assert.ok(hasTightHairpin(hairpin), 'fixture itself is a tight hairpin');
+  const out = collapseTightHairpins(hairpin);
+  assert.ok(!hasTightHairpin(out), 'collapsed path has no tight 180°');
+  assert.ok(out[0].x === 0 && out[out.length - 1].x === 10, 'ends preserved');
+  assert.ok(out.length < hairpin.length, 'points were dropped');
+});
+
+test('collapseTightHairpins keeps a 90° corner and a large U', () => {
+  const corner: Pt[] = [
+    { x: 0, y: 0 },
+    { x: 5, y: 0 },
+    { x: 5, y: 5 },
+  ];
+  assert.equal(collapseTightHairpins(corner).length, corner.length, '90° corner kept');
+  const bigU: Pt[] = [
+    { x: 0, y: 0 },
+    { x: 0, y: 10 },
+    { x: 10, y: 10 },
+    { x: 10, y: 0 },
+    { x: 20, y: 0 },
+  ];
+  const kept = collapseTightHairpins(bigU);
+  assert.ok(kept.some((p) => p.y > 9), 'large U top kept');
+  assert.equal(kept.length, bigU.length, 'large U not collapsed');
 });
 
 test('a small gap is drawn back on the trace with a minor-cut mark', () => {

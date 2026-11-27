@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.78] - 2026-11-27
+
+From Balazs: on MISO the return drew a tight 180° hairpin with no via there. Current does not reverse like that.
+
+- **No tight 180° hairpins.** After dropping same-cell pocket loops, any fold that reverses heading inside a span of 25 mil is collapsed. A 90° corner and a large U of the signal are kept; a dead-end spur the search entered and left through different cells is not.
+
 ## [0.1.77] - 2026-11-27
 
 Added a non-interactive public message-bus API so other EasyEDA Pro extensions (such as an MCP bridge) can run HF and DC return-path checks without panel or wizard dialogs.
