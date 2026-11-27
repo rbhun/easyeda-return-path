@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.79] - 2026-11-27
+
+From Balazs: grade the return the solver already drew, and score it.
+
+- **A check on the drawn return.** It does not search for a path. For each net it measures how far the drawn return sits from the signal, the via hops, and the driver closure, then turns that into a score from 0 to 100. An excursion is a stretch that leaves the trace and comes back: under h² it is a small tick on the trace, from h² to 9h² a yellow hatch, and at 9h² a red one. A via more than 3h from the signal is a missing return via. The path from the driver pin to that part's ground is graded the same way, and a push-pull driver is also graded through its decap. A stretch outside ±h that never rejoins the trace is drawn magenta. Where two or more nets detour through copper narrower than h, that spot is a choke point.
+- **The score.** Each net starts at 100 and loses points for its weighted loop area, noted and flagged vias and closures, and each choke it shares. 90 and above is Good, 70 to 89 Fair, below 70 Needs work. The board score is the average weighted by edge class (fast 3, normal 1, slow 0.5), with the three worst nets named beside it. Each deduction says where the points went and one line on what to change. Clicking a line zooms to it.
+- **Edge class and drive are per net.** They are guessed from the name (a clock is fast, a reset or UART or I2C is slow, I2C and IRQ are open-drain) and can be changed in the panel or in the board-info CSV (`edge`, `drive`). Changing them rescores the stored check; the path is not solved again. A net driven from either end is solved once from each end and keeps the worse score.
+
 ## [0.1.78] - 2026-11-27
 
 From Balazs: on MISO the return drew a tight 180° hairpin with no via there. Current does not reverse like that.

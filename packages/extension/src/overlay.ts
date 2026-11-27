@@ -1,6 +1,6 @@
 // Draws an analysis as temporary indicator markers: nothing is stored in the document or the
 // undo history (design decision D6). Markers have no fill, so regions are drawn as outlines.
-import { dist, lerp, union, type Analysis, type Board, type Path, type Paths, type Pt } from '@returnpath/core';
+import { dist, lerp, union, type Analysis, type Board, type NetCheck, type Path, type Paths, type Pt } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { MIL } from './eda-board';
 import { log, readStored, writeStored } from './runner';
@@ -30,7 +30,7 @@ const RED_BELOW = 0.5;
 const MAX_PER_CALL = 4000;
 
 /** The overlay last drawn, kept so it can be hidden and shown again without a new analysis. */
-let shown: { groups: MarkerGroup[]; visible: boolean } | undefined;
+let shown: { groups: MarkerGroup[]; visible: boolean; net?: string } | undefined;
 
 /**
  * Stored while markers are on the canvas, as the version that drew them. Markers outlive the
@@ -66,13 +66,18 @@ async function paint(groups: MarkerGroup[]): Promise<number> {
 
 /** Replaces the overlay with these groups. Returns the number of markers drawn. */
 export async function drawGroups(groups: MarkerGroup[]): Promise<number> {
-	shown = { groups, visible: true };
+	shown = { groups, visible: true, net: shown?.net };
 	return paint(groups);
 }
 
 /** The kept overlay, for handing to another instance of the extension. */
 export function overlayGroups(): { groups: MarkerGroup[]; visible: boolean } | undefined {
 	return shown && { groups: shown.groups, visible: shown.visible };
+}
+
+/** The net whose return is on the canvas, when this instance drew it. */
+export function overlayNet(): string | undefined {
+	return shown?.net;
 }
 
 /** Takes over an overlay another instance drew; the markers on the canvas are already as given. */
@@ -189,6 +194,74 @@ export interface HfDrawn {
 	forwardLayers: string[];
 }
 
+const CHECK_ROLES: Role[] = ['checkNote', 'checkFlag', 'checkError', 'checkMark'];
+
+/** Hatch, ticks and circles for one net's check. Marker text is not available, so the words live in the panel. */
+function checkMarkers(check: NetCheck, segs: (path: Path, closed: boolean) => Marker[], dot: (p: Pt, rMm: number) => Marker): MarkerGroup[] {
+	const note: Marker[] = [];
+	const flag: Marker[] = [];
+	const err: Marker[] = [];
+	const mark: Marker[] = [];
+	for (const e of check.excursions) {
+		if (e.grade === 'minor') {
+			if (e.tick)
+				mark.push(...segs(e.tick, false));
+			continue;
+		}
+		const g = e.grade === 'flag' ? flag : note;
+		g.push(...segs(e.returnPts, false), ...segs(e.forwardPts, false));
+		for (const [a, b] of e.hatch)
+			g.push(...segs([a, b], false));
+	}
+	for (const e of check.errors)
+		err.push(...segs(e.pts, false));
+	for (const h of check.hops)
+		if (h.grade !== 'ok')
+			mark.push(dot(h.at, h.grade === 'flag' ? 0.7 : 0.45));
+	for (const c of check.closures) {
+		if (c.grade === 'ok' || (c.kind === 'vdd' && check.drive === 'open-drain'))
+			continue;
+		mark.push(dot(c.at, c.grade === 'flag' ? 0.7 : 0.45));
+	}
+	for (const k of check.chokes)
+		mark.push(dot(k.at, 0.6 + 0.15 * k.nets.length));
+	const groups: MarkerGroup[] = [];
+	if (note.length)
+		groups.push({ role: 'checkNote', markers: note });
+	if (flag.length)
+		groups.push({ role: 'checkFlag', markers: flag });
+	if (err.length)
+		groups.push({ role: 'checkError', markers: err });
+	if (mark.length)
+		groups.push({ role: 'checkMark', markers: mark });
+	return groups;
+}
+
+/** Moves the editor to a point, then redraws the overlay so the zoom marker does not stay behind. */
+export async function zoomTo(at: Pt): Promise<void> {
+	const { dot } = await markerKit();
+	const { colour, width } = roleColour('checkMark');
+	await eda.dmt_EditorControl.generateIndicatorMarkers([dot(at, 0.5)], colour, width, true);
+	if (shown?.visible)
+		await paint(shown.groups);
+	else
+		await eda.dmt_EditorControl.removeIndicatorMarkers();
+}
+
+/** Swaps the check markers of the net on the canvas. The return line itself is unchanged. */
+export async function replaceCheckMarkers(check: NetCheck): Promise<void> {
+	if (!shown || shown.net !== check.net)
+		return;
+	const { segs, dot } = await markerKit();
+	const base = shown.groups.filter(g => !CHECK_ROLES.includes(g.role));
+	const extra = checkMarkers(check, segs, dot);
+	const gapAt = base.findIndex(g => g.role === 'gap');
+	const groups = gapAt < 0 ? [...base, ...extra] : [...base.slice(0, gapAt), ...extra, ...base.slice(gapAt)];
+	shown = { ...shown, groups };
+	if (shown.visible)
+		await paint(groups);
+}
+
 /**
  * Replaces the overlay with the given analysis: the return path in a colour per signal layer, the
  * signal trace and the vias it passes through;
@@ -196,7 +269,7 @@ export interface HfDrawn {
  * short of reference copper; the ±h outline where half the return current flows, and the ±3h band
  * edges (hidden by default). Colours and widths come from the style (style.ts).
  */
-export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>): Promise<HfDrawn> {
+export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>, check?: NetCheck): Promise<HfDrawn> {
 	const { segs, outline, dot, dashed } = await markerKit();
 	const layerName = (id: number) => board.stackup.copper.find(l => l.id === id)?.name ?? `L${id}`;
 
@@ -231,7 +304,7 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 	// when it runs in the copper of another layer, beside it in a pour on the same layer.
 	const returnLayers: string[] = [];
 	const returns = new Map<number, MarkerGroup>();
-	for (const t of an.returnPath.traces) {
+	for (const t of (check ? check.kept : an.returnPath.traces)) {
 		let g = returns.get(t.layer);
 		if (!g) {
 			const { role, inner } = returnRole(board, t.layer);
@@ -244,8 +317,10 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 		hop.push(...dashed(j.from, j.to), dot(j.to, 0.4));
 	// A minor cut is a small mark where the trace crosses other copper and the return is drawn straight
 	// across it. A detour whose loop area is at least 9h² is a larger red mark.
-	for (const m of an.returnPath.marks ?? [])
-		gap.push(dot(m.at, m.kind === 'flagged' ? 0.9 : 0.3));
+	if (!check)
+		for (const m of an.returnPath.marks ?? [])
+			gap.push(dot(m.at, m.kind === 'flagged' ? 0.9 : 0.3));
+	const checks = check ? checkMarkers(check, segs, dot) : [];
 	// The signal itself in the colour of its layer, and the vias it passes through from one layer to another.
 	const top = board.stackup.copper[0]?.id;
 	const forwardTop: Marker[] = [];
@@ -262,7 +337,10 @@ export async function drawAnalysis(an: Analysis, board: Pick<Board, 'stackup'>):
 		if (v.transitions.length)
 			forwardTop.push(dot(v.via.at, v.via.diameter / 2 + 0.15));
 	}
-	const ordered = [groups.get('band')!, groups.get('half')!, ...returns.values(), groups.get('gap')!, { role: 'forwardOther' as Role, markers: forwardOther }, { role: 'forwardTop' as Role, markers: forwardTop }, groups.get('hop')!];
-
+	const ordered = [groups.get('band')!, groups.get('half')!, ...returns.values(), ...checks, groups.get('gap')!, { role: 'forwardOther' as Role, markers: forwardOther }, { role: 'forwardTop' as Role, markers: forwardTop }, groups.get('hop')!];
+	if (shown)
+		shown.net = an.net;
+	else
+		shown = { groups: [], visible: true, net: an.net };
 	return { markers: await drawGroups(ordered), returnLayers, forwardLayers };
 }

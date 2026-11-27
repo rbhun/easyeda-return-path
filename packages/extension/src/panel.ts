@@ -11,8 +11,9 @@
 // result and overlay change is also pushed to a mailbox topic, where the bus keeps it until it is
 // pulled. The panel's page pulls the mailbox and hands each snapshot to the panel's owner, which takes
 // over the result, the last run and the overlay drawing.
+import type { CheckView } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
-import { adoptOverlay, forgetOverlay, leftoverOverlay, overlayGroups, overlayState, restyleOverlay, type MarkerGroup } from './overlay';
+import { adoptOverlay, forgetOverlay, leftoverOverlay, overlayGroups, overlayState, restyleOverlay, zoomTo, type MarkerGroup } from './overlay';
 import { after, log, toast } from './runner';
 import { currentStyle, DEFAULT_STYLE, INNER_CYCLE, PALETTE, ROLE_LABELS, ROLE_USE, ROLES, saveStyle, setSharedStyle, type Role, type RoleStyle } from './style';
 import { t } from './i18n';
@@ -35,6 +36,9 @@ export type PanelCommand = { to?: string } & (
 	| { cmd: 'style'; style: Partial<Record<Role, Partial<RoleStyle>>> }
 	| { cmd: 'resetStyle' }
 	| { cmd: 'adopt'; snapshot: Snapshot }
+	| { cmd: 'zoom'; at: { x: number; y: number } }
+	| { cmd: 'netprop'; net: string; edge?: 'fast' | 'normal' | 'slow'; drive?: 'push-pull' | 'open-drain' }
+	| { cmd: 'redrawCheck'; net: string }
 );
 
 export interface PanelHost {
@@ -44,10 +48,14 @@ export interface PanelHost {
 	lastRunLabel: () => string | undefined;
 	/** Kind of the last run, so the panel lists only the line kinds it draws. */
 	lastRunKind?: () => 'hf' | 'dc' | undefined;
+	/** Saves an edge class or drive type and rescores the stored check. The path is not re-solved. */
+	setNetProp?: (m: { net: string; edge?: 'fast' | 'normal' | 'slow'; drive?: 'push-pull' | 'open-drain' }) => Promise<void>;
+	/** Redraws the check marks of the net on this instance's overlay. */
+	redrawNet?: (net: string) => Promise<void>;
 }
 
 interface Shared {
-	result: { title: string; lines: string[]; at: string } | undefined;
+	result: { title: string; lines: string[]; at: string; score?: CheckView } | undefined;
 	lastRun: unknown;
 	overlay: 'none' | 'shown' | 'hidden';
 	overlayOwner: string | undefined;
@@ -294,7 +302,7 @@ function handler(m: PanelCommand): string | undefined {
 	if (shared.panelOwner !== me)
 		return undefined;
 	// Clear stays here: removing the markers works from any instance, and the owner may be gone.
-	if ((m.cmd === 'toggle' || m.cmd === 'restyle') && shared.overlayOwner)
+	if ((m.cmd === 'toggle' || m.cmd === 'restyle' || m.cmd === 'zoom' || m.cmd === 'redrawCheck') && shared.overlayOwner)
 		return shared.overlayOwner;
 	if (m.cmd === 'cancel' && shared.busyOwner)
 		return shared.busyOwner;
@@ -341,8 +349,21 @@ async function onCommand(m: PanelCommand): Promise<void> {
 		publishState();
 		return;
 	}
+	if (m.cmd === 'zoom') {
+		await zoomTo(m.at);
+		return;
+	}
+	if (m.cmd === 'redrawCheck') {
+		await host?.redrawNet?.(m.net);
+		return;
+	}
 	if (shared.busy && m.cmd !== 'cancel') {
 		toast(t('Busy: ${1}', shared.busy));
+		return;
+	}
+	if (m.cmd === 'netprop') {
+		await host?.setNetProp?.(m);
+		publishState();
 		return;
 	}
 	const labels: Record<string, string> = { hf: 'HF check', dc: 'DC check', trace: 'Selected trace', rerun: 'Rerun', toggle: '', clear: '', cancel: '' };
@@ -382,6 +403,14 @@ function expireBusy(owner: string): void {
 }
 
 /** Hands Hide/Show or Clear from a menu to the instance that drew the overlay; false when this one holds it or none does. */
+/** Asks the instance that drew the overlay to redraw one net's check marks. False when this instance holds the overlay. */
+export function forwardCheckRedraw(net: string): boolean {
+	if (overlayState() !== 'none' || !shared.overlayOwner || shared.overlayOwner === me || !subscribed)
+		return false;
+	publish(TOPIC_COMMAND, { cmd: 'redrawCheck', net, to: shared.overlayOwner });
+	return true;
+}
+
 export function forwardOverlayCommand(cmd: 'toggle' | 'clear'): boolean {
 	if (overlayState() !== 'none' || !shared.overlayOwner || shared.overlayOwner === me || !subscribed)
 		return false;
@@ -486,7 +515,7 @@ export async function openPanel(): Promise<boolean> {
 	share({ pageConnected: false, panelOwner: me });
 	let opened: unknown;
 	try {
-		opened = await eda.sys_IFrame.openIFrame(PANEL_HTML, 400, 660, PANEL_ID, {
+		opened = await eda.sys_IFrame.openIFrame(PANEL_HTML, 420, 780, PANEL_ID, {
 			title: t('Return Path'),
 			minimizeButton: true,
 			maximizeButton: false,
@@ -522,8 +551,8 @@ export async function panelIsOpen(): Promise<boolean> {
 }
 
 /** Shows a result in the panel, opening it unless the user closed it (or opts.open is false); there is no result dialog. */
-export async function report(title: string, lines: string[], opts: { open?: boolean; toast?: boolean } = {}): Promise<void> {
-	share({ result: { title, lines, at: new Date().toLocaleTimeString() } });
+export async function report(title: string, lines: string[], opts: { open?: boolean; toast?: boolean; score?: CheckView } = {}): Promise<void> {
+	share({ result: { title, lines, at: new Date().toLocaleTimeString(), ...(opts.score ? { score: opts.score } : {}) } });
 	publishState();
 	pushSnapshot();
 	if (opts.open !== false)

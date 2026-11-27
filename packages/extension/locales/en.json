@@ -137,5 +137,10 @@
 	"${1} (through ${2})": "${1} (through ${2})",
 	"Return Path panel: ${1} failed: ${2}. Details are in the log.": "Return Path panel: ${1} failed: ${2}. Details are in the log.",
 	"Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer. White lines ±h from the trace bound half the return current in the plane under it. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).": "Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer. White lines ±h from the trace bound half the return current in the plane under it. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).",
-	"50% of the return current (±h around the trace)": "50% of the return current (±h around the trace)"
+	"50% of the return current (±h around the trace)": "50% of the return current (±h around the trace)",
+	"Noted return loop (between h² and 9h²)": "Noted return loop (between h² and 9h²)",
+	"Flagged return loop (9h² or more)": "Flagged return loop (9h² or more)",
+	"Solver error (outside ±h, not an excursion)": "Solver error (outside ±h, not an excursion)",
+	"Minor cuts, vias, closure and choke points": "Minor cuts, vias, closure and choke points",
+	"Check marks: yellow hatch is a noted loop, red a flagged loop, magenta a stretch left outside ±h. White ticks and circles are minor cuts, return vias, the driver closure and choke points.": "Check marks: yellow hatch is a noted loop, red a flagged loop, magenta a stretch left outside ±h. White ticks and circles are minor cuts, return vias, the driver closure and choke points."
 }

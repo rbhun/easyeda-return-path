@@ -6,6 +6,7 @@ export * from './refcopper.js';
 export * from './detour.js';
 export * from './analyze.js';
 export * from './returnpath.js';
+export * from './returncheck.js';
 export * from './returnflow.js';
 export * from './inductance.js';
 export * from './driver.js';
