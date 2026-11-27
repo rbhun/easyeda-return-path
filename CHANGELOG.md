@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.77] - 2026-11-27
+
+Added a non-interactive public message-bus API so other EasyEDA Pro extensions (such as an MCP bridge) can run HF and DC return-path checks without panel or wizard dialogs.
+
+- **Public message-bus runner (`returnpath.run` → `returnpath.result`).** Listens on `eda.sys_MessageBus` via `subscribePublic`, `pullPublic`, and `rpcServicePublic` on topic `returnpath.run`. Accepts a JSON object (or JSON string) `{ kind: "hf" | "dc", requestId?, replyTopic?, draw?, timeoutMs? }` with HF fields (`net`, optional `speed`/`speedHz`, `drivers`/`source`) or DC fields (`rail` or `net`, optional `railNets`, `ground`, `source`, `loads`, `currents`, `focus`). Replies on `replyTopic` (default `returnpath.result`, via both `publishPublic` and `pushPublic`, or directly as the `rpcCallPublic` return value) with `{ requestId?, ok, version, kind?, durationMs, summary?, lines?, findings?, hf?, dc?, logPath?, resultsPath?, error? }`. Runs the same HF/DC analysis and logging pipeline as the panel, skips wizard/modal dialogs, deduplicates broadcasts across multiple extension instances, and returns clear errors when no PCB is focused, another analysis is busy, arguments are missing/invalid, or the solve fails.
+
 ## [0.1.76] - 2026-11-27
 
 From Balazs: on CS, the drawn return crossed a via. Current cannot travel through the hole.

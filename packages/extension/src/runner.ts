@@ -337,7 +337,7 @@ export function recordResult(key: string, value: unknown): void {
 		currentRun.data[key] = value;
 }
 
-function failRun(status: RunStatus, message: string, stack?: string): void {
+export function failRun(status: RunStatus, message: string, stack?: string): void {
 	if (!currentRun)
 		return;
 	currentRun.status = status;

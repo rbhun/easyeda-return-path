@@ -411,6 +411,17 @@ export function shareLastRun(run: unknown): void {
 	share({ lastRun: run });
 }
 
+/** True when any instance currently reports an analysis running. */
+export function isPanelBusy(): boolean {
+	return !!shared.busy;
+}
+
+/** Marks an external (e.g. message-bus) run as busy in the panel, or clears it when undefined. */
+export function setPanelBusy(label: string | undefined): void {
+	share({ busy: label, busyOwner: label ? me : undefined });
+	publishState();
+}
+
 /** The overlay as this instance holds it, or as the instance that drew it reported. */
 function overlayNow(): Shared['overlay'] {
 	const local = overlayState();
@@ -510,13 +521,16 @@ export async function panelIsOpen(): Promise<boolean> {
 	}
 }
 
-/** Shows a result in the panel, opening it unless the user closed it; there is no result dialog. */
-export async function report(title: string, lines: string[]): Promise<void> {
+/** Shows a result in the panel, opening it unless the user closed it (or opts.open is false); there is no result dialog. */
+export async function report(title: string, lines: string[], opts: { open?: boolean; toast?: boolean } = {}): Promise<void> {
 	share({ result: { title, lines, at: new Date().toLocaleTimeString() } });
 	publishState();
 	pushSnapshot();
-	await autoOpenPanel();
-	toast(await panelIsOpen()
-		? t('${1}: done; the result is in the Return Path panel.', title)
-		: t('${1}: done; open the Return Path panel to see the result.', title));
+	if (opts.open !== false)
+		await autoOpenPanel();
+	if (opts.toast !== false) {
+		toast(await panelIsOpen()
+			? t('${1}: done; the result is in the Return Path panel.', title)
+			: t('${1}: done; open the Return Path panel to see the result.', title));
+	}
 }
