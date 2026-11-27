@@ -3,9 +3,10 @@
  * `headerMenus[*].menuItems[*].registerFn` in extension.json.
  * API guide: https://prodocs.easyeda.com/en/api/guide/
  */
-import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, hfApplicability, hfCandidates, netInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, railLabel, railNetsOf, resolveDcInput, resolveNet, sameNet, type Board, type BoardInfo, type DcSetupInput, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
+import { analyzeNetSteps, buildDcSetup, classifySignal, CLOCK_KIND, formatHz, GENERIC, guessDrivers, guessRailGroup, hfApplicability, hfCandidates, netInfo, railInfo, signalKindForProtocol, solveDcSteps, summariseSignal, traceStreamlines, uniqueNets, withNet, DRAWN_STREAMS, FOCUS_STREAMS, focusInput, guessRails, padsOf, railLabel, railNetsOf, resolveDcInput, resolveNet, sameNet, type Board, type BoardInfo, type DcSetupInput, type Finding, type NetInfo, type Pad, type SignalKind, type Tick } from '@returnpath/core';
 import extensionConfig from '../extension.json' with { type: 'json' };
 import { boardInfo } from './board-info';
+import { initPublicBus, type ParsedDcRequest, type ParsedHfRequest, type PublicDcResult, type PublicHfResult, type PublicRunExecutor } from './bus';
 import { carriesCurrent, drawDc } from './dc-overlay';
 import { addPinNames, readBoard, selectedNet, selectedPart, type SelectedPart } from './eda-board';
 import { clearOverlay, drawAnalysis, leftoverOverlay, overlayState, toggleOverlay } from './overlay';
@@ -22,7 +23,12 @@ const DC_BUDGET_MS = 120_000;
 // eslint-disable-next-line unused-imports/no-unused-vars
 export function activate(status?: 'onStartupFinished', arg?: string): void {
 	logStartup();
+	ensureInitialized();
+}
+
+function ensureInitialized(): void {
 	initPanel(panelHost);
+	initPublicBus(publicExecutor);
 }
 
 export function about(): void {
@@ -239,17 +245,34 @@ async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: num
 			await bi.save(withNet(info, net, { driver: chosen.answered }), `${net}: driver`);
 	}
 	await ask.close();
-	await remember({ kind: 'hf', net, drivers, hz: opts.hz });
+	const out = await executeHfAnalysis(board, net, { drivers, hz: opts.hz, info, draw: true, timeBudgetMs: HF_BUDGET_MS, rememberRun: true });
+	await report(title, out.lines);
+}
+
+/** Shared non-interactive HF execution used by both the panel/wizard flow and the public message bus. */
+async function executeHfAnalysis(
+	board: Board,
+	net: string,
+	opts: { drivers: string[]; hz?: number; info: BoardInfo; draw: boolean; timeBudgetMs: number; rememberRun: boolean },
+): Promise<{ summary: string; lines: string[]; findings: Finding[]; hf: PublicHfResult }> {
+	const title = t('Return path');
+	const known = netInfo(opts.info, net);
+	const { drivers } = opts;
+	if (opts.rememberRun)
+		await remember({ kind: 'hf', net, drivers, hz: opts.hz });
 	const ownTracks = board.tracks.filter(tr => tr.net === net).length;
 	log(`${net}: ${ownTracks} track segments, ${board.vias.filter(v => v.net === net).length} vias, driver ${drivers.join(', ') || 'none'}`);
-	const analysis = await runSteps(analyzeNetSteps(board, net, { drivers }), { title, timeBudgetMs: HF_BUDGET_MS, percent: hfPercent() });
+	const analysis = await runSteps(analyzeNetSteps(board, net, { drivers }), { title, timeBudgetMs: opts.timeBudgetMs, percent: hfPercent() });
 	log(`${net}: ${Object.entries(analysis.stats).map(([k, v]) => `${k}=${+Number(v).toFixed(3)}`).join(' ')}`);
-	const drawn = await timed('draw markers', () => drawAnalysis(analysis, board), d => `${d.markers} markers`);
+	const drawn = opts.draw
+		? await timed('draw markers', () => drawAnalysis(analysis, board), d => `${d.markers} markers`)
+		: { markers: 0, forwardLayers: [] as string[], returnLayers: [] as string[] };
 	const ownLength = board.tracks.filter(tr => tr.net === net).reduce((sum, tr) => sum + Math.hypot(tr.b.x - tr.a.x, tr.b.y - tr.a.y), 0);
 	const kind = kindOf(net, classifySignal(net, board.pads.filter(p => p.net === net).map(p => p.pinName)), known) ?? GENERIC;
 	const hz = opts.hz ?? known?.speedHz ?? kind.speeds[kind.dflt].hz;
 	const signal = summariseSignal(net, kind, hz, ownLength);
-	recordResult('signal', { type: kind.type, hz, chosen: !!opts.hz, fromBoardInfo: !opts.hz && !!known?.speedHz, kneeHz: signal.kneeHz, criticalMm: signal.criticalMm, lengthMm: ownLength, transmissionLine: signal.transmissionLine });
+	const signalData = { type: kind.type, hz, kneeHz: signal.kneeHz, criticalMm: signal.criticalMm, lengthMm: ownLength, transmissionLine: signal.transmissionLine };
+	recordResult('signal', { ...signalData, chosen: !!opts.hz, fromBoardInfo: !opts.hz && !!known?.speedHz });
 	const noted = known && [
 		known.kind && t('kind ${1}', known.kind),
 		known.diffPartner && t('diff partner ${1}', known.diffPartner),
@@ -263,15 +286,31 @@ async function hfFor(net: string, ask: Ask, opts: { drivers?: string[]; hz?: num
 		t('${1}: ${2} finding(s), ${3} overlay marker(s).', net, String(analysis.findings.length), String(drawn.markers)),
 		opts.hz || known?.speedHz ? signal.message : `${signal.message} ${t('(The usual speed of this kind of line; HF check asks for the speed.)')}`,
 		noted ? t('Board info: ${1}.', noted) : '',
-		drawn.returnLayers.length
-			? t('Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace\'s own layer. White lines ±h from the trace bound half the return current in the plane under it. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).', drawn.forwardLayers.join(', '), drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name)
-			: t('No return path drawn: the trace has no reference copper.'),
+		opts.draw
+			? drawn.returnLayers.length
+				? t('Current drawn where it flows, in the colour of the copper layer it flows in. Forward (the signal trace): ${1}, with a circle on each via it passes through. Return: ${2}; on the trace where it runs in the copper of another layer, beside it in a pour on the trace\'s own layer. White lines ±h from the trace bound half the return current in the plane under it. Dashed ${3}: hop between layers or into a part (via, decap, bridging cap, IC pin). ${4} over the trace: it crosses a gap, or has less than half the reference copper it needs (smaller shortfalls are listed in the result only).', drawn.forwardLayers.join(', '), drawn.returnLayers.join(', '), roleColour('hop').name, roleColour('gap').name)
+				: t('No return path drawn: the trace has no reference copper.')
+			: '',
 		drivers.length ? t('Driver: ${1}. Its other edge is drawn dashed ${2} from its ground pin through the decap to its supply pin.', drivers.join(', '), roleColour('hop').name) : t('Driver: not chosen, so only the pin at each end closes the loop.'),
 		...analysis.findings.map(f => `[${f.severity}] ${f.message}`),
 		...board.warnings.map(w => `warning: ${w}`),
 	].filter(Boolean);
 	recordResult('report', lines);
-	await report(title, lines);
+	return {
+		summary: lines[0],
+		lines,
+		findings: analysis.findings,
+		hf: {
+			net,
+			drivers,
+			signal: signalData,
+			stats: analysis.stats,
+			forwardLayers: drawn.forwardLayers,
+			returnLayers: drawn.returnLayers,
+			markers: drawn.markers,
+			warnings: [...board.warnings],
+		},
+	};
 }
 
 /**
@@ -410,12 +449,25 @@ async function focusOn(sel: SelectedPart, ask: Ask, command: string): Promise<vo
 
 /** `focus`: the one part whose current alone is solved and drawn (the last run stays as it was). */
 async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise<void> {
+	const out = await executeDcAnalysis(board, input, { focus, draw: true, timeBudgetMs: DC_BUDGET_MS });
+	await report(t('DC return current'), out.lines);
+}
+
+/** Shared non-interactive DC execution used by both the panel/wizard flow and the public message bus. */
+async function executeDcAnalysis(
+	board: Board,
+	input: DcSetupInput,
+	opts: { focus?: string; draw: boolean; timeBudgetMs: number; requireLoads?: boolean },
+): Promise<{ summary: string; lines: string[]; dc: PublicDcResult }> {
 	const title = t('DC return current');
+	const { focus } = opts;
 	input = resolveDcInput(board, input);
 	log(`DC setup: ${JSON.stringify(input)}`);
 	await checkpoint();
 	const setup = buildDcSetup(board, input);
 	const rail = railLabel(setup);
+	if (opts.requireLoads && !setup.loads.length)
+		throw new Error(`No load components found on rail "${rail}". Pass "loads" explicitly.`);
 	log(`DC ${rail}/${setup.ground}: source ${setup.source.designator}, loads ${setup.loads.map(l => `${l.designator}=${l.current} A`).join(', ')}`);
 	const percent = (tick: Tick) => {
 		const f = tick.fraction ?? 0;
@@ -431,7 +483,7 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 		const r = at[tick.phase];
 		return r ? r[0] + r[1] * f : undefined;
 	};
-	const res = await runSteps(solveDcSteps(board, setup), { title, timeBudgetMs: DC_BUDGET_MS, percent });
+	const res = await runSteps(solveDcSteps(board, setup), { title, timeBudgetMs: opts.timeBudgetMs, percent });
 	log(`DC grid ${res.grid.nx}×${res.grid.ny} cells of ${res.grid.cell} mm; ${[res.supply, res.ret].filter(n => !!n).map(n => `${n!.net}: ${n!.nodes} nodes, ${n!.iterations} CG iterations, residual ${n!.residual.toExponential(1)}`).join('; ')}`);
 	for (const n of [res.supply, res.ret]) {
 		if (!n?.unconnected.length)
@@ -440,16 +492,19 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 		const which = n.role === 'supply' ? 'railPads' : 'groundPads';
 		log(`${n.net}: ${n.unconnected.join(', ')} not reached from ${setup.source.designator}; source pads ${pads(setup.source[which])}; load pads ${setup.loads.map(l => `${l.designator}: ${pads(l[which])}`).join('; ')}; pours on ${n.net}: ${board.pours.filter(p => p.net === n.net).map(p => `${p.id} L${p.layer}`).join(', ') || 'none'}`, 'warn');
 	}
-	const streams = await timed('streamlines', async () => ({ supply: traceStreamlines(res.grid, res.supply, focus ? FOCUS_STREAMS : DRAWN_STREAMS), ret: res.ret ? traceStreamlines(res.grid, res.ret, focus ? FOCUS_STREAMS : DRAWN_STREAMS) : [] }), s => `${s.supply.length + s.ret.length} lines`);
-	const drawn = await timed('draw markers', () => drawDc(res, streams), d => `${d.markers} markers`);
+	const streams = opts.draw
+		? await timed('streamlines', async () => ({ supply: traceStreamlines(res.grid, res.supply, focus ? FOCUS_STREAMS : DRAWN_STREAMS), ret: res.ret ? traceStreamlines(res.grid, res.ret, focus ? FOCUS_STREAMS : DRAWN_STREAMS) : [] }), s => `${s.supply.length + s.ret.length} lines`)
+		: { supply: [], ret: [] };
+	const drawn = opts.draw
+		? await timed('draw markers', () => drawDc(res, streams), d => `${d.markers} markers`)
+		: { markers: 0 };
 	const layerName = (id: number) => board.stackup.copper.find(l => l.id === id)?.name ?? `L${id}`;
-	recordResult('dc', {
-		input,
-		...(focus ? { focus } : {}),
+	const dcData: PublicDcResult = {
 		rail: setup.rail,
 		...(setup.railNets && setup.railNets.length > 1 ? { railNets: setup.railNets, bridges: (setup.bridges ?? []).map(b => b.designator) } : {}),
 		ground: setup.ground,
 		source: setup.source.designator,
+		...(focus ? { focus } : {}),
 		loads: setup.loads.map(l => ({ designator: l.designator, current: l.current })),
 		normalised: setup.normalised,
 		grid: { nx: res.grid.nx, ny: res.grid.ny, cellMm: res.grid.cell },
@@ -467,30 +522,36 @@ async function dcFor(board: Board, input: DcSetupInput, focus?: string): Promise
 		streamlines: { supply: streams.supply.length, ret: streams.ret.length },
 		markers: drawn.markers,
 		warnings: [...board.warnings, ...res.warnings],
-	});
+	};
+	recordResult('dc', { input, ...dcData });
 	const vUnit = setup.normalised ? 'mV/A' : 'mV';
 	const jUnit = setup.normalised ? 'A/mm per A' : 'A/mm';
+	const netHeads = [res.supply, res.ret].filter(n => !!n).map((n) => {
+		const head = carriesCurrent(n!)
+			? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
+			: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator);
+		const drops = n!.loadDrops.filter(d => d.drop > 0).sort((a, b) => b.drop - a.drop);
+		const each = drops.length > 1
+			? t('Drop to each load, ${1}: ${2}.', vUnit, drops.map(d => `${d.designator} ${(d.drop * 1000).toFixed(2)}`).join(', '))
+			: '';
+		return { head, each };
+	});
+	const headLine = focus
+		? t('Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.', focus, rail, setup.ground, setup.source.designator)
+		: t('${1} / ${2}: source ${3}, loads ${4}.', rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', '));
 	const lines = [
-		focus
-			? t('Focus on ${1}: only its own current on ${2} / ${3} from ${4} is solved and drawn. Rerun last draws every load again.', focus, rail, setup.ground, setup.source.designator)
-			: t('${1} / ${2}: source ${3}, loads ${4}.', rail, setup.ground, setup.source.designator, setup.loads.map(l => l.designator).join(', ')),
+		headLine,
 		setup.normalised ? (focus ? t('No current given for ${1}: values are per amp of its current.', focus) : t('No load currents given: 1 A total split equally; values are per amp.')) : '',
-		...[res.supply, res.ret].filter(n => !!n).flatMap(n => {
-			const head = carriesCurrent(n!)
-				? t('${1}: drop ${2} ${3}, bottleneck ${4} ${5} on ${6}.', n!.net, (n!.drop * 1000).toFixed(2), vUnit, (n!.bottleneck?.j ?? 0).toFixed(3), jUnit, n!.bottleneck ? layerName(n!.bottleneck.layer) : '-')
-				: t('${1}: no load has a copper path to ${2}; nothing is drawn for it.', n!.net, setup.source.designator);
-			const drops = n!.loadDrops.filter(d => d.drop > 0).sort((a, b) => b.drop - a.drop);
-			const each = drops.length > 1
-				? t('Drop to each load, ${1}: ${2}.', vUnit, drops.map(d => `${d.designator} ${(d.drop * 1000).toFixed(2)}`).join(', '))
-				: '';
-			return [head, each];
-		}),
-		t('Streamlines, in the colour of the copper layer the current flows in: ${1} supply ${2} on ${5} and ${3} on other layers; ${4} return ${6} on ${5} and ${7} on other layers, with a circle where it changes layer.', rail, roleColour('forwardTop').name, roleColour('forwardOther').name, setup.ground, layerName(board.stackup.copper[0].id), roleColour('returnTop').name, roleColour('returnOther').name),
+		...netHeads.flatMap(n => [n.head, n.each]),
+		opts.draw
+			? t('Streamlines, in the colour of the copper layer the current flows in: ${1} supply ${2} on ${5} and ${3} on other layers; ${4} return ${6} on ${5} and ${7} on other layers, with a circle where it changes layer.', rail, roleColour('forwardTop').name, roleColour('forwardOther').name, setup.ground, layerName(board.stackup.copper[0].id), roleColour('returnTop').name, roleColour('returnOther').name)
+			: '',
 		t('${1} overlay marker(s).', String(drawn.markers)),
 		...[...board.warnings, ...res.warnings].map(w => `warning: ${w}`),
 	].filter(Boolean);
 	recordResult('report', lines);
-	await report(title, lines);
+	const summary = [headLine, ...netHeads.map(n => n.head)].join(' ');
+	return { summary, lines, dc: dcData };
 }
 
 type LastRun = { kind: 'hf'; net: string; drivers?: string[]; hz?: number } | { kind: 'dc'; input: DcSetupInput };
@@ -516,7 +577,7 @@ function lastRun(): LastRun | undefined {
 
 /** Repeats the last analysis on the board as it is now, with the same net or wizard answers. */
 export async function rerunAnalysis(): Promise<void> {
-	initPanel(panelHost);
+	ensureInitialized();
 	await panelReady();
 	const run = lastRun();
 	if (!run) {
@@ -542,7 +603,7 @@ export async function rerunAnalysis(): Promise<void> {
 
 /** The panel's Rerun: for the one selected pad or part when there is one, otherwise the last analysis. */
 export async function rerunForSelection(): Promise<void> {
-	initPanel(panelHost);
+	ensureInitialized();
 	await panelReady();
 	const part = await readSelectedPart();
 	if (!part) {
@@ -558,7 +619,7 @@ export async function rerunForSelection(): Promise<void> {
 
 /** Hides the overlay, or shows it again. */
 export async function toggleReturnPath(): Promise<void> {
-	initPanel(panelHost);
+	ensureInitialized();
 	await panelReady();
 	if (forwardOverlayCommand('toggle'))
 		return;
@@ -587,7 +648,7 @@ export function cancelAnalysis(): void {
 
 export async function clearReturnPath(): Promise<void> {
 	cancelRunning();
-	initPanel(panelHost);
+	ensureInitialized();
 	await panelReady();
 	forwardOverlayCommand('clear');
 	await guarded(t('Return path'), clearOverlay);
@@ -597,19 +658,168 @@ export async function clearReturnPath(): Promise<void> {
 
 /** Analyses open the panel, so their result lands there, unless the user closed it. */
 async function showPanelForRun(): Promise<void> {
-	initPanel(panelHost);
+	ensureInitialized();
 	await panelReady();
 	await autoOpenPanel();
 }
 
 /** Opens the Return Path panel: last result, actions and overlay colours in a window that stays open. */
 export async function showPanel(): Promise<void> {
-	initPanel(panelHost);
+	ensureInitialized();
 	await guarded(t('Return Path'), async () => {
 		if (!await openPanel())
 			eda.sys_Dialog.showInformationMessage(t('This EasyEDA version did not open the panel window, and the analyses run from the panel. The saved log (Return Path > Show Saved Log) has the details.'), t('Return Path'));
 	});
 }
+
+function boardNetSet(board: Board): Set<string> {
+	return new Set([
+		...board.nets,
+		...board.tracks.map(tr => tr.net),
+		...board.vias.map(v => v.net),
+		...board.pads.map(p => p.net),
+		...board.pours.map(p => p.net),
+	].filter(Boolean));
+}
+
+/** Non-interactive HF/DC executor backing the public message bus (`returnpath.run`). */
+const publicExecutor: PublicRunExecutor = {
+	runHf: async (req: ParsedHfRequest) => {
+		const board = await timed('read board', readBoard, boardSizes);
+		await addPinNames(board);
+		recordResult('board', boardSizes(board));
+		const allNets = boardNetSet(board);
+		const net = resolveNet(board, req.net);
+		if (!allNets.has(net))
+			throw new Error(`Net "${req.net}" not found on the active PCB.`);
+		recordResult('net', net);
+		const scope = hfApplicability(board, net);
+		if (!scope.ok) {
+			recordResult('outcome', `not a signal net (${scope.kind})`);
+			throw new Error(scope.message ?? `Net "${net}" is not a signal net (${scope.kind}).`);
+		}
+		const info = (await boardInfo()).info;
+		const onNet = new Set(
+			board.pads
+				.filter(p => p.net === net && p.componentId)
+				.map(p => board.components.find(c => c.id === p.componentId)?.designator)
+				.filter((d): d is string => !!d),
+		);
+		let drivers: string[];
+		if (req.drivers !== undefined) {
+			for (const d of req.drivers) {
+				if (!onNet.has(d))
+					throw new Error(`Driver "${d}" has no pad on net "${net}" (parts on net: ${[...onNet].join(', ') || 'none'}).`);
+			}
+			drivers = req.drivers;
+		}
+		else {
+			const given = netInfo(info, net)?.driver;
+			if (given && given.parts.every(d => onNet.has(d))) {
+				drivers = given.parts;
+			}
+			else {
+				const guess = guessDrivers(board, net);
+				drivers = guess.confident ? guess.drivers : [];
+			}
+		}
+		const out = await executeHfAnalysis(board, net, {
+			drivers,
+			hz: req.hz,
+			info,
+			draw: req.draw,
+			timeBudgetMs: req.timeoutMs ?? HF_BUDGET_MS,
+			rememberRun: req.draw,
+		});
+		await report(t('Return path'), out.lines, { open: false, toast: false });
+		return out;
+	},
+	runDc: async (req: ParsedDcRequest) => {
+		const board = await timed('read board', readBoard, boardSizes);
+		await addPinNames(board);
+		recordResult('board', boardSizes(board));
+		const allNets = boardNetSet(board);
+		const rail = resolveNet(board, req.rail);
+		if (!allNets.has(rail))
+			throw new Error(`Rail net "${req.rail}" not found on the active PCB.`);
+		const info = (await boardInfo()).info;
+		const knownRail = railInfo(info, rail);
+		let railNets: string[];
+		if (req.railNets?.length) {
+			const resolved = req.railNets.map((n) => {
+				const r = resolveNet(board, n);
+				if (!allNets.has(r))
+					throw new Error(`Rail net "${n}" not found on the active PCB.`);
+				return r;
+			});
+			railNets = uniqueNets([rail, ...resolved]);
+		}
+		else {
+			railNets = [rail];
+		}
+		const guess = guessRails(board);
+		const group = guessRailGroup(board, railNets);
+		let ground: string | undefined;
+		if (req.ground !== undefined) {
+			const g = resolveNet(board, req.ground);
+			if (!allNets.has(g))
+				throw new Error(`Ground net "${req.ground}" not found on the active PCB.`);
+			ground = g;
+		}
+		else {
+			ground = group.ground;
+		}
+		if (!ground)
+			throw new Error(`Missing "ground" for DC rail "${rail}" and no ground net was inferred${guess.grounds.length ? ` (grounds on board: ${guess.grounds.join(', ')})` : ''}.`);
+		const source = req.source ?? knownRail?.source ?? group.source?.designator;
+		if (!source)
+			throw new Error(`Missing "source" for DC rail "${rail}"${group.candidates.length ? ` (candidates: ${group.candidates.map(c => c.designator).join(', ')})` : ''}. Pass "source" explicitly.`);
+		if (req.loads !== undefined && req.loads.length === 0)
+			throw new Error('Invalid "loads": expected at least one load designator.');
+		const knownLoads = knownRail?.loads
+			.map(l => l.part)
+			.filter(d => board.components.some(c => c.designator === d));
+		const loads = req.loads ?? (knownLoads?.length ? knownLoads : undefined);
+		if (req.currents) {
+			for (const k of Object.keys(req.currents)) {
+				if (!board.components.some(c => c.designator === k || c.id === k))
+					throw new Error(`Unknown component "${k}" in "currents".`);
+				if (req.loads && !req.loads.includes(k))
+					throw new Error(`Component "${k}" in "currents" is not in "loads".`);
+			}
+		}
+		const knownCurrents = knownRail?.loads.reduce<Record<string, number>>((acc, l) => {
+			const a = l.typicalA ?? l.peakA;
+			if (a !== undefined && (!loads || loads.includes(l.part)))
+				acc[l.part] = a;
+			return acc;
+		}, {});
+		const currents = req.currents ?? (knownCurrents && Object.keys(knownCurrents).length ? knownCurrents : undefined);
+		let dcInput: DcSetupInput = {
+			rail,
+			...(railNets.length > 1 ? { railNets } : {}),
+			ground,
+			source,
+			...(loads ? { loads } : {}),
+			...(currents ? { currents } : {}),
+		};
+		if (req.focus) {
+			if (req.focus === source)
+				throw new Error(`"focus" ("${req.focus}") cannot be the rail source "${source}".`);
+			dcInput = focusInput(dcInput, req.focus);
+		}
+		const out = await executeDcAnalysis(board, dcInput, {
+			focus: req.focus,
+			draw: req.draw,
+			timeBudgetMs: req.timeoutMs ?? DC_BUDGET_MS,
+			requireLoads: true,
+		});
+		if (req.draw && !req.focus)
+			await remember({ kind: 'dc', input: dcInput });
+		await report(t('DC return current'), out.lines, { open: false, toast: false });
+		return out;
+	},
+};
 
 const panelHost = {
 	run: async (cmd: 'hf' | 'dc' | 'trace' | 'rerun' | 'toggle' | 'clear' | 'cancel') => {

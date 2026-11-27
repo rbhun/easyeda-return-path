@@ -46,6 +46,8 @@ export interface MockHost {
 	canvasOrigin?: Pt;
 	/** How many data-to-canvas conversions work; after that both conversions throw from inside, as with no PCB canvas. */
 	originWorksFor?: number;
+	/** Active editor document returned by dmt_SelectControl.getCurrentDocumentInfo; null simulates no document focused. */
+	documentInfo?: { documentType: number; uuid: string; tabId?: string } | null;
 }
 
 /** Answers every dialog with its default unless `answer` says otherwise. */
@@ -76,6 +78,12 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	/** Messages pushed with no puller waiting, and pullers waiting for a message (sys_MessageBus.push / pullAsync). */
 	const queues = new Map<string, unknown[]>();
 	const pullers = new Map<string, ((m: unknown) => void)[]>();
+	/** Public message bus channels, kept separate from the private bus (as in EasyEDA Pro). */
+	const publicSubscribers = new Map<string, ((m: unknown) => void)[]>();
+	const publicPublished: { topic: string; message: any }[] = [];
+	const publicQueues = new Map<string, unknown[]>();
+	const publicPullers = new Map<string, ((m: unknown) => void)[]>();
+	const publicRpcs = new Map<string, (m: unknown) => unknown | Promise<unknown>>();
 	/** Set with select(): what the canvas has selected, as primitive type and id. */
 	let selection: { type: string; id: string }[] | undefined;
 	const mouseListeners = new Map<string, (type: string, props: unknown[]) => void>();
@@ -212,6 +220,61 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 				else
 					(pullers.get(topic) ?? pullers.set(topic, []).get(topic)!).push(resolve);
 			}),
+			subscribePublic: (topic: string, fn: (m: unknown) => void) => {
+				const list = publicSubscribers.get(topic) ?? publicSubscribers.set(topic, []).get(topic)!;
+				list.push(fn);
+				return { cancel: () => { const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); } };
+			},
+			subscribeOncePublic: (topic: string, fn: (m: unknown) => void) => {
+				const list = publicSubscribers.get(topic) ?? publicSubscribers.set(topic, []).get(topic)!;
+				const wrapped = (m: unknown) => {
+					const i = list.indexOf(wrapped);
+					if (i >= 0)
+						list.splice(i, 1);
+					fn(m);
+				};
+				list.push(wrapped);
+				return { cancel: () => { const i = list.indexOf(wrapped); if (i >= 0) list.splice(i, 1); } };
+			},
+			publishPublic: (topic: string, message: unknown) => {
+				const copy = JSON.parse(JSON.stringify(message ?? null));
+				publicPublished.push({ topic, message: copy });
+				for (const fn of [...(publicSubscribers.get(topic) ?? [])]) fn(message);
+			},
+			pushPublic: (topic: string, message: unknown) => {
+				const copy = JSON.parse(JSON.stringify(message ?? null));
+				const waiting = publicPullers.get(topic)?.shift();
+				if (waiting)
+					waiting(copy);
+				else
+					(publicQueues.get(topic) ?? publicQueues.set(topic, []).get(topic)!).push(copy);
+			},
+			pullPublic: (topic: string, fn: (m: unknown) => void) => {
+				const queued = publicQueues.get(topic)?.shift();
+				if (queued !== undefined) {
+					fn(queued);
+					return { cancel: () => {} };
+				}
+				const list = publicPullers.get(topic) ?? publicPullers.set(topic, []).get(topic)!;
+				list.push(fn);
+				return { cancel: () => { const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); } };
+			},
+			pullAsyncPublic: (topic: string) => new Promise((resolve) => {
+				const queued = publicQueues.get(topic)?.shift();
+				if (queued !== undefined)
+					resolve(queued);
+				else
+					(publicPullers.get(topic) ?? publicPullers.set(topic, []).get(topic)!).push(resolve);
+			}),
+			rpcServicePublic: (topic: string, fn: (m: unknown) => unknown | Promise<unknown>) => {
+				publicRpcs.set(topic, fn);
+			},
+			rpcCallPublic: async (topic: string, message?: unknown) => {
+				const fn = publicRpcs.get(topic);
+				if (!fn)
+					throw new Error(`no public RPC service on ${topic}`);
+				return await fn(message);
+			},
 		},
 		sys_IFrame: {
 			openIFrame: async (html: string, width: number, height: number, id: string, props: Record<string, unknown>) => {
@@ -251,7 +314,9 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 				cb(answer({ kind: 'input', prompt: before, title, options: [], dflt: value }));
 			},
 		},
-		dmt_SelectControl: { getCurrentDocumentInfo: async () => (noCanvas ? undefined : { documentType: 3, uuid: 'demo-pcb', tabId: 'demo-pcb' }) },
+		dmt_SelectControl: {
+			getCurrentDocumentInfo: async () => (noCanvas ? undefined : host.documentInfo === null ? undefined : host.documentInfo ?? { documentType: 3, uuid: 'demo-pcb', tabId: 'demo-pcb' }),
+		},
 		dmt_Project: {
 			getCurrentProjectInfo: async () => (host.project === null ? undefined : host.project ?? { uuid: 'demo-project', friendlyName: 'Demo board' }),
 		},
@@ -350,5 +415,5 @@ export function createMockEda(board: Board, selectedNet: string, planeLayers: nu
 	};
 	/** Simulates the user closing the progress bar. */
 	const closeProgressBar = () => progressListeners.forEach(fn => fn({ action: 'close' }));
-	return { eda, select, markers, messages, infoDialogs, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, iframes, panelSend, queues, wizardPages, wizard };
+	return { eda, select, markers, messages, infoDialogs, dialogs, logs, progress, toasts, closeProgressBar, storage, files, downloads, counts, published, publicPublished, publicQueues, iframes, panelSend, queues, wizardPages, wizard };
 }
