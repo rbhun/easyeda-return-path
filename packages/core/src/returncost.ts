@@ -388,6 +388,65 @@ function dropRevisits(pts: Raw[]): Raw[] {
   return out.length >= 2 ? out : pts;
 }
 
+/** Span under which a ~180° fold is a hairpin and is collapsed (25 mil). */
+export const HAIRPIN_SPAN_MM = 25 * MIL;
+
+/** Heading change of 120° or more counts as reversing (cos 120° = −0.5). */
+const HAIRPIN_REVERSE_DOT = -0.5;
+
+function unitStep(a: Pt, b: Pt): Pt | null {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const L = Math.hypot(dx, dy);
+  if (L < 1e-12) return null;
+  return { x: dx / L, y: dy / L };
+}
+
+/**
+ * Drop folds that reverse heading inside a short path length. A 90° corner and a large U of
+ * the signal are kept; a spur that turns ~180° within a few tens of mil (a dead-end pocket the
+ * search entered and left through different cells) is not.
+ */
+export function collapseTightHairpins<T extends Pt>(
+  pts: T[],
+  spanMm = HAIRPIN_SPAN_MM,
+  sameGroup: (a: T, b: T) => boolean = () => true,
+): T[] {
+  if (pts.length < 4) return pts;
+  let cur = pts;
+  for (let pass = 0; pass < 64; pass++) {
+    const next = collapseTightHairpinsOnce(cur, spanMm, sameGroup);
+    if (next.length === cur.length) return next.length >= 2 ? next : pts;
+    cur = next;
+  }
+  return cur.length >= 2 ? cur : pts;
+}
+
+function collapseTightHairpinsOnce<T extends Pt>(
+  pts: T[],
+  spanMm: number,
+  sameGroup: (a: T, b: T) => boolean,
+): T[] {
+  // Heading at segment i is pts[i] → pts[i+1]. A ~180° within spanMm of path length is a hairpin.
+  for (let i = 0; i < pts.length - 1; i++) {
+    const hi = unitStep(pts[i], pts[i + 1]);
+    if (!hi) continue;
+    let arc = 0;
+    for (let j = i + 1; j < pts.length - 1; j++) {
+      if (!sameGroup(pts[j], pts[i])) break;
+      arc += dist(pts[j], pts[j + 1]);
+      if (arc > spanMm) break;
+      if (j < i + 2) continue;
+      const hj = unitStep(pts[j], pts[j + 1]);
+      if (!hj) continue;
+      if (hi.x * hj.x + hi.y * hj.y > HAIRPIN_REVERSE_DOT) continue;
+      // Drop the interior of the fold; keep the segment start and the first point of the reverse heading.
+      return pts.slice(0, i + 1).concat(pts.slice(j));
+    }
+  }
+  return pts;
+}
+
 /** The signal's tracks in order from the driver pin to the receiver pin. */
 function orderTrace(tracks: Track[], from: Pt, to: Pt): Pt[] {
   const key = (p: Pt) => `${Math.round(p.x * 50)},${Math.round(p.y * 50)}`;
@@ -689,7 +748,9 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
   // A later stop can sit in a dead-end pocket of the pour. The search is then forced in and back
   // out through the same cells: a 180 with no enclosed area. Dropping that loop leaves the path
   // that actually continues. A real detour goes around and does not come back through its entrance.
-  const route = dropRevisits(raw);
+  // When entry and exit use different cells, dropRevisits misses it; collapseTightHairpins then
+  // removes any ~180° fold whose span is under a few tens of mil.
+  const route = collapseTightHairpins(dropRevisits(raw), HAIRPIN_SPAN_MM, (a, b) => a.layer === b.layer);
 
   const drawn = post(route, lines, tracks, g, h, cell, layers, board.vias.filter((v) => v.net === signal), board.vias);
   const notes: CostReport['notes'] = [];
