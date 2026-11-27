@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.80] - 2026-11-27
+
+From Balazs: put the scores at the top of the results window.
+
+- **The score leads the result.** The board score and each net's score are the first thing in the panel, above the analysis text and the buttons. The written result starts with the same score, then the findings.
+
 ## [0.1.79] - 2026-11-27
 
 From Balazs: grade the return the solver already drew, and score it.

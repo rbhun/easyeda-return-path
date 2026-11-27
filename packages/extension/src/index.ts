@@ -339,10 +339,10 @@ async function executeHfAnalysis(
 	].filter(Boolean);
 	lastDetail = detail;
 	const lines = [
-		...detail,
-		t('Check marks: yellow hatch is a noted loop, red a flagged loop, magenta a stretch left outside ±h. White ticks and circles are minor cuts, return vias, the driver closure and choke points.'),
 		score.header,
 		...reportLines(mine),
+		t('Check marks: yellow hatch is a noted loop, red a flagged loop, magenta a stretch left outside ±h. White ticks and circles are minor cuts, return vias, the driver closure and choke points.'),
+		...detail,
 	];
 	recordResult('report', lines);
 	return {
