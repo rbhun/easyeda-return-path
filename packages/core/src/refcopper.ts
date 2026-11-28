@@ -23,7 +23,77 @@ export function buildReferenceCopper(board: Board, opts: RefCopperOptions): Map<
   return runSync(buildReferenceCopperSteps(board, opts));
 }
 
+let refCache: { key: string; value: Map<number, LayerCopper> } | undefined;
+
+/**
+ * Identity of the copper a rebuild would read. A repeat run with the same board reuses the last result.
+ * Each coordinate is mixed in order: a sum of them is the same for two centered rectangles of different width.
+ */
+function refKey(board: Board, clearance: number): string {
+  let h = 2166136261;
+  const mix = (v: number) => {
+    h = Math.imul(h ^ Math.round(v * 1000), 16777619);
+  };
+  const mixStr = (s: string) => {
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  };
+  const rings = (paths: Paths) => {
+    mix(paths.length);
+    for (const path of paths) {
+      mix(path.length);
+      for (const p of path) {
+        mix(p.x);
+        mix(p.y);
+      }
+    }
+  };
+  mix(clearance);
+  for (const layer of board.stackup.copper) mix(layer.id);
+  rings(board.outline);
+  for (const pour of board.pours) {
+    mixStr(pour.id);
+    mix(pour.layer);
+    mixStr(pour.net);
+    mixStr(pour.name);
+    mix(pour.priority);
+    rings(pour.outline);
+    mix(pour.poured ? 1 : 0);
+    if (pour.poured) rings(pour.poured);
+  }
+  for (const t of board.tracks) {
+    mixStr(t.net);
+    mix(t.layer);
+    mix(t.width);
+    mix(t.a.x);
+    mix(t.a.y);
+    mix(t.b.x);
+    mix(t.b.y);
+  }
+  for (const v of board.vias) {
+    mixStr(v.net);
+    mix(v.drill);
+    mix(v.diameter);
+    mix(v.at.x);
+    mix(v.at.y);
+  }
+  for (const p of board.pads) {
+    mixStr(p.net);
+    mix(p.layer);
+    mix(p.holeDiameter);
+    mix(p.at.x);
+    mix(p.at.y);
+    rings(p.shape);
+  }
+  for (const k of board.keepouts) {
+    mix(k.layer);
+    rings(k.outline);
+  }
+  return (h >>> 0).toString(16);
+}
+
 export function* buildReferenceCopperSteps(board: Board, opts: RefCopperOptions): Steps<Map<number, LayerCopper>> {
+  const key = refKey(board, opts.clearance);
+  if (refCache?.key === key) return refCache.value;
   const result = new Map<number, LayerCopper>();
   const refNets = new Set(board.pours.map((p) => p.net));
 
@@ -77,6 +147,7 @@ export function* buildReferenceCopperSteps(board: Board, opts: RefCopperOptions)
     }
     result.set(layer.id, { layer: layer.id, byNet });
   }
+  refCache = { key, value: result };
   return result;
 }
 

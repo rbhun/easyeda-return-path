@@ -179,7 +179,7 @@ Returns extension metadata, active PCB UUID, copper layer count, physical stacku
   "ok": true,
   "data": {
     "service": "easyeda-return-path",
-    "version": "0.1.85",
+    "version": "0.1.86",
     "pcbUuid": "pcb-uuid",
     "copperLayers": 4,
     "stackup": [

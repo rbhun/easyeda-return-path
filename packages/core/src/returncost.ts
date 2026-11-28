@@ -2,8 +2,9 @@
 //
 // Cost per millimetre is eps + d/h, where d is the distance to the signal and h the dielectric
 // height, so walking the trace (d = 0) is almost free and any shortcut pays the area it encloses.
-// A via is an edge only where that via actually touches ground copper on both layers. Small
-// excursions (area under h²) are drawn back on the trace; large ones (9h² and over) are kept and flagged.
+// A via is an edge only where that via actually touches ground copper on both layers. Where the
+// forward trace's projection lies on reference copper the return is that projection. The search
+// runs only where that projection is off the copper, and only that is a detour.
 import { buildChains } from './analyze.js';
 import type { Steps } from './budget.js';
 import { isGroundNet, returnPads } from './dc/rails.js';
@@ -60,6 +61,8 @@ export interface CostReport {
   length: number;
   /** One line per detour, minor cut and layer change, for the result list. */
   notes: { severity: 'ok' | 'warn' | 'error'; kind: string; message: string; at: Pt }[];
+  /** Ground via the return leaves the reference through, when one was chosen. */
+  closureAt?: Pt;
 }
 
 interface GLayer {
@@ -160,6 +163,191 @@ class Heap {
     }
     return top;
   }
+}
+
+/** Shortest path length in mm through copper cells. A cell the search never reaches stays Infinity. */
+function copperDistance(seed: Uint8Array, copper: Uint8Array, g: Grid): Float64Array {
+  const N = g.nx * g.ny;
+  const out = new Float64Array(N);
+  out.fill(Infinity);
+  const heap = new Heap();
+  for (let c = 0; c < N; c++) {
+    if (!seed[c] || !copper[c]) continue;
+    out[c] = 0;
+    heap.push(c, 0);
+  }
+  const steps: [number, number][] = [
+    [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1],
+  ];
+  while (heap.size) {
+    const [c, f] = heap.pop();
+    if (f > out[c] + 1e-9) continue;
+    const x = c % g.nx;
+    const y = Math.floor(c / g.nx);
+    for (const [dx, dy] of steps) {
+      const qx = x + dx;
+      const qy = y + dy;
+      if (!inGrid(g, qx, qy)) continue;
+      const nc = qy * g.nx + qx;
+      if (!copper[nc]) continue;
+      if (dx && dy && (!copper[y * g.nx + qx] || !copper[qy * g.nx + x])) continue;
+      const nd = out[c] + Math.hypot(dx, dy) * g.cell;
+      if (nd < out[nc]) {
+        out[nc] = nd;
+        heap.push(nc, nd);
+      }
+    }
+  }
+  return out;
+}
+
+function maskAt(g: Grid, copper: Uint8Array, p: Pt): boolean {
+  const i = Math.floor((p.x - g.x0) / g.cell);
+  const j = Math.floor((p.y - g.y0) / g.cell);
+  return inGrid(g, i, j) && copper[j * g.nx + i] === 1;
+}
+
+/** True when every sample of the segment sits on a copper cell. */
+function segmentOnMask(g: Grid, copper: Uint8Array, a: Pt, b: Pt): boolean {
+  const n = Math.max(1, Math.ceil(dist(a, b) / Math.max(g.cell * 0.5, 0.02)));
+  for (let s = 0; s <= n; s++) {
+    const p = { x: a.x + ((b.x - a.x) * s) / n, y: a.y + ((b.y - a.y) * s) / n };
+    if (!maskAt(g, copper, p)) return false;
+  }
+  return true;
+}
+
+function pathOnMask(g: Grid, copper: Uint8Array | undefined, arc: Path): boolean {
+  if (!copper) return false;
+  if (arc.length <= 1) return arc.length === 1 && maskAt(g, copper, arc[0]);
+  for (let k = 1; k < arc.length; k++) if (!segmentOnMask(g, copper, arc[k - 1], arc[k])) return false;
+  return true;
+}
+
+/** A via sits in this pad's copper: inside the shape, or within the pad's own reach. */
+function viaInPad(at: Pt, pad: Pad): boolean {
+  if (pad.shape.length && pointInPaths(at, pad.shape)) return true;
+  let r = 0;
+  for (const path of pad.shape) for (const q of path) r = Math.max(r, dist(pad.at, q));
+  return dist(at, pad.at) <= (r > 0 ? r + 0.2 : 0.6);
+}
+
+/**
+ * Ground vias that are copper-connected to a driver ground pad and that reach the reference layer.
+ * The cheapest reference-plus-top path wins. The next via is kept when its cost is within 1.5×.
+ */
+function pickClosure(
+  g: Grid,
+  layers: GLayer[],
+  refLi: number,
+  topLi: number,
+  pads: Pad[],
+  signalAt: Pt | undefined,
+  board: Board,
+  nodeOf: (li: number, c: number) => number,
+): { nodes: number[]; at?: Pt; top: Path; topLayer: number } {
+  const none = { nodes: [] as number[], top: [] as Path, topLayer: 0 };
+  if (!pads.length || !signalAt) return none;
+  const padNets = new Set(pads.map((p) => p.net).filter((n): n is string => !!n));
+  const vias = board.vias.filter((v) => !!v.net && padNets.has(v.net));
+  if (!vias.length) return none;
+  const N = g.nx * g.ny;
+  const ref = layers[refLi];
+  const top = topLi >= 0 ? layers[topLi] : undefined;
+  const topSeed = new Uint8Array(N);
+  if (top)
+    for (const pad of pads) {
+      if (pad.layer !== top.id && pad.layer !== MULTI_LAYER) continue;
+      for (const c of padCells(g, top.copper, pad)) topSeed[c] = 1;
+    }
+  const topDist = top && topSeed.some((s) => s) ? copperDistance(topSeed, top.copper, g) : null;
+  const refSeed = new Uint8Array(N);
+  const pinC = nearestCell(g, ref.copper, signalAt, 2);
+  if (pinC >= 0) refSeed[pinC] = 1;
+  const refDist = pinC >= 0 ? copperDistance(refSeed, ref.copper, g) : null;
+  const scored: { at: Pt; cost: number; cell: number; topC: number }[] = [];
+  for (const v of vias) {
+    const touched = pads.some((p) => p.net === v.net && viaInPad(v.at, p));
+    let topMm = touched ? 0 : Infinity;
+    let topC = -1;
+    if (top && topDist) {
+      const c = nearestCell(g, top.copper, v.at, Math.max(v.diameter / 2, g.cell * 2));
+      if (c >= 0 && topDist[c] < topMm) {
+        topMm = topDist[c];
+        topC = c;
+      }
+    }
+    if (!Number.isFinite(topMm) || !refDist) continue;
+    const refC = nearestCell(g, ref.copper, v.at, Math.max(v.diameter / 2, g.cell * 2) + g.cell);
+    if (refC < 0 || !Number.isFinite(refDist[refC])) continue;
+    scored.push({ at: v.at, cost: refDist[refC] + topMm, cell: refC, topC });
+  }
+  scored.sort((a, b) => a.cost - b.cost || a.at.x - b.at.x || a.at.y - b.at.y);
+  if (!scored.length) return none;
+  const best = scored[0].cost;
+  const kept = scored.filter((s) => s.cost <= best * 1.5 + 1e-9);
+  let topPath: Path = [];
+  if (top && topSeed.some((s) => s) && scored[0].topC >= 0) {
+    topPath = traceToSeed(topSeed, top.copper, g, scored[0].topC);
+    const home = pads.filter((p) => p.net && padNets.has(p.net)).sort((a, b) => dist(a.at, scored[0].at) - dist(b.at, scored[0].at))[0];
+    if (home && (!topPath.length || dist(topPath[0], home.at) > 0.15)) topPath.unshift(home.at);
+  }
+  return {
+    nodes: kept.map((s) => nodeOf(refLi, s.cell)),
+    at: scored[0].at,
+    top: topPath,
+    topLayer: top?.id ?? ref.id,
+  };
+}
+
+/** Cells from `goal` back to the nearest seeded copper cell, in seed → goal order. */
+function traceToSeed(seed: Uint8Array, copper: Uint8Array, g: Grid, goal: number): Path {
+  if (!copper[goal]) return [];
+  const N = g.nx * g.ny;
+  const parent = new Int32Array(N);
+  parent.fill(-2);
+  const distA = new Float64Array(N);
+  distA.fill(Infinity);
+  const heap = new Heap();
+  for (let c = 0; c < N; c++) {
+    if (!seed[c] || !copper[c]) continue;
+    distA[c] = 0;
+    parent[c] = -1;
+    heap.push(c, 0);
+  }
+  const steps: [number, number][] = [
+    [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1],
+  ];
+  while (heap.size && parent[goal] === -2) {
+    const [c, f] = heap.pop();
+    if (f > distA[c] + 1e-9) continue;
+    const x = c % g.nx;
+    const y = Math.floor(c / g.nx);
+    for (const [dx, dy] of steps) {
+      const qx = x + dx;
+      const qy = y + dy;
+      if (!inGrid(g, qx, qy)) continue;
+      const nc = qy * g.nx + qx;
+      if (!copper[nc]) continue;
+      if (dx && dy && (!copper[y * g.nx + qx] || !copper[qy * g.nx + x])) continue;
+      const nd = distA[c] + Math.hypot(dx, dy) * g.cell;
+      if (nd < distA[nc]) {
+        distA[nc] = nd;
+        parent[nc] = c;
+        heap.push(nc, nd);
+      }
+    }
+  }
+  if (parent[goal] === -2) return [];
+  const pts: Path = [];
+  for (let c = goal, guard = 0; c >= 0 && guard < N; guard++) {
+    pts.push(cellCentre(g, c % g.nx, Math.floor(c / g.nx)));
+    const p = parent[c];
+    if (p < 0) break;
+    c = p;
+  }
+  pts.reverse();
+  return pts;
 }
 
 function boxOf(pts: Pt[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
@@ -544,11 +732,10 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
     for (const p of board.pads) if ((p.layer === copper.id || p.layer === MULTI_LAYER) && p.net && nets.has(p.net)) fillPaths(g, w, p.shape.length ? p.shape : []);
     const mask = new Uint8Array(N);
     for (let c = 0; c < N; c++) if (w[c] > 0) mask[c] = 1;
-    // A via pad drawn solid covers its drill, so the line was taken straight across the
-    // hole. The pad is blocked and the return stays in the pour around it. A ground via
-    // is still only a change of layer, linked below from the copper just outside the pad.
-    for (const v of board.vias) clearHole(g, mask, v.at, Math.max(v.diameter, v.drill) / 2 + cell);
-    for (const p of board.pads) if (p.holeDiameter > 0) clearHole(g, mask, p.at, p.holeDiameter / 2 + cell);
+    // The drill is empty. Anything the pour still calls copper stays passable, including a
+    // cell that sits next to a hole or a copper edge. The pad diameter is not added on.
+    for (const v of board.vias) clearHole(g, mask, v.at, v.drill / 2);
+    for (const p of board.pads) if (p.holeDiameter > 0) clearHole(g, mask, p.at, p.holeDiameter / 2);
     let any = false;
     for (let c = 0; c < N; c++) if (mask[c]) {
       any = true;
@@ -575,18 +762,47 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
     if (list) list.push({ to, cost });
     else viaAt.set(from, [{ to, cost }]);
   };
-  const touch = (at: Pt, radius: number) => layers.map((l) => nearestCell(g, l.copper, at, radius));
+  // Every copper cell the via actually touches, not only the nearest. The drill leaves a
+  // corner of the fanout track that is copper but cut off from the rest of it; linking only
+  // that corner would never be reached from the pad.
+  const cellsTouching = (copper: Uint8Array, at: Pt, radius: number): number[] => {
+    const i0 = Math.max(0, Math.floor((at.x - radius - g.x0) / cell));
+    const i1 = Math.min(g.nx - 1, Math.ceil((at.x + radius - g.x0) / cell));
+    const j0 = Math.max(0, Math.floor((at.y - radius - g.y0) / cell));
+    const j1 = Math.min(g.ny - 1, Math.ceil((at.y + radius - g.y0) / cell));
+    const out: number[] = [];
+    for (let j = j0; j <= j1; j++)
+      for (let i = i0; i <= i1; i++) {
+        const c = j * g.nx + i;
+        if (copper[c] && dist(cellCentre(g, i, j), at) <= radius) out.push(c);
+      }
+    return out;
+  };
   const link = (at: Pt, radius: number) => {
-    const cells = touch(at, radius);
+    const cells = layers.map((l) => cellsTouching(l.copper, at, radius));
     const [ix, iy] = [Math.round((at.x - g.x0) / cell - 0.5), Math.round((at.y - g.y0) / cell - 0.5)];
     const dc = inGrid(g, ix, iy) ? dMap[iy * g.nx + ix] : 0;
     for (let a = 0; a < layers.length; a++)
       for (let b = a + 1; b < layers.length; b++) {
-        if (cells[a] < 0 || cells[b] < 0) continue;
+        if (!cells[a].length || !cells[b].length) continue;
         const dz = Math.abs(layers[a].z - layers[b].z) || thickness;
         const cost = (dz * dc) / h;
-        addVia(a * N + cells[a], b * N + cells[b], cost);
-        addVia(b * N + cells[b], a * N + cells[a], cost);
+        const closest = (list: number[]) => {
+          let best = list[0];
+          let bd = Infinity;
+          for (const c of list) {
+            const d = dist(cellCentre(g, c % g.nx, Math.floor(c / g.nx)), at);
+            if (d < bd) {
+              bd = d;
+              best = c;
+            }
+          }
+          return best;
+        };
+        const na = closest(cells[a]);
+        const nb = closest(cells[b]);
+        for (const ca of cells[a]) addVia(a * N + ca, b * N + nb, cost);
+        for (const cb of cells[b]) addVia(b * N + cb, a * N + na, cost);
       }
   };
   for (const v of board.vias) if (nets.has(v.net)) link(v.at, v.diameter / 2 + 2 * cell);
@@ -599,14 +815,39 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
 
 
   const node = (li: number, c: number) => li * N + c;
-  const starts: number[] = [];
-  for (const pad of startPads)
-    for (let li = 0; li < layers.length; li++) {
-      if (pad.layer !== layers[li].id && pad.layer !== MULTI_LAYER) continue;
-      for (const c of padCells(g, layers[li].copper, pad)) starts.push(node(li, c));
+  const sigZ = board.stackup.copper.find((l) => l.id === signalLayer)?.z ?? 0;
+  const pinLayer = driverPad && driverPad.layer !== MULTI_LAYER ? driverPad.layer : signalLayer;
+  const pinZ = board.stackup.copper.find((l) => l.id === pinLayer)?.z ?? sigZ;
+  const pinAt = driverPad?.at ?? tracks[0].a;
+  // The reference under the driver pin: the closest copper that is actually there. A ground
+  // pad on the signal layer does not count unless it reaches the pin.
+  let refLi = 0;
+  let refDz = Infinity;
+  for (let li = 0; li < layers.length; li++) {
+    if (nearestCell(g, layers[li].copper, pinAt, 1.5) < 0) continue;
+    const dz = Math.abs(layers[li].z - pinZ);
+    if (dz < refDz) {
+      refDz = dz;
+      refLi = li;
     }
+  }
+  const topId = driverPad && driverPad.layer !== MULTI_LAYER ? driverPad.layer : signalLayer;
+  const topLi = layers.findIndex((l) => l.id === topId);
+  // Closure vias: every ground via that reaches the reference and touches a driver ground pad
+  // (inside the pad counts; a track is not required). Cost is the reference path from under the
+  // signal pin plus the top-copper path from the via to that pad. The cheapest starts the return,
+  // and the next one too when it is within 1.5×.
+  const closurePick = pickClosure(g, layers, refLi, topLi, startPads, driverPad?.at, board, node);
+  const starts: number[] = [...closurePick.nodes];
   if (!starts.length) {
-    // No ground pad to start from: the driver end of the trace, on whichever layer has copper there.
+    for (const pad of startPads)
+      for (let li = 0; li < layers.length; li++) {
+        if (pad.layer !== layers[li].id && pad.layer !== MULTI_LAYER) continue;
+        for (const c of padCells(g, layers[li].copper, pad)) starts.push(node(li, c));
+      }
+  }
+  if (!starts.length) {
+    // No ground via or pad to start from: the driver end of the trace, on whichever layer has copper there.
     const p0 = driverPad?.at ?? tracks[0].a;
     for (let li = 0; li < layers.length; li++) {
       const c = nearestCell(g, layers[li].copper, p0, 1.5);
@@ -677,6 +918,37 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
     const sa = wi === 0 ? wp : waypoints[wi - 1];
     const sb = wi === 0 ? (waypoints[1] ?? wp) : wp;
     const segD = (p: Pt) => distPointSeg(p, sa, sb);
+    // On copper, the return is the forward projection, on the closest layer that covers it.
+    // The search runs only for a stretch no reference copper covers.
+    if (wi > 0) {
+      const prev = waypoints[wi - 1];
+      const zA = project(lines, prev)?.line.layer;
+      const zB = project(lines, wp)?.line.layer;
+      const zOf = (id: number | undefined) => board.stackup.copper.find((l) => l.id === id)?.z ?? sigZ;
+      const z = (zOf(zA) + zOf(zB)) / 2;
+      let cover = -1;
+      let coverZ = Infinity;
+      for (let li = 0; li < layers.length; li++) {
+        if (!segmentOnMask(g, layers[li].copper, prev, wp)) continue;
+        const dz = Math.abs(layers[li].z - z);
+        if (dz < coverZ) {
+          coverZ = dz;
+          cover = li;
+        }
+      }
+      if (cover >= 0) {
+        const n = Math.max(1, Math.ceil(dist(prev, wp) / cell));
+        for (let s = 1; s <= n; s++) {
+          const p = { x: prev.x + ((wp.x - prev.x) * s) / n, y: prev.y + ((wp.y - prev.y) * s) / n };
+          const last = raw[raw.length - 1];
+          if (last && dist(last, p) < cell * 0.25) continue;
+          raw.push({ x: p.x, y: p.y, layer: layers[cover].id, d: 0 });
+        }
+        const c = nearestCell(g, layers[cover].copper, wp, cell * 2);
+        if (c >= 0) frontier = [node(cover, c)];
+        continue;
+      }
+    }
     if (!frontier.length) break;
     // A vertex sitting in a gap (no ground within 0.3 mm) is not a stop: the detour is between the
     // grounded vertices on either side, and diving into the nearest dead-end cell makes a hairpin.
@@ -750,9 +1022,23 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
   // that actually continues. A real detour goes around and does not come back through its entrance.
   // When entry and exit use different cells, dropRevisits misses it; collapseTightHairpins then
   // removes any ~180° fold whose span is under a few tens of mil.
-  const route = collapseTightHairpins(dropRevisits(raw), HAIRPIN_SPAN_MM, (a, b) => a.layer === b.layer);
+  let route = collapseTightHairpins(dropRevisits(raw), HAIRPIN_SPAN_MM, (a, b) => a.layer === b.layer);
+  if (closurePick.top.length) {
+    const dAt = (p: Pt) => {
+      const i = Math.floor((p.x - g.x0) / cell);
+      const j = Math.floor((p.y - g.y0) / cell);
+      return inGrid(g, i, j) ? dMap[j * g.nx + i] : 1e3;
+    };
+    const head: Raw[] = closurePick.top.map((p) => ({ x: p.x, y: p.y, layer: closurePick.topLayer, d: dAt(p) }));
+    const rest = route.length && dist(head[head.length - 1], route[0]) < cell ? route.slice(1) : route;
+    route = [...head, ...rest];
+  }
 
-  const drawn = post(route, lines, tracks, g, h, cell, layers, board.vias.filter((v) => v.net === signal), board.vias);
+  const drawn = post(route, lines, g, h, cell, layers);
+  if (closurePick.at) {
+    const at = closurePick.at;
+    drawn.vias = drawn.vias.filter((v) => dist(v.at, at) > 0.75);
+  }
   const notes: CostReport['notes'] = [];
   const length = drawn.pts.reduce((s, p, i) => (i ? s + dist(p, drawn.pts[i - 1]) : 0), 0);
   if (drawn.pts.length) notes.push({ severity: 'ok', kind: 'return-length', message: `Return path ${length.toFixed(1)} mm`, at: drawn.pts[0] });
@@ -767,8 +1053,14 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
   }
   for (const det of drawn.detours)
     notes.push({ severity: 'warn', kind: 'return-detour', message: `Detour: extra loop area ${det.area.toFixed(2)} mm² (${mil2(det.area).toFixed(0)} mil²)`, at: det.at });
+  const farVia = Math.max(3 * h, 1);
   for (const v of drawn.vias)
-    notes.push({ severity: 'ok', kind: 'return-via', message: `Layer change through a ground via ${v.distance.toFixed(2)} mm from the trace`, at: v.at });
+    notes.push({
+      severity: v.distance <= farVia ? 'ok' : 'warn',
+      kind: 'return-via',
+      message: `Layer change through a ground via ${v.distance.toFixed(2)} mm from the trace`,
+      at: v.at,
+    });
 
   const layerOf = (p: Pt) => project(lines, p)?.line.layer ?? signalLayer;
   const traces: CostTrace[] = [];
@@ -782,7 +1074,7 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
     if (!last || dist(last, p) > 1e-4) run.pts.push(p);
   }
   if (run && run.pts.length > 1) traces.push({ layer: run.layer, signalLayer: layerOf(run.pts[0]), pts: straighten(run.pts, cell * 0.6), ...(run.detour ? { detour: true } : {}) });
-  return { traces, marks: drawn.marks, vias: drawn.vias, length, notes };
+  return { traces, marks: drawn.marks, vias: drawn.vias, length, notes, ...(closurePick.at ? { closureAt: closurePick.at } : {}) };
 }
 
 function cellOf(g: Grid, c: number): Pt {
@@ -797,13 +1089,10 @@ interface Tagged extends Pt {
 function post(
   raw: Raw[],
   lines: Line[],
-  tracks: Track[],
   g: Grid,
   h: number,
   cell: number,
   layers: GLayer[],
-  signalVias: { at: Pt; diameter: number }[],
-  holes: { at: Pt; drill: number; diameter: number }[],
 ): { pts: Path; tagged: Tagged[]; marks: CostMark[]; detours: { at: Pt; area: number }[]; vias: CostVia[] } {
   // On the projected trace: the seeded cells. Anything past one cell has left it.
   const left = (d: number) => d > cell * 1.25;
@@ -827,29 +1116,25 @@ function post(
     const from = Math.max(0, i - 1);
     for (let k = from; k < Math.min(j, raw.length - 1); k++) area += dist(raw[k], raw[k + 1]) * 0.5 * (raw[k].d + raw[k + 1].d);
     const arc = back ? signalArc(lines, raw[i - 1], raw[j]) : null;
-    // A small excursion is drawn back on the trace. Not when that line would cross a via:
-    // the pad covers the drill in the pour, and the hole is empty, so the return stays around it.
-    const acrossHole = arc !== null && holes.some((v) => {
-      const r = Math.max(v.diameter, v.drill) / 2;
-      return r > 0 && arc!.some((p, k) => k > 0 && distPointSeg(v.at, arc![k - 1], p) < r);
-    });
-    if (back && arc && area < h2 && !acrossHole) {
+    const mask = copper.get(raw[i].layer);
+    // The projection is the return wherever it lies on copper. A hole merely beside the trace is
+    // not a detour. A detour is recorded only when that projection itself leaves the copper.
+    const blocked = arc !== null && !pathOnMask(g, mask, arc);
+    if (back && arc && !blocked) {
       for (const p of arc) {
         const last = tagged[tagged.length - 1];
         if (!last || dist(last, p) > cell * 0.4) tagged.push({ ...p, layer: raw[i].layer, detour: false });
       }
-      if (crossesOther(arc, raw[i].layer, tracks, g, copper.get(raw[i].layer), signalVias)) {
-        marks.push({ at: arc[Math.floor(arc.length / 2)], kind: 'minor', area });
-      }
       i = j;
       continue;
     }
-    if (back && area >= h2) {
+    if (back && arc && blocked) {
       let peak = raw[i];
       for (const p of raw.slice(i, j)) if (p.d > peak.d) peak = p;
       if (area >= 9 * h2) marks.push({ at: peak, kind: 'flagged', area });
-      else detours.push({ at: peak, area });
-      for (let k = i; k < j; k++) tagged.push({ ...raw[k], detour: true });
+      else if (area >= h2) detours.push({ at: peak, area });
+      else marks.push({ at: arc[Math.floor(arc.length / 2)], kind: 'minor', area });
+      for (let k = i; k < j; k++) tagged.push({ ...raw[k], detour: area >= h2 });
       i = j;
       continue;
     }
@@ -859,26 +1144,4 @@ function post(
   for (let k = 1; k < raw.length; k++)
     if (raw[k].layer !== raw[k - 1].layer) vias.push({ at: raw[k], fromLayer: raw[k - 1].layer, toLayer: raw[k].layer, distance: raw[k].d });
   return { pts: tagged, tagged, marks, detours, vias };
-}
-
-/**
- * The straight projection leaves the ground on this layer somewhere that is not the signal's own
- * track or via. That is a cut by other copper. A hop of the signal itself is not one.
- */
-function crossesOther(arc: Path, layer: number, tracks: Track[], g: Grid, copper: Uint8Array | undefined, signalVias: { at: Pt; diameter: number }[]): boolean {
-  if (!copper) return false;
-  const own = (p: Pt) =>
-    tracks.some((t) => t.layer === layer && distPointSeg(p, t.a, t.b) <= t.width / 2 + g.cell) ||
-    signalVias.some((v) => dist(v.at, p) <= v.diameter / 2 + 0.25);
-  for (let k = 1; k < arc.length; k++) {
-    const n = Math.max(1, Math.ceil(dist(arc[k - 1], arc[k]) / Math.max(g.cell, 0.05)));
-    for (let s = 1; s < n; s++) {
-      const p = { x: arc[k - 1].x + ((arc[k].x - arc[k - 1].x) * s) / n, y: arc[k - 1].y + ((arc[k].y - arc[k - 1].y) * s) / n };
-      const i = Math.floor((p.x - g.x0) / g.cell);
-      const j = Math.floor((p.y - g.y0) / g.cell);
-      if (inGrid(g, i, j) && copper[j * g.nx + i]) continue;
-      if (!own(p)) return true;
-    }
-  }
-  return false;
 }

@@ -61,6 +61,8 @@ export interface ReturnPath {
   transitions: ReturnVia[];
   /** Drawn length, mm. */
   length: number;
+  /** Ground via the solved return leaves the reference through. */
+  closureAt?: Pt;
 }
 
 export interface DriverOptions {
@@ -98,8 +100,26 @@ const unitNormal = (a: Pt, b: Pt): Pt => {
   return { x: -d.y / l, y: d.x / l };
 };
 
+/** How far a chain end may sit from a pad and still be that pad. Measured to the copper, so a track that stops on the pad edge matches. */
+const PAD_SNAP_MM = 0.4;
+
+function padGap(pd: Pad, p: Pt): number {
+  return pd.shape.length ? distToPaths(p, pd.shape) : dist(pd.at, p);
+}
+
 function padAt(board: Board, p: Pt, net: string, layer: number): Pad | undefined {
-  return board.pads.find((pd) => pd.net === net && (pd.layer === layer || pd.layer === MULTI_LAYER) && (dist(pd.at, p) < 0.05 || distToPaths(p, pd.shape) < 0.05));
+  let best: Pad | undefined;
+  let gap = PAD_SNAP_MM;
+  for (const pd of board.pads) {
+    if (pd.net !== net || (pd.layer !== layer && pd.layer !== MULTI_LAYER)) continue;
+    const g = padGap(pd, p);
+    if (g > PAD_SNAP_MM) continue;
+    if (!best || g < gap - 1e-6 || (Math.abs(g - gap) <= 1e-6 && dist(pd.at, p) < dist(best.at, p))) {
+      best = pd;
+      gap = g;
+    }
+  }
+  return best;
 }
 
 /**
@@ -133,14 +153,14 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
     for (const pd of board.pads) {
       if (pd.net !== net || !pd.componentId || (pd.layer !== c.chain.layer && pd.layer !== MULTI_LAYER)) continue;
       const s = line.project(pd.at);
-      if (s < 0.05 || s > line.length - 0.05 || distToPaths(line.at(s), pd.shape) > 0.05) continue;
+      if (s < 0.05 || s > line.length - 0.05 || padGap(pd, line.at(s)) > PAD_SNAP_MM) continue;
       const comp = board.components.find((x) => x.id === pd.componentId);
       if (!comp || isPassive(comp)) continue;
       ends.push([line.at(s), line.at(s < line.length / 2 ? Math.min(line.length, s + 1) : Math.max(0, s - 1)), pd, s]);
     }
     for (const [end, inward, onPad, at] of ends) {
-      if (!onPad && ownVias.some((v) => dist(v.at, end) <= v.diameter / 2 + 0.01)) continue;
       const pad = onPad ?? padAt(board, end, net, c.chain.layer);
+      if (!onPad && !pad && ownVias.some((v) => dist(v.at, end) <= v.diameter / 2 + 0.01)) continue;
       if (!pad?.componentId) continue;
       if (seen.has(pad.id)) {
         const pin = pinOf.get(pad.id);
@@ -201,7 +221,7 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
   for (const d of opts.drivers ?? []) {
     const refNet = endNets.get(d);
     if (!refNet) {
-      findings.push({ severity: 'warn', kind: 'driver-loop', message: `${d} (driver): not at an end of the routed trace over reference copper, so its supply loop is not traced`, at: chains[0]?.chain.pts[0] ?? { x: 0, y: 0 } });
+      findings.push({ severity: 'ok', kind: 'driver-loop', message: `${d} (driver): supply loop unknown`, at: chains[0]?.chain.pts[0] ?? { x: 0, y: 0 } });
       continue;
     }
     const loop = driverLoop(board, d, net, refNet);
@@ -220,12 +240,14 @@ export function* buildReturnPath(board: Board, net: string, chains: ChainResult[
       findings.push({ severity: 'error', kind: 'driver-loop', message: `${first}; the ${other} edge must reach ${d} pad ${loop.supplyPin.number} (${supplyNet}), but no decap between ${refNet} and ${supplyNet} was found`, at });
       continue;
     }
-    const { component, refPad, supplyPad, length } = loop.decap;
-    const t = opts.driverDecap;
-    const severity: Severity = length <= t.good ? 'ok' : length <= t.warn ? 'warn' : 'error';
+    const { component, refPad, supplyPad } = loop.decap;
+    const netMm = chains.reduce((s, c) => s + new Polyline(c.chain.pts).length, 0);
+    const supplyMm = dist(loop.supplyPin.at, supplyPad.at);
+    const frac = netMm > 0 ? supplyMm / netMm : Infinity;
+    const severity: Severity = frac > 0.5 ? 'error' : frac > 0.25 ? 'warn' : 'ok';
     jumps.push({ kind: 'supply', from: loop.refPin.at, to: refPad.at, label: component.designator, distance: dist(loop.refPin.at, refPad.at), severity });
-    jumps.push({ kind: 'supply', from: supplyPad.at, to: loop.supplyPin.at, label: component.designator, distance: dist(supplyPad.at, loop.supplyPin.at), severity });
-    findings.push({ severity, kind: 'driver-loop', message: `${first}; the ${other} edge through decap ${component.designator} into ${d} pad ${loop.supplyPin.number} (${supplyNet}), ${length.toFixed(2)} mm pin to cap to pin`, at });
+    jumps.push({ kind: 'supply', from: supplyPad.at, to: loop.supplyPin.at, label: component.designator, distance: supplyMm, severity });
+    findings.push({ severity, kind: 'driver-loop', message: `${first}; the ${other} edge through decap ${component.designator} into ${d} pad ${loop.supplyPin.number} (${supplyNet}), ${supplyMm.toFixed(2)} mm from the supply pin`, at });
   }
-  return { traces, jumps, drivers, marks, transitions, length: solved?.length ?? 0 };
+  return { traces, jumps, drivers, marks, transitions, length: solved?.length ?? 0, ...(solved?.closureAt ? { closureAt: solved.closureAt } : {}) };
 }

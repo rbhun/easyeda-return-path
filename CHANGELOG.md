@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.86] - 2026-11-28
+
+From Balazs: SCK scored 18. The return left the copper under the trace to go around a via beside it, and the driver loop closed on a far ground via.
+
+- **The return stays on the trace where the plane is copper.** A cell with reference copper is passable however close it is to a hole. Where the forward trace's projection lies on that copper, the return is the projection. The pathfinder runs only on a stretch the projection cannot cross, and a detour is reported only then. A hole that merely sits beside the trace is not one.
+- **The closure via is the cheapest ground via of the driver.** Every ground via that reaches the reference and overlaps any of the driver's ground pads is a candidate, including a via placed inside the exposed pad. Cost is the reference-layer path from under the signal pin plus the top-copper path from the via to its pad. The cheapest is used, and the next as well when it costs no more than one and a half times as much.
+- **The score follows the solver.** A layer change the solver calls ok is not flagged again. A via on the closure path is not a layer transition. A distance threshold is never tighter than 3h and never under 1 mm.
+- **An unmatched driver does not cost points.** When the supply loop was not traced the report says "unknown". The loop that is traced is measured from the supply pin nearest the signal pin, and the finding uses that same fraction of the trace. A track end within 0.4 mm of a pad is that pad.
+- **A thin band beside one via is info.** It is not a second warning at the via's antipad.
+- **Reference copper is reused.** A second run on the same board does not rebuild it.
+
 ## [0.1.85] - 2026-11-28
 
 From Balazs: on the 4-layer board h = 0.2 mm is correct, and SCK should still score about 90. The check was grading the driver loop in units of that height, so a via a couple of millimetres away looked like a failure.
