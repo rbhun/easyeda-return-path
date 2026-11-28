@@ -113,20 +113,137 @@ test('a return via far from the signal via is a missing via, and a long ground l
   analysis.returnPath.transitions = [{ at: { x: 15, y: 6 }, fromLayer: TOP, toLayer: BOT, distance: 6 }];
   const check = checkReturn(board, analysis, { driver: 'U1', edge: 'normal', drive: 'open-drain' });
   const hop = check.hops[0];
+  assert.equal(check.hops.length, 1);
   assert.ok(hop.distance > check.h && hop.distance <= 3 * check.h, `via distance ${hop.distance}`);
   assert.equal(hop.grade, 'note');
   assert.equal(hop.fromSignalVia, true);
+  assert.match(check.terms.find((t) => t.kind === 'transition')!.fix, /within ~4\.8 mm/);
   board.vias = board.vias.filter((v) => v.net !== 'SIG');
   const far = checkReturn(board, analysis, { driver: 'U1', edge: 'normal', drive: 'open-drain' });
-  const missed = far.hops[0];
-  assert.ok(missed.distance > 3 * far.h, `leave-point distance ${missed.distance}`);
-  assert.equal(missed.grade, 'flag');
-  assert.equal(missed.fromSignalVia, false);
+  assert.equal(far.hops.length, 0, 'no signal via, so the return via is not a layer transition');
   const gnd = check.closures.find((c) => c.kind === 'gnd');
-  assert.ok(gnd && gnd.grade === 'flag' && gnd.length > 3 * check.h, JSON.stringify(gnd));
+  assert.ok(gnd && gnd.grade === 'flag' && /no ground via/.test(gnd.text), JSON.stringify(gnd));
   assert.ok(check.closures.some((c) => c.kind === 'vdd' && c.grade === 'flag'), 'the missing decap is recorded');
   const pushed = withProps(check, { drive: 'push-pull' });
   assert.ok(pushed.score < check.score, 'open-drain does not pay for the supply loop; push-pull does');
+});
+
+test('a via on the closure lead is not also a layer transition', () => {
+  const forward: Path = [{ x: 0, y: 0 }, { x: 30, y: 0 }];
+  const ret: Path = [{ x: 0, y: -6 }, { x: 0, y: 0 }, { x: 30, y: 0 }];
+  const { board, analysis } = bare(forward, ret, 0.2);
+  board.components = [{ id: 'u1', designator: 'U1', at: { x: 0, y: 0 }, rotation: 0, layer: TOP, padIds: ['s', 'g', 'v'] }];
+  const pad = (id: string, net: string, at: { x: number; y: number }, pin: string): Pad => ({
+    id, net, layer: TOP, number: pin, at, shape: [], holeDiameter: 0, componentId: 'u1', pinName: pin,
+  });
+  board.pads = [pad('s', 'SIG', { x: 0, y: 0 }, 'OUT'), pad('g', 'GND', { x: 0, y: -6 }, 'GND'), pad('v', '3V3', { x: 1, y: 0 }, 'VDD')];
+  board.vias = [
+    { id: 'sv', net: 'SIG', at: { x: 15, y: 0 }, drill: 0.3, diameter: 0.6, stitching: false },
+    { id: 'rv', net: 'GND', at: { x: 15, y: 0.4 }, drill: 0.3, diameter: 0.6, stitching: true },
+    { id: 'cv', net: 'GND', at: { x: 0, y: -3 }, drill: 0.3, diameter: 0.6, stitching: true },
+  ];
+  analysis.returnPath.transitions = [
+    { at: { x: 0, y: -3 }, fromLayer: TOP, toLayer: BOT, distance: 0 },
+    { at: { x: 15, y: 0.4 }, fromLayer: TOP, toLayer: BOT, distance: 0.4 },
+  ];
+  const check = checkReturn(board, analysis, { driver: 'U1', edge: 'fast', drive: 'open-drain' });
+  assert.equal(check.hops.length, 1);
+  assert.ok(Math.abs(check.hops[0].at.x - 15) < 0.01, `hop at ${check.hops[0].at.x}`);
+  assert.match(check.terms.find((t) => t.kind === 'transition')!.fix, /within ~1\.0 mm/);
+  const gnd = check.closures.find((c) => c.kind === 'gnd');
+  assert.ok(gnd && gnd.length < 4 && gnd.grade === 'ok', JSON.stringify(gnd));
+});
+
+test('the ground via in the exposed pad closes the loop, graded against the trace length', () => {
+  const forward: Path = [{ x: 0, y: 0 }, { x: 40, y: 0 }];
+  const ret: Path = [{ x: 0, y: -8 }, { x: 0, y: 0 }, { x: 40, y: 0 }];
+  const { board, analysis } = bare(forward, ret, 0.2);
+  board.components = [{ id: 'u1', designator: 'U1', at: { x: 0, y: 0 }, rotation: 0, layer: TOP, padIds: ['s', 'g', 'e', 'v'] }];
+  const pad = (id: string, net: string, at: { x: number; y: number }, pin: string): Pad => ({
+    id, net, layer: TOP, number: pin, at, shape: [], holeDiameter: 0, componentId: 'u1', pinName: pin,
+  });
+  const ep = pad('e', 'GND', { x: 1.5, y: -1 }, 'EP');
+  ep.shape = [rect(1.5, -1, 3, 3)];
+  board.pads = [pad('s', 'SIG', { x: 0, y: 0 }, 'OUT'), pad('g', 'GND', { x: 0, y: -8 }, 'GND'), ep, pad('v', '3V3', { x: 0.4, y: 0.5 }, 'VDD')];
+  board.vias = [
+    { id: 'ep', net: 'GND', at: { x: 1.2, y: -0.6 }, drill: 0.3, diameter: 0.6, stitching: false },
+    { id: 'far', net: 'GND', at: { x: 0, y: -7.5 }, drill: 0.3, diameter: 0.6, stitching: true },
+  ];
+  const check = checkReturn(board, analysis, { driver: 'U1', edge: 'fast', drive: 'push-pull' });
+  const gnd = check.closures.find((c) => c.kind === 'gnd');
+  assert.ok(gnd && gnd.length < 2.5, `closure followed the far pad: ${gnd?.length}`);
+  assert.equal(gnd!.grade, 'ok');
+  assert.equal(check.closures.find((c) => c.kind === 'vdd')?.grade, 'flag');
+});
+
+test('the decap is measured from the supply pin nearest the signal pin', () => {
+  const forward: Path = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+  const ret: Path = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+  const { board, analysis } = bare(forward, ret, 0.2);
+  board.components = [
+    { id: 'u1', designator: 'U1', at: { x: 0, y: 0 }, rotation: 0, layer: TOP, padIds: ['s', 'g', 'va', 'vb'] },
+    { id: 'c1', designator: 'C1', at: { x: 9, y: 0 }, rotation: 0, layer: TOP, padIds: ['ca', 'cb'] },
+  ];
+  const pad = (id: string, net: string, at: { x: number; y: number }, pin: string, comp: string): Pad => ({
+    id, net, layer: TOP, number: pin, at, shape: [], holeDiameter: 0, componentId: comp, pinName: pin,
+  });
+  board.pads = [
+    pad('s', 'SIG', { x: 0, y: 0 }, 'SCK', 'u1'),
+    pad('g', 'GND', { x: 0, y: -1 }, 'GND', 'u1'),
+    pad('va', '3V3', { x: 0.3, y: 0.3 }, 'VDD', 'u1'),
+    pad('vb', '3V3', { x: 8, y: 0 }, 'VDD', 'u1'),
+    pad('ca', '3V3', { x: 8.4, y: 0.4 }, '1', 'c1'),
+    pad('cb', 'GND', { x: 9.2, y: 0.4 }, '2', 'c1'),
+  ];
+  board.vias = [{ id: 'gv', net: 'GND', at: { x: 0, y: -0.8 }, drill: 0.2, diameter: 0.4, stitching: true }];
+  const check = checkReturn(board, analysis, { driver: 'U1', edge: 'normal', drive: 'push-pull' });
+  const vdd = check.closures.find((c) => c.kind === 'vdd');
+  assert.ok(vdd && vdd.length > 6, `decap length ${vdd?.length}`);
+  assert.equal(vdd!.grade, 'flag');
+});
+
+test('closure and decap between a quarter and a half of the trace are a note', () => {
+  const forward: Path = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+  const ret: Path = [{ x: 0, y: -3 }, { x: 0, y: 0 }, { x: 10, y: 0 }];
+  const { board, analysis } = bare(forward, ret, 0.2);
+  board.components = [
+    { id: 'u1', designator: 'U1', at: { x: 0, y: 0 }, rotation: 0, layer: TOP, padIds: ['s', 'g', 'v'] },
+    { id: 'c1', designator: 'C1', at: { x: 3, y: 1 }, rotation: 0, layer: TOP, padIds: ['ca', 'cb'] },
+  ];
+  const pad = (id: string, net: string, at: { x: number; y: number }, pin: string, comp: string): Pad => ({
+    id, net, layer: TOP, number: pin, at, shape: [], holeDiameter: 0, componentId: comp, pinName: pin,
+  });
+  board.pads = [
+    pad('s', 'SIG', { x: 0, y: 0 }, 'OUT', 'u1'),
+    pad('g', 'GND', { x: 0, y: -6 }, 'GND', 'u1'),
+    pad('v', '3V3', { x: 0.2, y: 0.2 }, 'VDD', 'u1'),
+    pad('ca', '3V3', { x: 3, y: 0.5 }, '1', 'c1'),
+    pad('cb', 'GND', { x: 3, y: 1.2 }, '2', 'c1'),
+  ];
+  board.vias = [{ id: 'gv', net: 'GND', at: { x: 0, y: -3 }, drill: 0.3, diameter: 0.6, stitching: true }];
+  const check = checkReturn(board, analysis, { driver: 'U1', edge: 'normal', drive: 'push-pull' });
+  const gnd = check.closures.find((c) => c.kind === 'gnd');
+  const vdd = check.closures.find((c) => c.kind === 'vdd');
+  assert.equal(gnd?.grade, 'note', JSON.stringify(gnd));
+  assert.equal(vdd?.grade, 'note', JSON.stringify(vdd));
+});
+
+test('one via antipad under the trace is minor whatever its area', () => {
+  const forward: Path = [{ x: 0, y: 0 }, { x: 40, y: 0 }];
+  const ret: Path = [{ x: 0, y: 0 }, { x: 19, y: 0 }, { x: 20, y: 0.8 }, { x: 21, y: 0 }, { x: 40, y: 0 }];
+  const { board, analysis } = bare(forward, ret, 0.2);
+  board.vias = [{ id: 'v', net: 'GND', at: { x: 20, y: 0 }, drill: 0.3, diameter: 0.6, stitching: true }];
+  const check = checkReturn(board, analysis, { edge: 'fast', drive: 'push-pull' });
+  assert.equal(check.excursions.length, 1);
+  assert.equal(check.excursions[0].antipad, true);
+  assert.equal(check.excursions[0].grade, 'minor');
+  assert.ok(check.r < 0.01, `r ${check.r}`);
+  assert.ok(check.score >= 90, `score ${check.score}`);
+  const wide: Path = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 12, y: 3 }, { x: 22, y: 3 }, { x: 24, y: 0 }, { x: 40, y: 0 }];
+  const big = bare(forward, wide, 0.2);
+  big.board.vias = [{ id: 'v', net: 'GND', at: { x: 16, y: 0 }, drill: 0.3, diameter: 0.6, stitching: true }];
+  const flagged = checkReturn(big.board, big.analysis, { edge: 'fast', drive: 'push-pull' });
+  assert.ok(flagged.excursions.some((e) => e.grade === 'flag' && !e.antipad), flagged.excursions.map((e) => e.grade).join(','));
 });
 
 test('a stretch outside ±h that never rejoins the trace is a solver error', () => {
@@ -177,7 +294,8 @@ test('dongle CS and RAD_RX match the check', { skip: !existsSync(DONGLE) }, asyn
   const { loadBoard } = await import('../../cli/src/easyeda/load.js');
   const board = loadBoard(DONGLE);
   // The drawn CS return keeps three loops the solver already reports (about 4, 8 and 8 mm²).
-  // Each is a note (h² ≤ dA < 9h²). Together r is about 0.4, so the score is not in the 90s.
+  // Each is a note (h² ≤ dA < 9h²). Together r is about 0.4. Closure and the return vias no longer
+  // add a second penalty, so the score sits just over 70 and stays out of the 90s.
   const cs = checkReturn(board, analyzeNet(board, 'CS', { drivers: ['U12'] }), { driver: 'U12', edge: 'normal', drive: 'push-pull' });
   assert.equal(cs.driver, 'U12');
   assert.ok(!cs.excursions.some((e) => e.grade === 'flag'), cs.excursions.map((e) => `${e.grade} ${e.dA.toFixed(1)}`).join(', '));
@@ -186,17 +304,17 @@ test('dongle CS and RAD_RX match the check', { skip: !existsSync(DONGLE) }, asyn
   assert.ok(notes.every((e) => e.dA > 2 && e.dA < 12));
   assert.ok(cs.r > 0.3 && cs.r < 0.55, `CS r ${cs.r}`);
   assert.ok(cs.hops.every((h) => h.grade !== 'flag'), cs.hops.map((h) => `${h.grade} ${h.distance.toFixed(2)}`).join(', '));
-  assert.ok(cs.score < 70, `CS score ${cs.score}`);
-  assert.equal(cs.status, 'Needs work');
+  assert.ok(cs.score >= 70 && cs.score < 90, `CS score ${cs.score}`);
+  assert.equal(cs.status, 'Fair');
 
   // RAD_RX leaves the trace at U16 and only rejoins near the far end, so the one loop is about 100 mm²
-  // (a flag) and the ground via it uses sits more than 3h from the trace. Closure is U16, not U12.
+  // (a flag). The ground via on that lead is the closure, not a second layer-transition flag.
   const rx = checkReturn(board, analyzeNet(board, 'RAD_RX', { drivers: ['U16'] }), { driver: 'U16', edge: 'slow', drive: 'push-pull' });
   const flagged = rx.excursions.filter((e) => e.grade === 'flag');
   assert.equal(flagged.length, 1, rx.excursions.map((e) => `${e.grade} ${e.dA.toFixed(1)}`).join(', '));
   assert.ok(flagged[0].dA > 70 && flagged[0].dA < 140, `RAD_RX dA ${flagged[0].dA}`);
   assert.ok(rx.r > 1.5 && rx.r < 3, `RAD_RX r ${rx.r}`);
-  assert.ok(rx.hops.some((h) => h.grade === 'flag' && h.distance > 3 * rx.h));
+  assert.ok(rx.hops.every((h) => h.fromSignalVia), rx.hops.map((h) => h.grade).join(', '));
   assert.ok(rx.score < 50, `RAD_RX score ${rx.score}`);
   const gnd = rx.closures.find((c) => c.kind === 'gnd');
   assert.ok(gnd && rx.driver === 'U16', JSON.stringify(gnd));
