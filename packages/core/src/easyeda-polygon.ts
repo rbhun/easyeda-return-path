@@ -1,4 +1,4 @@
-import { arcPoints, circle, difference, rect, union } from './geom.js';
+import { arcPoints, circle, evenOdd, rect, union } from './geom.js';
 import type { Path, Paths, Pt } from './types.js';
 
 type Conv = (x: number, y: number) => Pt;
@@ -71,13 +71,22 @@ function isComplex(src: unknown[]): src is unknown[][] {
   return Array.isArray(src[0]);
 }
 
-/** Complex polygon: first single polygon is the outer frame, the rest are holes. */
+/**
+ * Complex polygon. A point is copper when an odd number of rings contain it:
+ * the outline, then an island inside a hole, and so on.
+ *
+ * EasyEDA does not promise a winding. On the R-Com dongle, POUR6-1's outline is
+ * clockwise and its holes wind both ways, so a nonzero fill would leave the
+ * clockwise holes solid. Even-odd ignores that. One ring, and an outline with
+ * disjoint holes, is the same region as treating the first ring as the outline
+ * and the rest as holes.
+ */
 export function decodeComplex(src: unknown, conv: Conv, scale: number): Paths {
   if (!Array.isArray(src) || !src.length) return [];
   if (!isComplex(src)) return union([decodeSingle(src, conv, scale)]);
   const rings = src.map((s) => decodeSingle(s as unknown[], conv, scale)).filter((r) => r.length >= 3);
   if (!rings.length) return [];
-  return difference(union([rings[0]]), union(rings.slice(1)));
+  return evenOdd(rings);
 }
 
 /** Raw rings without hole semantics (for strokes and outlines). */
