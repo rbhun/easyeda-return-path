@@ -6,14 +6,14 @@ import { add, dist, distPointSeg, distToPaths, lerp, mul, pointInPaths, sub } fr
 import { sameNet } from './nets.js';
 import { DEFAULT_HEIGHT_MM } from './returncost.js';
 import type { Analysis, ChainResult } from './analyze.js';
-import type { Board, Pad, Path, Pt, Via } from './types.js';
+import type { Board, Pad, Path, Pt } from './types.js';
 import type { ReturnTrace, ReturnVia } from './returnpath.js';
 
 const MIL = 0.0254;
 
 export type EdgeClass = 'fast' | 'normal' | 'slow';
 export type DriveType = 'push-pull' | 'open-drain';
-export type Grade = 'ok' | 'note' | 'flag';
+export type Grade = 'ok' | 'note' | 'flag' | 'unknown';
 export type Status = 'Good' | 'Fair' | 'Needs work';
 
 /** fast clocks count three times a GPIO; a reset counts half. */
@@ -201,8 +201,10 @@ function rwGrade(rw: number): Grade {
 }
 
 function hopGrade(d: number, h: number): Grade {
-  if (d < h) return 'ok';
-  if (d <= 3 * h) return 'note';
+  const flagAt = Math.max(3 * h, 1);
+  const noteAt = Math.max(h, Math.min(flagAt, 1));
+  if (d <= noteAt) return 'ok';
+  if (d <= flagAt) return 'note';
   return 'flag';
 }
 
@@ -523,12 +525,6 @@ function singleViaAntipad(board: Board, slice: Sample[]): boolean {
   return hits.length === 1 && dist(peak, hits[0]) <= 1.6;
 }
 
-const EP_PIN = /^(?:E?PAD|EP\d*|THERMAL\w*|TAB|SLUG)$/i;
-
-function isEpPad(p: Pad): boolean {
-  return !!p.pinName && p.pinName.split(/[\s/(),;|]+/).some((t) => EP_PIN.test(t));
-}
-
 function padReach(p: Pad): number {
   let r = 0;
   for (const ring of p.shape ?? []) for (const q of ring) r = Math.max(r, dist(p.at, q));
@@ -541,8 +537,9 @@ function viaOnPad(v: Pt, p: Pad): boolean {
 }
 
 /**
- * The via that ties the driver's ground to the reference layer, nearest the signal pin.
- * Exposed-pad vias are the driver's ground connection and win over other fanout vias.
+ * The ground via the return closes through. Every ground via that overlaps a driver ground pad
+ * is a candidate, including one placed inside the exposed pad. Cost is the distance from the
+ * signal pin plus the distance from the via out to its pad. The cheapest wins. Pad order is not used.
  */
 function closureVia(board: Board, driver: string, signalAt: Pt): Pt | undefined {
   const comp = board.components.find((c) => c.designator === driver);
@@ -551,21 +548,21 @@ function closureVia(board: Board, driver: string, signalAt: Pt): Pt | undefined 
   const grounds = [...new Set(own.map((p) => p.net).filter((n): n is string => !!n && isGroundNet(n)))];
   const pads = grounds.flatMap((g) => returnPads(own, g).pads);
   if (!pads.length) return undefined;
-  const onGround = (v: Via) => pads.some((p) => p.net && sameNet(v.net, p.net));
-  const vias = board.vias.filter(onGround);
-  const ep = pads.filter(isEpPad);
-  const epVias = ep.length ? vias.filter((v) => ep.some((p) => viaOnPad(v.at, p))) : [];
-  const pool: Pt[] = epVias.length
-    ? epVias.map((v) => v.at)
-    : [
-      ...vias.filter((v) => dist(v.at, signalAt) <= 4 || pads.some((p) => dist(v.at, p.at) <= 3)).map((v) => v.at),
-      ...pads.filter((p) => p.holeDiameter > 0).map((p) => p.at),
-    ];
-  if (!pool.length) return undefined;
-  return pool.reduce((a, b) => (dist(a, signalAt) <= dist(b, signalAt) ? a : b));
+  const scored: { at: Pt; cost: number }[] = [];
+  for (const v of board.vias) {
+    const pad = pads
+      .filter((p) => p.net && sameNet(v.net, p.net) && viaOnPad(v.at, p))
+      .sort((a, b) => dist(v.at, a.at) - dist(v.at, b.at))[0];
+    if (!pad) continue;
+    const inside = !!pad.shape?.length && pointInPaths(v.at, pad.shape);
+    const top = inside ? 0 : Math.max(0, dist(v.at, pad.at) - Math.max(0, padReach(pad) - 0.25));
+    scored.push({ at: v.at, cost: dist(signalAt, v.at) + top });
+  }
+  scored.sort((a, b) => a.cost - b.cost || a.at.x - b.at.x || a.at.y - b.at.y);
+  return scored[0]?.at;
 }
 
-function hopsOf(board: Board, net: string, transitions: ReturnVia[], samples: Sample[], h: number, pinAt?: Pt, closureAt?: Pt): CheckHop[] {
+function hopsOf(board: Board, net: string, transitions: ReturnVia[], samples: Sample[], h: number, pinAt: Pt | undefined, closureAt: Pt | undefined, findings: Analysis['findings']): CheckHop[] {
   const signals = signalLayerVias(board, net);
   if (!signals.length || !transitions.length) return [];
   const pin = pinAt ? nearestSample(samples, pinAt) : undefined;
@@ -597,7 +594,9 @@ function hopsOf(board: Board, net: string, transitions: ReturnVia[], samples: Sa
       }
     }
     const near = nearPart(board, sig);
-    return { at: via.at, distance, grade: hopGrade(distance, h), fromSignalVia: true, near };
+    const solver = (findings ?? []).find((f) => f.kind === 'return-via' && dist(f.at, via.at) < 0.75);
+    const grade: Grade = solver?.severity === 'ok' ? 'ok' : solver?.severity === 'warn' ? (hopGrade(distance, h) === 'ok' ? 'ok' : 'note') : hopGrade(distance, h);
+    return { at: via.at, distance, grade, fromSignalVia: true, near };
   });
 }
 
@@ -623,12 +622,12 @@ function loopGrade(pathMm: number, netMm: number): Grade {
   return 'ok';
 }
 
-function closuresOf(board: Board, net: string, driver: string | undefined, samples: Sample[], netMm: number): CheckClosure[] {
+function closuresOf(board: Board, net: string, driver: string | undefined, samples: Sample[], netMm: number, supplyUnknown: boolean, closureAt?: Pt): CheckClosure[] {
   if (!driver) return [];
   const comp = board.components.find((c) => c.designator === driver);
   const pin = comp && board.pads.find((p) => p.componentId === comp.id && sameNet(p.net, net));
   const out: CheckClosure[] = [];
-  const via = pin ? closureVia(board, driver, pin.at) : undefined;
+  const via = closureAt ?? (pin ? closureVia(board, driver, pin.at) : undefined);
   if (pin && via && samples.length) {
     const atPin = nearestSample(samples, pin.at)!;
     const here = samples.filter((s) => s.walk === atPin.walk);
@@ -648,6 +647,10 @@ function closuresOf(board: Board, net: string, driver: string | undefined, sampl
   // Computed for both drive types. The score counts it only for push-pull, so a stored check
   // can be rescored when the user changes the drive type without solving again.
   if (!pin) return out;
+  if (supplyUnknown) {
+    out.push({ kind: 'vdd', at: pin.at, length: NaN, grade: 'unknown', text: `${driver} supply loop unknown` });
+    return out;
+  }
   const refNet = comp && board.pads.find((p) => p.componentId === comp.id && p.net && isGroundNet(p.net))?.net;
   if (!refNet) return out;
   const loop = driverLoop(board, driver, net, refNet);
@@ -714,7 +717,7 @@ function termsOf(check: Omit<NetCheck, 'terms' | 'score' | 'status' | 'rW' | 'de
     });
   }
   for (const c of check.closures) {
-    if (c.grade === 'ok') continue;
+    if (c.grade === 'ok' || c.grade === 'unknown') continue;
     const flagged = c.grade === 'flag';
     terms.push({
       kind: 'closure',
@@ -776,9 +779,10 @@ export function checkReturn(board: Board, analysis: Analysis, props: CheckProps)
   const pinAt = driverPinAt(board, analysis.net, props.driver);
   const built = measure(board, analysis.net, analysis.chains, analysis.returnPath.traces, h, pinAt);
   const segs = forwardSegs(analysis.chains);
-  const closureAt = pinAt && props.driver ? closureVia(board, props.driver, pinAt) : undefined;
-  const hops = hopsOf(board, analysis.net, analysis.returnPath.transitions, built.samples, h, pinAt, closureAt);
-  const closures = closuresOf(board, analysis.net, props.driver, built.samples, length);
+  const supplyUnknown = (analysis.findings ?? []).some((f) => f.kind === 'driver-loop' && f.message.includes('supply loop unknown'));
+  const closureAt = analysis.returnPath.closureAt ?? (pinAt && props.driver ? closureVia(board, props.driver, pinAt) : undefined);
+  const hops = hopsOf(board, analysis.net, analysis.returnPath.transitions, built.samples, h, pinAt, closureAt, analysis.findings);
+  const closures = closuresOf(board, analysis.net, props.driver, built.samples, length, supplyUnknown, closureAt);
   const kept = keptTraces(analysis.returnPath.traces, built.excursions, built.errors, segs, h);
   const sumA = built.excursions.reduce((s, e) => s + (e.antipad ? 0 : e.dA), 0);
   const r = length > 0 && h > 0 ? sumA / (length * h) : 0;
@@ -981,7 +985,7 @@ export function findingsOf(check: NetCheck): FindingLine[] {
     out.push({
       type: c.kind === 'gnd' ? 'driver ground' : 'driver supply',
       at: c.at,
-      value: Number.isFinite(c.length) ? `${c.length.toFixed(2)} mm` : 'none',
+      value: c.grade === 'unknown' ? 'unknown' : Number.isFinite(c.length) ? `${c.length.toFixed(2)} mm` : 'none',
       grade: c.grade,
       text: c.text,
     });

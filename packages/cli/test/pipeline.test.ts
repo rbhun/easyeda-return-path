@@ -54,7 +54,7 @@ test('POURED fill is used as-is', () => {
 test('demo board: slot, split, coverage and via findings', () => {
   const an = analyzeNet(boardFrom('demo', 'object'), 'CLK');
   const kinds = an.findings.map((f) => `${f.severity}:${f.kind}`);
-  assert.deepEqual(kinds, ['error:slot-crossing', 'warn:band-coverage', 'error:split-crossing', 'warn:via-return', 'warn:via-return', 'ok:loop-closure', 'ok:loop-closure', 'ok:return-length', 'error:return-detour', 'warn:return-detour', 'ok:return-via']);
+  assert.deepEqual(kinds, ['error:slot-crossing', 'warn:band-coverage', 'error:split-crossing', 'warn:via-return', 'warn:via-return', 'ok:loop-closure', 'ok:loop-closure', 'ok:return-length', 'warn:return-detour', 'warn:return-via']);
   const slot = an.chains.flatMap((c) => c.gaps).find((g) => g.kind === 'slot')!;
   assert.ok(Math.abs(slot.detour!.extraLength - 15.8) < 0.2);
   assert.ok(Math.abs(slot.detour!.loopArea - 12.8) < 0.3);
@@ -68,7 +68,7 @@ test('fixed board: only the bridged split remains', () => {
   const an = analyzeNet(boardFrom('fixed', 'object'), 'CLK');
   assert.deepEqual(
     an.findings.map((f) => `${f.severity}:${f.kind}`),
-    ['warn:split-crossing', 'ok:via-return', 'ok:via-return', 'ok:loop-closure', 'ok:loop-closure', 'ok:return-length', 'warn:return-detour', 'warn:return-detour', 'ok:return-via'],
+    ['warn:split-crossing', 'ok:via-return', 'ok:via-return', 'ok:loop-closure', 'ok:loop-closure', 'ok:return-length', 'warn:return-detour', 'warn:return-detour', 'warn:return-via'],
   );
 });
 
@@ -118,13 +118,13 @@ test('driver loop: the rising edge returns through the nearest decap into the dr
   const an = analyzeNet(b, 'CLK', { drivers: ['U1'] });
   const f = an.findings.filter((x) => x.kind === 'driver-loop');
   assert.equal(f.length, 1);
-  assert.equal(f[0].severity, 'warn', 'between the 4 mm and 10 mm thresholds');
-  assert.match(f[0].message, /into U1 pad 2 \(GND\); the rising edge through decap C1 into U1 pad 3 \(3V3\), 8\.55 mm/);
+  assert.equal(f[0].severity, 'ok', 'the supply side is a small fraction of the trace');
+  assert.match(f[0].message, /into U1 pad 2 \(GND\); the rising edge through decap C1 into U1 pad 3 \(3V3\), [\d.]+ mm from the supply pin/);
   const supply = an.returnPath!.jumps.filter((j) => j.kind === 'supply');
   assert.equal(supply.length, 2, 'ground pin → decap, decap → supply pin');
   assert.deepEqual(an.returnPath!.drivers.map((d) => d.decap?.component.designator), ['C1']);
   const strict = analyzeNet(b, 'CLK', { drivers: ['U1'], driverDecap: { good: 4, warn: 6 } });
-  assert.equal(strict.findings.find((x) => x.message.startsWith('U1 (driver)'))!.severity, 'error');
+  assert.equal(strict.findings.find((x) => x.message.startsWith('U1 (driver)'))!.severity, 'ok', 'the grade is the fraction of the trace');
   assert.ok(!analyzeNet(b, 'CLK').findings.some((x) => x.message.includes('(driver)')), 'no driver, no driver loop');
 });
 

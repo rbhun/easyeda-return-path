@@ -39,7 +39,7 @@ test('menu action reads the board through the API and draws temporary markers', 
 	assert.equal(mock.messages.length, 1);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
 	assert.match(mock.messages[0], /^Return paths: \d+\/100 — (Good|Fair|Needs work)\./);
-	assert.match(mock.messages[0], /^CLK: 12 finding\(s\)/m);
+	assert.match(mock.messages[0], /^CLK: 11 finding\(s\)/m);
 	assert.match(mock.messages[0], /Current drawn where it flows, in the colour of the copper layer it flows in\. Forward \(the signal trace\): Top Layer yellow, Bottom Layer green, with a circle on each via it passes through\. Return: Top Layer magenta, Inner1 blue; on the trace where it runs in the copper of another layer, beside it in a pour on the trace's own layer\. White lines ±h from the trace bound half the return current in the plane under it\. Dashed white: hop between layers or into a part .*red over the trace: it crosses a gap, or has less than half the reference copper it needs/);
 	assert.match(mock.messages[0], /^CLK: clock at 16 MHz\. Edges ≈ 2\.0 ns .* it acts as a transmission line/m);
 	const pick = mock.wizardPages.find(p => /^Net to check and its speed/.test(p.prompt))!;
@@ -144,7 +144,7 @@ test('net names in another letter case are the same net, as in EasyEDA: the sele
 	await ext.showReturnPath();
 	assert.equal(mock.wizardPages.find(p => p.kind === 'nets')?.value, 'CLK', 'the selected clk is the board net CLK');
 	assert.match(mock.messages[0], /^Return paths: \d+\/100 — (Good|Fair|Needs work)\./);
-	assert.match(mock.messages[0], /^CLK: 12 finding\(s\)/m);
+	assert.match(mock.messages[0], /^CLK: 11 finding\(s\)/m);
 	assert.deepEqual(mock.messages[0].split('\n').filter(l => l.startsWith('[')), expected);
 	assert.match(mock.messages[0], /warning: Nets CLK and clk differ only in letter case; EasyEDA takes them as one net, analysed as CLK\./);
 	assert.match(mock.messages[0], /warning: Nets GND and gnd differ only in letter case/);
@@ -190,7 +190,7 @@ test('panel: an HF run shows its result and driver there, and the driver legs fo
 	assert.match(done.result.lines[0], /^Return paths: \d+\/100 — (Good|Fair|Needs work)\./, 'the score leads the result');
 	assert.ok(done.result.score && done.result.score.header === done.result.lines[0], 'the score card uses that same first line');
 	assert.ok(done.result.lines.includes('Driver: U1. Its other edge is drawn dashed white from its ground pin through the decap to its supply pin.'), done.result.lines.join('\n'));
-	assert.ok(done.result.lines.some((l: string) => /^\[warn\] U1 \(driver\): .* decap C1 into U1 pad 3 \(3V3\)/.test(l)));
+	assert.ok(done.result.lines.some((l: string) => /^\[ok\] U1 \(driver\): .* decap C1 into U1 pad 3 \(3V3\)/.test(l)));
 	assert.equal(done.lastRun, 'HF check: CLK at 16 MHz, driver U1');
 	assert.deepEqual(done.roles.map((r: { role: string }) => r.role), ['forwardTop', 'forwardOther', 'returnTop', 'returnOther', 'returnInner', 'hop', 'gap', 'half', 'band', 'checkNote', 'checkFlag', 'checkError', 'checkMark'], 'every HF role in the panel');
 	assert.equal(done.roles.find((r: { role: string }) => r.role === 'half').visible, true, 'the 50% band is shown');

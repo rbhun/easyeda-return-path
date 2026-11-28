@@ -126,7 +126,7 @@ test('collapseTightHairpins keeps a 90° corner and a large U', () => {
   assert.equal(kept.length, bigU.length, 'large U not collapsed');
 });
 
-test('a small gap is drawn back on the trace with a minor-cut mark', () => {
+test('a gap the projection crosses is routed around and marked', () => {
   const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
   const hole = rect(15, 10, 0.4, 1.0);
   const an = analyzeNet(board(tracks, difference(pour, [hole]), ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p))), 'SIG', { drivers: ['U1'] });
@@ -134,8 +134,9 @@ test('a small gap is drawn back on the trace with a minor-cut mark', () => {
   assert.ok(minor.length === 1, `one minor cut, got ${an.returnPath.marks.map((m) => m.kind).join(',')}`);
   assert.ok(Math.abs(minor[0].at.x - 15) < 1.5, `mark at the gap, x=${minor[0].at.x}`);
   assert.ok(minor[0].area < 1.6 * 1.6, `area ${minor[0].area} is under h²`);
-  const near = an.returnPath.traces.flatMap((t) => t.pts).filter((p) => Math.abs(p.x - 15) < 0.8);
-  assert.ok(near.length && near.every((p) => Math.abs(p.y - 10) < 0.2), 'drawn on the trace through the gap');
+  const near = an.returnPath.traces.flatMap((t) => t.pts).filter((p) => Math.abs(p.x - 15) < 0.3);
+  assert.ok(near.length && near.some((p) => Math.abs(p.y - 10) > 0.3), 'the return goes around the cut in the projection');
+  assert.ok(an.findings.some((f) => f.kind === 'minor-cut' || f.kind === 'return-detour'), 'a cut the projection hits is a finding');
 });
 
 test('a short hop on the other layer does not pull the return through an unconnected via', () => {
@@ -152,12 +153,8 @@ test('a short hop on the other layer does not pull the return through an unconne
     'SIG',
     { drivers: ['U1'] },
   );
-  assert.deepEqual(
-    an.returnPath.transitions.map((v) => [v.fromLayer, v.toLayer]),
-    [[TOP, BOT]],
-    'only the drop from the driver ground pad; the hop does not add one',
-  );
-  assert.ok(an.returnPath.transitions[0].at.x < 3, 'that via is the driver ground via, not the one beside the hop');
+  assert.deepEqual(an.returnPath.transitions, [], 'the closure via is where the return starts, not a layer change, and the hop adds none');
+  assert.ok(an.returnPath.traces[0] && an.returnPath.traces[0].pts[0].x < 4, 'the return starts at the driver ground via');
   assert.ok(an.returnPath.traces.filter((t) => t.layer === BOT).length >= 1);
   const xs = an.returnPath.traces.flatMap((t) => t.pts.map((p) => p.x));
   assert.ok(Math.min(...xs) < 4 && Math.max(...xs) > 24, 'one line along the whole trace');
@@ -177,8 +174,42 @@ test('the return goes around a via hole instead of across it', () => {
   for (const t of an.returnPath.traces)
     for (let i = 1; i < t.pts.length; i++) {
       const d = distPointSeg(hole.at, t.pts[i - 1], t.pts[i]);
-      assert.ok(d >= hole.diameter / 2 - 0.02, `segment passes ${d.toFixed(3)} mm from the via centre`);
+      assert.ok(d >= hole.drill / 2 - 0.02, `segment passes ${d.toFixed(3)} mm from the via centre`);
     }
+});
+
+test('a via beside the trace does not pull the return off the copper under it', () => {
+  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
+  const via = { id: 'hole', net: '3V3', at: { x: 15, y: 10.45 }, drill: 0.3, diameter: 1.0, stitching: false };
+  const an = analyzeNet(
+    board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p)), [via]),
+    'SIG',
+    { drivers: ['U1'] },
+  );
+  let seen = false;
+  let off = false;
+  for (const t of an.returnPath.traces)
+    for (let i = 1; i < t.pts.length; i++) {
+      const [a, b] = [t.pts[i - 1], t.pts[i]];
+      if (Math.max(a.x, b.x) < 13.5 || Math.min(a.x, b.x) > 16.5) continue;
+      seen = true;
+      if (distPointSeg({ x: 15, y: 10 }, a, b) > 0.25) off = true;
+    }
+  assert.ok(seen && !off, 'the return stays on the projection');
+  assert.ok(!an.findings.some((f) => f.kind === 'return-detour' || f.kind === 'minor-cut'), 'a hole next to the trace is not a detour');
+});
+
+test('the closure starts at the nearer ground via, not a far pad', () => {
+  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
+  const pads = ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p));
+  const b = board(tracks, pour, pads);
+  b.pads.push(pad('g2', 'GND', { x: 2, y: 18 }, 'u1', 'GND', '31'));
+  b.components[0].padIds.push('g2');
+  b.vias.push({ id: 'far', net: 'GND', at: { x: 2, y: 18 }, drill: 0.3, diameter: 0.6, stitching: true });
+  const an = analyzeNet(b, 'SIG', { drivers: ['U1'] });
+  const start = an.returnPath.traces[0]?.pts[0];
+  assert.ok(start && dist(start, { x: 1, y: 8 }) < dist(start, { x: 2, y: 18 }), `started at (${start?.x}, ${start?.y})`);
+  assert.ok(an.returnPath.closureAt && dist(an.returnPath.closureAt, { x: 1, y: 8 }) < 1, 'the near via is the closure');
 });
 
 test('an outline that misses the trace still draws the return', () => {

@@ -936,11 +936,18 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
       ? `the pour beside it covers as little as ${pct} of the coplanar band on its better side (${(halfBand - inner).toFixed(2)} mm beyond the trace clearance)`
       : `copper under it carries as little as ${pct} of the return current's spread (±3h = ±${halfBand.toFixed(2)} mm, weighted towards the trace)`;
     const span = low.length > 1 ? `${low.length} segments, ${length.toFixed(1)} mm` : `${length.toFixed(1)} mm`;
+    const at = { x: (worst.a.x + worst.b.x) / 2, y: (worst.a.y + worst.b.y) / 2 };
+    // A hole sitting next to the trace thins the band. That is the same place as the antipad, so it
+    // is reported as info and does not stand as a second warning.
+    const beside = (p: Pt, r: number) => distPointSeg(p, a, b) <= r + Math.min(halfBand, 0.6);
+    const holeBeside =
+      board.vias.some((v) => beside(v.at, Math.max(v.drill, v.diameter) / 2)) ||
+      board.pads.some((p) => p.holeDiameter > 0 && beside(p.at, p.holeDiameter / 2));
     findings.push({
-      severity: 'warn',
+      severity: holeBeside ? 'ok' : 'warn',
       kind: 'band-coverage',
-      message: `${layerName(chain.layer)} (${a.x.toFixed(1)}, ${a.y.toFixed(1)})→(${b.x.toFixed(1)}, ${b.y.toFixed(1)}), ${span}: ${what}`,
-      at: { x: (worst.a.x + worst.b.x) / 2, y: (worst.a.y + worst.b.y) / 2 },
+      message: `${holeBeside ? 'info: ' : ''}${layerName(chain.layer)} (${a.x.toFixed(1)}, ${a.y.toFixed(1)})→(${b.x.toFixed(1)}, ${b.y.toFixed(1)}), ${span}: ${what}`,
+      at,
     });
     low = [];
   };
