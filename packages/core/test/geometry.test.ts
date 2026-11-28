@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { arcPoints, area, difference, dropNarrow, geodesic, leastInductancePath, pathInductance, Polyline, runSync, viaInductance, isGroundNet, pairGround, pouredScale, rect, scalePaths, splitIslands, union } from '../src/index.js';
+import { arcPoints, area, decodeComplex, difference, dropNarrow, geodesic, leastInductancePath, pathInductance, pointInPaths, Polyline, runSync, viaInductance, isGroundNet, pairGround, pouredScale, rect, scalePaths, splitIslands, union } from '../src/index.js';
 
 test('arc discretisation keeps radius', () => {
   const pts = arcPoints({ x: 1, y: 0 }, { x: 0, y: 1 }, 90);
@@ -120,4 +120,49 @@ test('loop inductance: a via through a 1.6 mm board is about 1.3 nH; a return fu
   const at = (y: number) => pathInductance([{ x: 0, y }, { x: 10, y }], line, 0.1, 0);
   assert.ok(at(0.3) < at(1) && at(1) < at(3));
   assert.ok(Math.abs(pathInductance([{ x: 0, y: 0 }, { x: 10, y: 0 }], line, 0.1, 1.5) - 10 * 0.2 * Math.log(1 + 225)) < 1e-6);
+});
+
+/** EasyEDA single polygon: x y L x y ... closed. Coordinates are already in the test's unit. */
+function ringSrc(ring: { x: number; y: number }[]): unknown[] {
+  const [first, ...rest] = ring;
+  return [first.x, first.y, 'L', ...rest.flatMap((p) => [p.x, p.y]), first.x, first.y];
+}
+
+const ident = (x: number, y: number) => ({ x, y });
+
+function sameRegion(a: ReturnType<typeof union>, b: ReturnType<typeof union>, label: string) {
+  const sym = area(union(difference(a, b), difference(b, a)));
+  assert.ok(sym < 1e-6, `${label} symmetric difference ${sym}`);
+}
+
+test('a copper island inside a pour hole stays copper', () => {
+  const outline = rect(5, 5, 10, 10);
+  const hole = rect(5, 5, 6, 6);
+  const island = [...rect(5, 5, 2, 2)].reverse();
+  const decoded = decodeComplex([ringSrc(outline), ringSrc(hole), ringSrc(island)], ident, 1);
+  assert.ok(pointInPaths({ x: 5, y: 5 }, decoded), 'the island is copper');
+  assert.ok(!pointInPaths({ x: 3, y: 5 }, decoded), 'the hole around the island is empty');
+  assert.ok(pointInPaths({ x: 1, y: 1 }, decoded), 'the outline is copper');
+  assert.ok(Math.abs(area(decoded) - (100 - 36 + 4)) < 1e-4, `area ${area(decoded)}`);
+});
+
+test('an outline with two disjoint holes decodes as outline minus those holes', () => {
+  const outline = rect(5, 5, 10, 10);
+  const holeA = rect(2, 2, 2, 2);
+  const holeB = [...rect(8, 8, 2, 2)].reverse();
+  const src = [ringSrc(outline), ringSrc(holeA), ringSrc(holeB)];
+  const decoded = decodeComplex(src, ident, 1);
+  const asHoles = difference(union([outline]), union([holeA, holeB]));
+  sameRegion(decoded, asHoles, 'two holes');
+  assert.ok(!pointInPaths({ x: 2, y: 2 }, decoded));
+  assert.ok(!pointInPaths({ x: 8, y: 8 }, decoded));
+  assert.ok(pointInPaths({ x: 5, y: 5 }, decoded));
+});
+
+test('a single ring decodes as that ring filled', () => {
+  const outline = rect(5, 5, 10, 10);
+  const one = decodeComplex(ringSrc(outline), ident, 1);
+  const wrapped = decodeComplex([ringSrc(outline)], ident, 1);
+  sameRegion(one, union([outline]), 'bare ring');
+  sameRegion(wrapped, union([outline]), 'one-ring complex');
 });

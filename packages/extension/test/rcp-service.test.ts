@@ -37,6 +37,8 @@ interface MockFixtureOptions {
   stackupMode?: 'getStackup' | 'physicalConfig' | 'fallback';
   /** Inner1 is a PLANE layer between Top and Bottom, with this PCB document as its zone. */
   planeDocument?: string;
+  /** The bottom pour fill is an outline, a hole, and a copper island inside that hole. */
+  islandInHole?: boolean;
 }
 
 function installMockEda(opts: MockFixtureOptions = {}) {
@@ -92,6 +94,16 @@ function installMockEda(opts: MockFixtureOptions = {}) {
     },
   ];
 
+  const islandOutline = rect(20, 20, 40, 40);
+  const islandHole = rect(20, 20, 16, 16);
+  const islandCopper = [...rect(20, 20, 6, 6)].reverse();
+  if (opts.islandInHole) {
+    pours[0] = {
+      ...pours[0],
+      getState_ComplexPolygon: () => ({ getSource: () => [ringToSource(islandOutline, 1)] }),
+    };
+  }
+
   const pouredMap = new Map<string, unknown>([
     [
       'POURED_1',
@@ -99,10 +111,24 @@ function installMockEda(opts: MockFixtureOptions = {}) {
         getState_PrimitiveId: () => 'POURED_1',
         getState_PourPrimitiveId: () => 'POUR_GND_BOT',
         getState_Layer: () => 2,
-        getState_PourFills: () => [
-          { fill: true, path: { getSource: () => [ringToSource(leftGnd[0], pouredUnit)] } },
-          { fill: true, path: { getSource: () => [ringToSource(rightGnd[0], pouredUnit)] } },
-        ],
+        getState_PourFills: () =>
+          opts.islandInHole
+            ? [
+                {
+                  fill: true,
+                  path: {
+                    getSource: () => [
+                      ringToSource(islandOutline, pouredUnit),
+                      ringToSource(islandHole, pouredUnit),
+                      ringToSource(islandCopper, pouredUnit),
+                    ],
+                  },
+                },
+              ]
+            : [
+                { fill: true, path: { getSource: () => [ringToSource(leftGnd[0], pouredUnit)] } },
+                { fill: true, path: { getSource: () => [ringToSource(rightGnd[0], pouredUnit)] } },
+              ],
       },
     ],
   ]);
@@ -330,6 +356,22 @@ test('mcp.rcp.checkNet detects split crossing even with EasyEDA 10-mil poured fi
   const bad = await env.call<CheckNetReplyData>('mcp.rcp.checkNet', { net: 'NONEXISTENT' });
   assert.equal(bad.ok, false);
   if (!bad.ok) assert.match(bad.error, /not found/);
+});
+
+test('mcp.rcp.checkNet keeps a trace on a copper island inside a pour hole off plane_void', async () => {
+  const env = installMockEda({
+    islandInHole: true,
+    extraLines: [{ id: 'ISLE', net: 'SIG', layer: 1, a: { x: 18, y: 20 }, b: { x: 22, y: 20 } }],
+  });
+  const reply = await env.call<CheckNetReplyData>('mcp.rcp.checkNet', {
+    net: 'SIG',
+    rules: { planeEdgeClearanceFactor: 0 },
+  });
+  assert.equal(reply.ok, true);
+  if (!reply.ok) return;
+  assert.ok(reply.data.segmentsChecked >= 1);
+  const voids = reply.data.findings.filter((f) => f.kind === 'plane_void');
+  assert.equal(voids.length, 0, voids.map((f) => `${f.lengthMm} ${f.detail}`).join('; '));
 });
 
 test('mcp.rcp.checkNet treats an Inner1 PLANE layer as one sheet with keepouts cut out', async () => {

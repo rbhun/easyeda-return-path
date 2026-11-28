@@ -92,6 +92,12 @@ export function union(...sets: Paths[]): Paths {
   return Clipper.unionD(all, [], FillRule.NonZero, PREC);
 }
 
+/** Combine rings by the even-odd rule. A ring inside a hole is copper. Winding does not matter. */
+export function evenOdd(paths: Paths): Paths {
+  if (!paths.length) return [];
+  return Clipper.unionD(paths, [], FillRule.EvenOdd, PREC);
+}
+
 export function intersect(a: Paths, b: Paths): Paths {
   if (!a.length || !b.length) return [];
   return Clipper.intersectD(a, b, FillRule.NonZero, PREC);

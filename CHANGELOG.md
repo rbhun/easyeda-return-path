@@ -2,6 +2,12 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.88] - 2026-11-28
+
+From Balazs: `mcp.rcp.checkNet` reported multi-millimetre plane voids on Bottom traces over Inner2 where the pour has copper fingers inside a hole. The fingers were in the fill, and the check still reported the hole.
+
+- **A pour fill is decoded by how its rings nest.** A point inside an odd number of rings is copper, so an island inside a hole stays. EasyEDA rings wind either way (a dongle pour's outline is clockwise and its holes go both ways), so the rings are combined even-odd. One ring, and an outline with disjoint holes, is the same region as before.
+
 ## [0.1.87] - 2026-11-28
 
 From Balazs: the inner-plane pour clearance around the RESET via reaches under the edge of the SCK trace, but the trace centreline stays on copper. That must not be a detour.
