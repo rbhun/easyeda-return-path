@@ -3,7 +3,7 @@ import { isGroundNet, looksLikePowerNet } from './dc/rails.js';
 import { resolveNet } from './nets.js';
 import { DEFAULT_MAX_DETOUR_NODES, geodesic, geodesicSteps, TOO_COMPLEX, type Detour } from './detour.js';
 import { add, circle, difference, dist, distPointSeg, distToPaths, enclosedArea, inflate, intersect, area, mul, pointInPaths, Polyline, strokePath, union } from './geom.js';
-import { allCopper, buildReferenceCopperSteps, vertexCount, type LayerCopper } from './refcopper.js';
+import { allCopper, buildReferenceCopperSteps, preparePours, vertexCount, type LayerCopper } from './refcopper.js';
 import { isPassive } from './driver.js';
 import { pathInductance, viaInductance } from './inductance.js';
 import { buildReturnPath, type ReturnPath } from './returnpath.js';
@@ -39,6 +39,11 @@ export interface AnalyzeOptions {
   slotDetour: { ignore: number; warn: number };
   /** Raster pitch of the return solve, mm. 3 mil. */
   returnGridMm: number;
+  /**
+   * Recompute a stored pour fill when it does not match the vias, tracks and pads on that layer.
+   * When this is off, a stale fill is left as drawn and the result is marked provisional.
+   */
+  rebuildPours: boolean;
   /** Dielectric height for the loop-area cost, mm. 0 reads the stackup and falls back to 1.6 mm. */
   returnHeightMm: number;
   /** Added to d/h in the return cost, so following the trace costs this per millimetre. */
@@ -61,6 +66,7 @@ export const defaultOptions: AnalyzeOptions = {
   driverDecap: { good: 4, warn: 10 },
   slotDetour: { ignore: 1, warn: 5 },
   returnGridMm: 3 * 0.0254,
+  rebuildPours: true,
   returnHeightMm: 0,
   returnEps: 0.02,
 };
@@ -208,6 +214,8 @@ export interface Analysis {
   returnPath: ReturnPath;
   findings: Finding[];
   stats: AnalysisStats;
+  /** A stored pour fill did not match the copper and was left as drawn. */
+  provisional?: boolean;
 }
 
 export interface HfScope {
@@ -269,9 +277,11 @@ export function analyzeNetAsync(board: Board, net: string, options: Partial<Anal
   return runAsync(analyzeNetSteps(board, net, options), run);
 }
 
-export function* analyzeNetSteps(board: Board, net: string, options: Partial<AnalyzeOptions> = {}): Steps<Analysis> {
-  net = resolveNet(board, net);
+export function* analyzeNetSteps(source: Board, net: string, options: Partial<AnalyzeOptions> = {}): Steps<Analysis> {
   const opts = { ...defaultOptions, ...options };
+  const prep = preparePours(source, opts.rebuildPours);
+  const board = prep.board;
+  net = resolveNet(board, net);
   const tracks = board.tracks.filter((t) => t.net === net);
   if (!tracks.length) {
     const pad = board.pads.find((p) => p.net === net);
@@ -293,7 +303,12 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
   if (refVertices > opts.maxRefVertices)
     throw new AnalysisAborted('complexity', `Reference copper has ${refVertices} polygon vertices (limit ${opts.maxRefVertices}).`, 'reference copper');
   const ownVias = board.vias.filter((v) => v.net === net);
-  const findings: Finding[] = [];
+  const findings: Finding[] = prep.stale.map((p) => ({
+    severity: 'warn' as const,
+    kind: 'stale-pour',
+    message: `pour ${p.name || p.id} on layer ${board.stackup.copper.find((l) => l.id === p.layer)?.name ?? `L${p.layer}`} is stale — rebuild copper`,
+    at: p.outline[0]?.[0] ?? p.poured?.[0]?.[0] ?? { x: 0, y: 0 },
+  }));
   const chains0 = buildChains(tracks);
   const totalLength = chains0.reduce((s, c) => s + new Polyline(c.pts).length, 0);
   const stats: AnalysisStats = {
@@ -323,7 +338,7 @@ export function* analyzeNetSteps(board: Board, net: string, options: Partial<Ana
     vias.push(analyzeVia(ctx, via, tracks, results, findings));
   }
   const returnPath = yield* buildReturnPath(board, net, results, vias, ctx, findings, opts, refCopper);
-  return { net, refCopper, chains: results, vias, returnPath, findings, stats };
+  return { net, refCopper, chains: results, vias, returnPath, findings, stats, ...(prep.stale.length ? { provisional: true } : {}) };
 }
 
 /** Per-analysis caches: spatial indexes of each layer's reference nets and merged copper. */
@@ -937,17 +952,18 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
       : `copper under it carries as little as ${pct} of the return current's spread (±3h = ±${halfBand.toFixed(2)} mm, weighted towards the trace)`;
     const span = low.length > 1 ? `${low.length} segments, ${length.toFixed(1)} mm` : `${length.toFixed(1)} mm`;
     const at = { x: (worst.a.x + worst.b.x) / 2, y: (worst.a.y + worst.b.y) / 2 };
-    // A hole sitting next to the trace thins the band. That is the same place as the antipad, so it
-    // is reported as info and does not stand as a second warning.
-    const beside = (p: Pt, r: number) => distPointSeg(p, a, b) <= r + Math.min(halfBand, 0.6);
-    const holeBeside =
-      board.vias.some((v) => beside(v.at, Math.max(v.drill, v.diameter) / 2)) ||
-      board.pads.some((p) => p.holeDiameter > 0 && beside(p.at, p.holeDiameter / 2));
+    // The centreline is still on copper here (a gap that crosses it is reported on its own).
+    // A void in the trace width or the ±h band is info and does not score. When that void is a
+    // pour clearance around a via or pad the trace passes closer than the pour does, say so.
+    const hit = clearanceIntrusion(board, copper, low, ref.layer, (id) => (trackById.get(id)?.width ?? halfWidth * 2) / 2);
+    const place = `${layerName(chain.layer)} (${a.x.toFixed(1)}, ${a.y.toFixed(1)})→(${b.x.toFixed(1)}, ${b.y.toFixed(1)}), ${span}`;
     findings.push({
-      severity: holeBeside ? 'ok' : 'warn',
+      severity: 'ok',
       kind: 'band-coverage',
-      message: `${holeBeside ? 'info: ' : ''}${layerName(chain.layer)} (${a.x.toFixed(1)}, ${a.y.toFixed(1)})→(${b.x.toFixed(1)}, ${b.y.toFixed(1)}), ${span}: ${what}`,
-      at,
+      message: hit
+        ? `info: pour clearance > track clearance at the ${hit.name} (${hit.at.x.toFixed(1)}, ${hit.at.y.toFixed(1)}). The pour void reaches under the edge of the trace, not its centreline. Set inner-layer pour-to-via clearance ≤ track-to-via clearance.`
+        : `info: ${place}: ${what}`,
+      at: hit?.at ?? at,
     });
     low = [];
   };
@@ -966,6 +982,68 @@ function* analyzeChain(ctx: Context, chain: Chain, ownVias: Via[], findings: Fin
 
   const refNets = [...new Set(runs.map((r) => r.net).filter((x): x is string => !!x))];
   return { chain, ref, refNets, band, bandUncovered, half, coverage, thin, gaps, quietGaps: minorGaps };
+}
+
+/**
+ * A via or pad whose pour clearance reaches into the trace copper while the centreline stays on
+ * copper. The pour keeps a wider gap than the track does.
+ */
+function clearanceIntrusion(
+  board: Board,
+  copper: Paths,
+  segments: { trackId: string; a: Pt; b: Pt }[],
+  layer: number,
+  halfWidth: (trackId: string) => number,
+): { at: Pt; name: string } | null {
+  if (!copper.length) return null;
+  const footOf = (at: Pt): { d: number; foot: Pt; half: number } | null => {
+    let best: { d: number; foot: Pt; half: number } | null = null;
+    for (const s of segments) {
+      const abx = s.b.x - s.a.x;
+      const aby = s.b.y - s.a.y;
+      const l2 = abx * abx + aby * aby;
+      const t = l2 ? Math.max(0, Math.min(1, ((at.x - s.a.x) * abx + (at.y - s.a.y) * aby) / l2)) : 0;
+      const foot = { x: s.a.x + abx * t, y: s.a.y + aby * t };
+      const d = dist(at, foot);
+      if (!best || d < best.d) best = { d, foot, half: halfWidth(s.trackId) };
+    }
+    return best;
+  };
+  const gapToCopper = (at: Pt, foot: Pt, from: number, reach: number): number => {
+    const d = dist(at, foot);
+    if (!(d > from)) return 0;
+    for (let s = from; s <= reach; s += 0.02) {
+      const t = s / d;
+      const p = { x: at.x + (foot.x - at.x) * t, y: at.y + (foot.y - at.y) * t };
+      if (pointInPaths(p, copper)) return s - from;
+    }
+    return -1;
+  };
+  const picked: { hit: { at: Pt; name: string; slack: number } | null } = { hit: null };
+  const consider = (at: Pt, radius: number, name: string) => {
+    if (!(radius > 0) || pointInPaths(at, copper)) return;
+    const near = footOf(at);
+    if (!near || near.d > radius + near.half + 1) return;
+    const pourGap = gapToCopper(at, near.foot, radius, near.d + 0.05);
+    if (pourGap < 0.05) return;
+    const fromCentre = near.d - radius - pourGap;
+    if (fromCentre <= 0.02 || fromCentre >= near.half - 0.01) return;
+    const trackGap = near.d - radius - near.half;
+    if (!(trackGap < pourGap - 0.01)) return;
+    const slack = pourGap - trackGap;
+    if (!picked.hit || slack > picked.hit.slack) picked.hit = { at, name, slack };
+  };
+  for (const v of board.vias) {
+    if (!v.net) continue;
+    consider(v.at, v.diameter / 2, `${v.net} via`);
+  }
+  for (const p of board.pads) {
+    if (!p.net || (p.layer !== layer && p.layer !== MULTI_LAYER)) continue;
+    let radius = p.holeDiameter / 2;
+    for (const path of p.shape) for (const q of path) radius = Math.max(radius, dist(p.at, q));
+    consider(p.at, radius, `${p.net} pad`);
+  }
+  return picked.hit ? { at: picked.hit.at, name: picked.hit.name } : null;
 }
 
 /**

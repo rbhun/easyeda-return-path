@@ -116,6 +116,8 @@ export interface NetCheck {
   terms: Term[];
   score: number;
   status: Status;
+  /** A stored pour fill did not match the copper and was left as drawn. */
+  provisional?: boolean;
 }
 
 export interface PointLine {
@@ -803,6 +805,7 @@ export function checkReturn(board: Board, analysis: Analysis, props: CheckProps)
     errors: built.errors,
     chokes: [] as CheckChoke[],
     kept,
+    ...(analysis.provisional ? { provisional: true } : {}),
   };
   // The place name is filled once the terms exist, from the same point.
   const terms = termsOf({ ...partial, excursions: partial.excursions }).map((t) => {
@@ -1043,7 +1046,7 @@ export function viewOf(checks: NetCheck[]): CheckView {
 
 /** The lines under a net in the text report: the deductions, then each finding. */
 export function reportLines(check: NetCheck): string[] {
-  const lines = [`${check.net}: ${check.score}/100 ${check.status}, r ${check.r.toFixed(3)}, r_w ${check.rW.toFixed(3)}, driver ${check.driver || '—'}, ${check.edge}, ${check.drive}.`];
+  const lines = [`${check.net}: ${check.score}/100 ${check.status}${check.provisional ? ' provisional' : ''}, r ${check.r.toFixed(3)}, r_w ${check.rW.toFixed(3)}, driver ${check.driver || '—'}, ${check.edge}, ${check.drive}.`];
   for (const p of pointsOf(check)) lines.push(`-${p.points}  ${p.text}`, `    ${p.fix}`);
   for (const f of findingsOf(check)) lines.push(`${f.grade} ${f.type} ${place(f.at)}: ${f.value} — ${f.text}`);
   for (const a of check.also ?? []) lines.push(`Other end ${a.driver}: ${a.score}/100.`);

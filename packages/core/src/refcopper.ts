@@ -1,6 +1,7 @@
 import { runSync, type Steps } from './budget.js';
-import { circle, difference, dropNarrow, inflate, intersect, strokePath, union } from './geom.js';
-import { MULTI_LAYER, type Board, type Paths } from './types.js';
+import { circle, difference, dist, dropNarrow, inflate, intersect, pointInPaths, strokePath, union } from './geom.js';
+import { sameNet } from './nets.js';
+import { MULTI_LAYER, type Board, type Paths, type Pour } from './types.js';
 
 export interface LayerCopper {
   layer: number;
@@ -173,6 +174,58 @@ function otherNetObstacles(board: Board, layer: number, net: string, clearance: 
     parts.push(...inflate(p.shape, clearance));
   }
   return union(parts);
+}
+
+export interface PreparedPours {
+  board: Board;
+  /** Stored fills that do not match the objects on the board. Empty when they were rebuilt. */
+  stale: Pour[];
+}
+
+/**
+ * A stored fill is stale when an other-net via, pad or track on that layer sits in the copper.
+ * Holes already in the fill, including slots, stay: filling them would put copper back.
+ * With `rebuild`, a stale fill is dropped so the copper is computed from the outline.
+ * Otherwise the fill is left and named in `stale`.
+ */
+let pourCache: { key: string; value: PreparedPours } | undefined;
+
+export function preparePours(board: Board, rebuild: boolean): PreparedPours {
+  const key = `${rebuild ? 1 : 0}|${refKey(board, 0)}`;
+  if (pourCache?.key === key) return pourCache.value;
+  const stale = board.pours.filter((p) => p.poured?.length && pourStale(board, p));
+  const value: PreparedPours = !stale.length || !rebuild
+    ? { board, stale }
+    : {
+        board: { ...board, pours: board.pours.map((p) => (stale.includes(p) ? { ...p, poured: undefined } : p)) },
+        stale: [],
+      };
+  pourCache = { key, value };
+  return value;
+}
+
+function pourStale(board: Board, pour: Pour): boolean {
+  const fill = pour.poured;
+  const outline = pour.outline;
+  if (!fill?.length || !outline.length) return false;
+  const onLayer = (layer: number) => layer === pour.layer || layer === MULTI_LAYER;
+  for (const v of board.vias) {
+    if (!v.net || sameNet(v.net, pour.net)) continue;
+    if (pointInPaths(v.at, outline) && pointInPaths(v.at, fill)) return true;
+  }
+  for (const p of board.pads) {
+    if (!p.net || sameNet(p.net, pour.net) || !onLayer(p.layer)) continue;
+    if (pointInPaths(p.at, outline) && pointInPaths(p.at, fill)) return true;
+  }
+  for (const t of board.tracks) {
+    if (t.layer !== pour.layer || !t.net || sameNet(t.net, pour.net)) continue;
+    if (dist(t.a, t.b) < 0.05) continue;
+    for (let i = 0; i <= 4; i++) {
+      const p = { x: t.a.x + ((t.b.x - t.a.x) * i) / 4, y: t.a.y + ((t.b.y - t.a.y) * i) / 4 };
+      if (pointInPaths(p, outline) && pointInPaths(p, fill)) return true;
+    }
+  }
+  return false;
 }
 
 /** All copper of a layer regardless of net. */

@@ -317,7 +317,7 @@ test('dongle CS and RAD_RX match the check', { skip: !existsSync(DONGLE) }, asyn
   const flagged = rx.excursions.filter((e) => e.grade === 'flag');
   assert.equal(flagged.length, 1, rx.excursions.map((e) => `${e.grade} ${e.dA.toFixed(1)}`).join(', '));
   assert.ok(flagged[0].dA > 60 && flagged[0].dA < 140, `RAD_RX dA ${flagged[0].dA}`);
-  assert.ok(rx.r > 1.5 && rx.r < 3, `RAD_RX r ${rx.r}`);
+  assert.ok(rx.r > 1.2 && rx.r < 3, `RAD_RX r ${rx.r}`);
   assert.ok(rx.hops.every((h) => h.fromSignalVia), rx.hops.map((h) => h.grade).join(', '));
   assert.ok(rx.score < 70, `RAD_RX score ${rx.score}`);
   const gnd = rx.closures.find((c) => c.kind === 'gnd');

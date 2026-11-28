@@ -129,7 +129,9 @@ test('collapseTightHairpins keeps a 90° corner and a large U', () => {
 test('a gap the projection crosses is routed around and marked', () => {
   const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
   const hole = rect(15, 10, 0.4, 1.0);
-  const an = analyzeNet(board(tracks, difference(pour, [hole]), ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p))), 'SIG', { drivers: ['U1'] });
+  const b = board(tracks, difference(pour, [hole]), ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p)));
+  b.keepouts = [{ id: 'slot', layer: BOT, outline: [hole] }];
+  const an = analyzeNet(b, 'SIG', { drivers: ['U1'] });
   const minor = an.returnPath.marks.filter((m) => m.kind === 'minor');
   assert.ok(minor.length === 1, `one minor cut, got ${an.returnPath.marks.map((m) => m.kind).join(',')}`);
   assert.ok(Math.abs(minor[0].at.x - 15) < 1.5, `mark at the gap, x=${minor[0].at.x}`);
@@ -179,24 +181,39 @@ test('the return goes around a via hole instead of across it', () => {
 });
 
 test('a via beside the trace does not pull the return off the copper under it', () => {
-  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
-  const via = { id: 'hole', net: '3V3', at: { x: 15, y: 10.45 }, drill: 0.3, diameter: 1.0, stitching: false };
-  const an = analyzeNet(
-    board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p)), [via]),
-    'SIG',
-    { drivers: ['U1'] },
-  );
+  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 14.2, y: 10 }, b: { x: 15.8, y: 10 }, width: 0.2 }];
+  const via = { id: 'hole', net: '3V3', at: { x: 15, y: 10.6 }, drill: 0.3, diameter: 0.6, stitching: false };
+  const b = board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 14.2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 15.8, y: 10 } } : p)), [via]);
+  b.stackup.copper[1].z = 0.21;
+  b.stackup.dielectrics = [{ name: 'prepreg', thicknessMm: 0.21 }];
+  const an = analyzeNet(b, 'SIG', { drivers: ['U1'], minBandCoverage: 0.999 });
   let seen = false;
   let off = false;
   for (const t of an.returnPath.traces)
     for (let i = 1; i < t.pts.length; i++) {
       const [a, b] = [t.pts[i - 1], t.pts[i]];
-      if (Math.max(a.x, b.x) < 13.5 || Math.min(a.x, b.x) > 16.5) continue;
+      if (Math.max(a.x, b.x) < 14.6 || Math.min(a.x, b.x) > 15.4) continue;
       seen = true;
-      if (distPointSeg({ x: 15, y: 10 }, a, b) > 0.25) off = true;
+      if (distPointSeg({ x: 15, y: 10 }, a, b) > 0.05) off = true;
     }
   assert.ok(seen && !off, 'the return stays on the projection');
   assert.ok(!an.findings.some((f) => f.kind === 'return-detour' || f.kind === 'minor-cut'), 'a hole next to the trace is not a detour');
+  const info = an.findings.find((f) => f.kind === 'band-coverage');
+  assert.equal(info?.severity, 'ok', an.chains.flatMap((c) => c.coverage).map((c) => c.ratio.toFixed(3)).join(',') + ' ' + an.findings.map((f) => f.kind).join(','));
+  assert.match(info?.message ?? '', /pour clearance > track clearance/);
+  assert.match(info?.message ?? '', /Set inner-layer pour-to-via clearance ≤ track-to-via clearance/);
+});
+
+test('a stale pour is rebuilt, and left as a warning when rebuild is off', () => {
+  const tracks: Track[] = [{ id: 't', net: 'SIG', layer: TOP, a: { x: 2, y: 10 }, b: { x: 28, y: 10 }, width: 0.2 }];
+  const via = { id: 'v', net: '3V3', at: { x: 15, y: 10 }, drill: 0.3, diameter: 0.6, stitching: false };
+  const b = board(tracks, pour, ends.map((p) => (p.id === 's1' ? { ...p, at: { x: 2, y: 10 } } : p.id === 's2' ? { ...p, at: { x: 28, y: 10 } } : p)), [via]);
+  const rebuilt = analyzeNet(b, 'SIG', { drivers: ['U1'] });
+  assert.ok(!rebuilt.provisional);
+  assert.ok(!rebuilt.findings.some((f) => f.kind === 'stale-pour'), 'the fill is rebuilt, so the result is not provisional');
+  const kept = analyzeNet(b, 'SIG', { drivers: ['U1'], rebuildPours: false });
+  assert.equal(kept.provisional, true);
+  assert.ok(kept.findings.some((f) => f.message === 'pour GND on layer Bottom is stale — rebuild copper'));
 });
 
 test('the closure starts at the nearer ground via, not a far pad', () => {
