@@ -2,6 +2,14 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.87] - 2026-11-28
+
+From Balazs: the inner-plane pour clearance around the RESET via reaches under the edge of the SCK trace, but the trace centreline stays on copper. That must not be a detour.
+
+- **The return snaps to the trace centreline wherever that centreline is on copper.** A detour is recorded only when the centreline itself crosses a void. A void that reaches into the trace width, or into the ±h band, is a band-coverage info line and it does not score. When the void is a pour clearance around a via or pad the trace passes closer than the pour does, the line says "pour clearance > track clearance" and suggests setting the inner-layer pour-to-via clearance no wider than the track-to-via clearance.
+- **A stored pour fill is checked before the analysis.** An other-net via, pad or track sitting in the copper, or a hole with no object in it, means the fill is stale. By default that fill is rebuilt from the outline. With the option off, the report says "pour X on layer Y is stale — rebuild copper" and the result is provisional. A hole cut the same way in every pour of that net is a designed cut, and a zero-length track is not a track.
+- **A negative plane's copper is read from LAYER_FILL.** EasyEDA stores that fill's arc angles in tenths of a degree. On the 4-layer dongle this is the Inner1 ground sheet under SCK.
+
 ## [0.1.86] - 2026-11-28
 
 From Balazs: SCK scored 18. The return left the copper under the trace to go around a via beside it, and the driver loop closed on a far ground via.

@@ -51,6 +51,25 @@ test('a plane layer is one sheet, with keepouts, split lines and other-net vias 
   assert.equal(pointInPaths({ x: 25, y: -5 }, gnd), true);
 });
 
+test('LAYER_FILL is the plane copper, and its arc angles are tenths of a degree', () => {
+  const b = planeBoard([
+    line({ type: 'LAYER_FILL', id: '["LAYER_FILL",15]' }, {
+      fill: [{
+        id: 'sheet',
+        netName: 'GND',
+        layerId: 15,
+        path: [[0, 0, 'L', 1000, 0, 'ARC', 900, 1000, -200, 'L', 0, -200]],
+      }],
+    }),
+  ]);
+  const zone = b.pours.find((p) => p.layer === 15)!;
+  assert.ok(zone.poured, 'the layer fill is stored copper');
+  assert.equal(pointInPaths({ x: 12, y: -2 }, zone.poured!), true);
+  assert.equal(pointInPaths({ x: 40, y: -2 }, zone.poured!), false);
+  // 900 tenths is a 90° arc (~9 steps). Left as 900° the same corner is about 90 steps.
+  assert.ok(zone.poured![0].length < 30, `arc was read as 90°, ${zone.poured![0].length} points`);
+});
+
 test('a plane layer with no zone net is left out, with a warning', () => {
   const pcb = [
     line({ type: 'LAYER', id: '["LAYER",1]' }, { layerId: 1, layerType: 'TOP', layerName: 'Top Layer', use: true }),

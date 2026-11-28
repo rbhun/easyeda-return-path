@@ -87,7 +87,45 @@ export function readPlaneRecords(recs: Rec[], planeLayers: Set<number>): PlaneRe
     const merged = union(...fills);
     p.poured = scalePaths(merged, pouredScale(p.outline.length ? p.outline : merged, merged));
   }
+  // A negative plane's rebuilt copper is a LAYER_FILL, not a POUR/POURED pair. EasyEDA writes
+  // those arc angles in tenths of a degree (900 = 90°); a sweep past a full circle is that unit.
+  const layerFill = new Map<string, { layer: number; net: string; id: string; parts: Paths[] }>();
+  for (const r of recs) {
+    if (r.type !== 'LAYER_FILL' || !Array.isArray(r.fill)) continue;
+    for (const piece of r.fill as Rec[]) {
+      const layer = num(piece.layerId);
+      if (!planeLayers.has(layer)) continue;
+      const net = str(piece.netName || piece.net);
+      if (!net || piece.path == null) continue;
+      const copper = decodeComplex(tenthsOfADegree(piece.path), conv, MIL);
+      if (!copper.length) continue;
+      const key = `${layer}|${net}`;
+      const got = layerFill.get(key) ?? { layer, net, id: str(piece.id) || `layer-fill-${layer}-${net}`, parts: [] };
+      got.parts.push(copper);
+      layerFill.set(key, got);
+    }
+  }
+  for (const { layer, net, id, parts } of layerFill.values()) {
+    const copper = union(...parts);
+    const zone = pours.find((p) => p.layer === layer && p.net === net);
+    if (zone) {
+      if (!zone.poured) zone.poured = copper;
+      continue;
+    }
+    pours.push({ id, net, layer, name: 'plane', priority: 0, outline: copper, poured: copper });
+  }
   return { pours, cuts };
+}
+
+/** LAYER_FILL arc angles above a full circle are tenths of a degree, not a multi-turn sweep. */
+function tenthsOfADegree(src: unknown): unknown {
+  if (!Array.isArray(src)) return src;
+  if (Array.isArray(src[0])) return src.map(tenthsOfADegree);
+  const out = src.slice();
+  for (let i = 0; i < out.length; i++) {
+    if ((out[i] === 'ARC' || out[i] === 'CARC') && Math.abs(num(out[i + 1])) > 360) out[i + 1] = num(out[i + 1]) / 10;
+  }
+  return out;
 }
 
 export interface PlaneDocument extends PlaneRecords {

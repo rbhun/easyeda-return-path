@@ -1,6 +1,7 @@
 import { runSync, type Steps } from './budget.js';
-import { circle, difference, dropNarrow, inflate, intersect, strokePath, union } from './geom.js';
-import { MULTI_LAYER, type Board, type Paths } from './types.js';
+import { area, circle, difference, dist, distPointSeg, distToPaths, dropNarrow, inflate, intersect, pointInPaths, strokePath, union } from './geom.js';
+import { sameNet } from './nets.js';
+import { MULTI_LAYER, type Board, type Path, type Paths, type Pour, type Pt } from './types.js';
 
 export interface LayerCopper {
   layer: number;
@@ -173,6 +174,112 @@ function otherNetObstacles(board: Board, layer: number, net: string, clearance: 
     parts.push(...inflate(p.shape, clearance));
   }
   return union(parts);
+}
+
+export interface PreparedPours {
+  board: Board;
+  /** Stored fills that do not match the objects on the board. Empty when they were rebuilt. */
+  stale: Pour[];
+}
+
+/**
+ * A stored fill is stale when an other-net via, pad or track on that layer sits in the copper,
+ * or a hole in the fill has no object in it. With `rebuild`, those fills are dropped so the
+ * copper is computed from the outline. Otherwise the fills are left and named in `stale`.
+ */
+let pourCache: { key: string; value: PreparedPours } | undefined;
+
+export function preparePours(board: Board, rebuild: boolean): PreparedPours {
+  const key = `${rebuild ? 1 : 0}|${refKey(board, 0)}`;
+  if (pourCache?.key === key) return pourCache.value;
+  const stale = board.pours.filter((p) => p.poured?.length && pourStale(board, p));
+  const value: PreparedPours = !stale.length || !rebuild
+    ? { board, stale }
+    : {
+        board: { ...board, pours: board.pours.map((p) => (stale.includes(p) ? { ...p, poured: undefined } : p)) },
+        stale: [],
+      };
+  pourCache = { key, value };
+  return value;
+}
+
+function centroid(path: Path): Pt {
+  let x = 0;
+  let y = 0;
+  for (const p of path) {
+    x += p.x;
+    y += p.y;
+  }
+  return { x: x / path.length, y: y / path.length };
+}
+
+/** A hole under about 0.05 mm² is a boolean sliver, not a clearance. */
+const MIN_VOID_MM2 = 0.05;
+
+function pourStale(board: Board, pour: Pour): boolean {
+  const fill = pour.poured;
+  const outline = pour.outline;
+  if (!fill?.length || !outline.length) return false;
+  const onLayer = (layer: number) => layer === pour.layer || layer === MULTI_LAYER;
+  for (const v of board.vias) {
+    if (!v.net || sameNet(v.net, pour.net)) continue;
+    if (pointInPaths(v.at, outline) && pointInPaths(v.at, fill)) return true;
+  }
+  for (const p of board.pads) {
+    if (!p.net || sameNet(p.net, pour.net) || !onLayer(p.layer)) continue;
+    if (pointInPaths(p.at, outline) && pointInPaths(p.at, fill)) return true;
+  }
+  for (const t of board.tracks) {
+    if (t.layer !== pour.layer || !t.net || sameNet(t.net, pour.net)) continue;
+    if (dist(t.a, t.b) < 0.05) continue;
+    for (let i = 0; i <= 4; i++) {
+      const p = { x: t.a.x + ((t.b.x - t.a.x) * i) / 4, y: t.a.y + ((t.b.y - t.a.y) * i) / 4 };
+      if (pointInPaths(p, outline) && pointInPaths(p, fill)) return true;
+    }
+  }
+  for (const ring of difference(outline, fill)) {
+    if (ring.length < 3 || area([ring]) < MIN_VOID_MM2) continue;
+    const c = centroid(ring);
+    if (!pointInPaths(c, [ring]) || pointInPaths(c, fill)) continue;
+    // The same hole in every pour of this net is a cut that was poured, not a fill that went stale.
+    if (designedCut(board, pour, c)) continue;
+    if (!voidHoldsObject(board, pour, ring)) return true;
+  }
+  return false;
+}
+
+function designedCut(board: Board, pour: Pour, at: Pt): boolean {
+  const others = board.pours.filter((p) => p !== pour && sameNet(p.net, pour.net) && p.poured?.length && pointInPaths(at, p.outline));
+  return others.length > 0 && others.every((p) => !pointInPaths(at, p.poured!));
+}
+
+function voidHoldsObject(board: Board, pour: Pour, ring: Path): boolean {
+  const region = [ring];
+  const c = centroid(ring);
+  const inside = (p: Pt) => pointInPaths(p, region);
+  // A thermal opening sits beside its pad rather than around the pad's centre, so an object
+  // within its own copper plus a clearance of the hole still owns that hole.
+  const near = (at: Pt, radius: number) => inside(at) || distToPaths(at, region) <= radius + 0.4 || dist(at, c) <= radius + 0.4;
+  const onLayer = (layer: number) => layer === pour.layer || layer === MULTI_LAYER;
+  for (const v of board.vias) if (near(v.at, v.diameter / 2)) return true;
+  for (const p of board.pads) {
+    if (!onLayer(p.layer)) continue;
+    let radius = p.holeDiameter / 2;
+    for (const path of p.shape) for (const q of path) radius = Math.max(radius, dist(p.at, q));
+    if (near(p.at, radius)) return true;
+  }
+  for (const t of board.tracks) {
+    if (t.layer !== pour.layer) continue;
+    if (distPointSeg(c, t.a, t.b) <= t.width / 2 + 0.4) return true;
+  }
+  for (const k of board.keepouts) {
+    if (!onLayer(k.layer)) continue;
+    for (const path of k.outline) {
+      if (path.some((p) => near(p, 0))) return true;
+      if (path.length >= 3 && near(centroid(path), 0)) return true;
+    }
+  }
+  return false;
 }
 
 /** All copper of a layer regardless of net. */

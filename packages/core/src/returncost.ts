@@ -3,8 +3,8 @@
 // Cost per millimetre is eps + d/h, where d is the distance to the signal and h the dielectric
 // height, so walking the trace (d = 0) is almost free and any shortcut pays the area it encloses.
 // A via is an edge only where that via actually touches ground copper on both layers. Where the
-// forward trace's projection lies on reference copper the return is that projection. The search
-// runs only where that projection is off the copper, and only that is a detour.
+// forward trace's centreline lies on reference copper the return is that centreline. The search
+// runs only where the centreline itself is off the copper, and only that is a detour.
 import { buildChains } from './analyze.js';
 import type { Steps } from './budget.js';
 import { isGroundNet, returnPads } from './dc/rails.js';
@@ -201,26 +201,21 @@ function copperDistance(seed: Uint8Array, copper: Uint8Array, g: Grid): Float64A
   return out;
 }
 
-function maskAt(g: Grid, copper: Uint8Array, p: Pt): boolean {
-  const i = Math.floor((p.x - g.x0) / g.cell);
-  const j = Math.floor((p.y - g.y0) / g.cell);
-  return inGrid(g, i, j) && copper[j * g.nx + i] === 1;
-}
-
-/** True when every sample of the segment sits on a copper cell. */
-function segmentOnMask(g: Grid, copper: Uint8Array, a: Pt, b: Pt): boolean {
-  const n = Math.max(1, Math.ceil(dist(a, b) / Math.max(g.cell * 0.5, 0.02)));
+/** True when every sample of the segment lies on the copper, not merely in a cell whose centre does. */
+function segmentOnCopper(paths: Paths, a: Pt, b: Pt): boolean {
+  if (!paths.length) return false;
+  const n = Math.max(1, Math.ceil(dist(a, b) / 0.05));
   for (let s = 0; s <= n; s++) {
     const p = { x: a.x + ((b.x - a.x) * s) / n, y: a.y + ((b.y - a.y) * s) / n };
-    if (!maskAt(g, copper, p)) return false;
+    if (!pointInPaths(p, paths)) return false;
   }
   return true;
 }
 
-function pathOnMask(g: Grid, copper: Uint8Array | undefined, arc: Path): boolean {
-  if (!copper) return false;
-  if (arc.length <= 1) return arc.length === 1 && maskAt(g, copper, arc[0]);
-  for (let k = 1; k < arc.length; k++) if (!segmentOnMask(g, copper, arc[k - 1], arc[k])) return false;
+function pathOnCopper(paths: Paths | undefined, arc: Path): boolean {
+  if (!paths?.length) return false;
+  if (arc.length <= 1) return arc.length === 1 && pointInPaths(arc[0], paths);
+  for (let k = 1; k < arc.length; k++) if (!segmentOnCopper(paths, arc[k - 1], arc[k])) return false;
   return true;
 }
 
@@ -395,7 +390,9 @@ function bounds(board: Board, tracks: Track[]): { minX: number; minY: number; ma
 
 function copperPaths(board: Board, ref: Map<number, LayerCopper>, layer: number, nets: Set<string>): Paths {
   const pours = board.pours.filter((p) => p.layer === layer && nets.has(p.net));
-  if (pours.some((p) => p.poured)) return pours.flatMap((p) => p.poured ?? []);
+  // A pour whose stored fill was dropped is rebuilt into the reference copper. Use that
+  // whenever any pour of these nets has no fill, so a rebuilt sheet is not skipped.
+  if (pours.length && pours.every((p) => p.poured?.length)) return pours.flatMap((p) => p.poured ?? []);
   const parts: Paths = [];
   for (const n of nets) {
     const c = ref.get(layer)?.byNet.get(n);
@@ -723,8 +720,10 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
   yield tick;
 
   const layers: GLayer[] = [];
+  const sheets = new Map<number, Paths>();
   for (const copper of board.stackup.copper) {
     const paths = copperPaths(board, ref, copper.id, nets);
+    sheets.set(copper.id, paths);
     const w = new Float32Array(N);
     yield tick;
     if (paths.length) fillPaths(g, w, paths);
@@ -929,7 +928,7 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
       let cover = -1;
       let coverZ = Infinity;
       for (let li = 0; li < layers.length; li++) {
-        if (!segmentOnMask(g, layers[li].copper, prev, wp)) continue;
+        if (!segmentOnCopper(sheets.get(layers[li].id) ?? [], prev, wp)) continue;
         const dz = Math.abs(layers[li].z - z);
         if (dz < coverZ) {
           coverZ = dz;
@@ -1034,7 +1033,7 @@ export function* solveReturnCost(board: Board, signal: string, ref: Map<number, 
     route = [...head, ...rest];
   }
 
-  const drawn = post(route, lines, g, h, cell, layers);
+  const drawn = post(route, lines, h, cell, sheets);
   if (closurePick.at) {
     const at = closurePick.at;
     drawn.vias = drawn.vias.filter((v) => dist(v.at, at) > 0.75);
@@ -1089,14 +1088,12 @@ interface Tagged extends Pt {
 function post(
   raw: Raw[],
   lines: Line[],
-  g: Grid,
   h: number,
   cell: number,
-  layers: GLayer[],
+  sheets: Map<number, Paths>,
 ): { pts: Path; tagged: Tagged[]; marks: CostMark[]; detours: { at: Pt; area: number }[]; vias: CostVia[] } {
   // On the projected trace: the seeded cells. Anything past one cell has left it.
   const left = (d: number) => d > cell * 1.25;
-  const copper = new Map(layers.map((l) => [l.id, l.copper]));
   const tagged: Tagged[] = [];
   const marks: CostMark[] = [];
   const detours: { at: Pt; area: number }[] = [];
@@ -1116,10 +1113,10 @@ function post(
     const from = Math.max(0, i - 1);
     for (let k = from; k < Math.min(j, raw.length - 1); k++) area += dist(raw[k], raw[k + 1]) * 0.5 * (raw[k].d + raw[k + 1].d);
     const arc = back ? signalArc(lines, raw[i - 1], raw[j]) : null;
-    const mask = copper.get(raw[i].layer);
-    // The projection is the return wherever it lies on copper. A hole merely beside the trace is
-    // not a detour. A detour is recorded only when that projection itself leaves the copper.
-    const blocked = arc !== null && !pathOnMask(g, mask, arc);
+    // The projection is the trace centreline. Where that centreline lies on copper the return is
+    // the centreline, even when a void reaches into the trace width. A detour is recorded only
+    // when the centreline itself leaves the copper.
+    const blocked = arc !== null && !pathOnCopper(sheets.get(raw[i].layer), arc);
     if (back && arc && !blocked) {
       for (const p of arc) {
         const last = tagged[tagged.length - 1];

@@ -54,7 +54,7 @@ test('POURED fill is used as-is', () => {
 test('demo board: slot, split, coverage and via findings', () => {
   const an = analyzeNet(boardFrom('demo', 'object'), 'CLK');
   const kinds = an.findings.map((f) => `${f.severity}:${f.kind}`);
-  assert.deepEqual(kinds, ['error:slot-crossing', 'warn:band-coverage', 'error:split-crossing', 'warn:via-return', 'warn:via-return', 'ok:loop-closure', 'ok:loop-closure', 'ok:return-length', 'warn:return-detour', 'warn:return-via']);
+  assert.deepEqual(kinds, ['error:slot-crossing', 'ok:band-coverage', 'error:split-crossing', 'warn:via-return', 'warn:via-return', 'ok:loop-closure', 'ok:loop-closure', 'ok:return-length', 'warn:return-detour', 'warn:return-via']);
   const slot = an.chains.flatMap((c) => c.gaps).find((g) => g.kind === 'slot')!;
   assert.ok(Math.abs(slot.detour!.extraLength - 15.8) < 0.2);
   assert.ok(Math.abs(slot.detour!.loopArea - 12.8) < 0.3);
