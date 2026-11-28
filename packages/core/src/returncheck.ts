@@ -2,11 +2,11 @@
 // solver drew, grades the excursions and the hops, and turns that into a score. Lengths are mm.
 import { isGroundNet, looksLikePowerNet, returnPads } from './dc/rails.js';
 import { driverLoop } from './driver.js';
-import { add, dist, distPointSeg, distToPaths, lerp, mul, sub } from './geom.js';
+import { add, dist, distPointSeg, distToPaths, lerp, mul, pointInPaths, sub } from './geom.js';
 import { sameNet } from './nets.js';
 import { DEFAULT_HEIGHT_MM } from './returncost.js';
 import type { Analysis, ChainResult } from './analyze.js';
-import type { Board, Path, Pt } from './types.js';
+import type { Board, Pad, Path, Pt, Via } from './types.js';
 import type { ReturnTrace, ReturnVia } from './returnpath.js';
 
 const MIL = 0.0254;
@@ -53,6 +53,8 @@ export interface CheckExcursion {
   /** A short tick across the forward trace. Set for a minor excursion. */
   tick?: [Pt, Pt];
   blocker?: string;
+  /** The return only stepped around one via's antipad. Minor, and not part of the score. */
+  antipad?: boolean;
 }
 
 export interface CheckHop {
@@ -411,7 +413,8 @@ function measure(board: Board, net: string, chains: ChainResult[], traces: Retur
         const slice = samples.slice(i, j);
         const dA = areaOf(samples, i, j);
         const h2 = h * h;
-        const grade: CheckExcursion['grade'] = dA < h2 ? 'minor' : dA < 9 * h2 ? 'note' : 'flag';
+        const antipad = singleViaAntipad(board, slice);
+        const grade: CheckExcursion['grade'] = antipad || dA < h2 ? 'minor' : dA < 9 * h2 ? 'note' : 'flag';
         let peak = slice[0];
         for (const p of slice) if (p.d > peak.d) peak = p;
         const layer = peak.layer;
@@ -440,6 +443,7 @@ function measure(board: Board, net: string, chains: ChainResult[], traces: Retur
           hatch,
           tick,
           blocker: blockerOf(board, net, returnPts),
+          antipad,
         });
       }
       else {
@@ -480,18 +484,95 @@ function keptTraces(traces: ReturnTrace[], excursions: CheckExcursion[], errors:
   return out;
 }
 
-function signalVias(board: Board, net: string): Pt[] {
-  return [
-    ...board.vias.filter((v) => sameNet(v.net, net)).map((v) => v.at),
-    ...board.pads.filter((p) => sameNet(p.net, net) && p.holeDiameter > 0).map((p) => p.at),
-  ];
+/** A via (or a through-hole pad the trace uses to change layer) where the signal itself hops. */
+function signalLayerVias(board: Board, net: string): Pt[] {
+  const tracks = board.tracks.filter((t) => sameNet(t.net, net));
+  const layersAt = (at: Pt) => {
+    const layers = new Set<number>();
+    for (const t of tracks) if (distPointSeg(at, t.a, t.b) < 0.45) layers.add(t.layer);
+    return layers.size;
+  };
+  const out: Pt[] = [];
+  for (const v of board.vias) if (sameNet(v.net, net)) out.push(v.at);
+  for (const p of board.pads) {
+    if (sameNet(p.net, net) && p.holeDiameter > 0 && layersAt(p.at) >= 2) out.push(p.at);
+  }
+  return out;
 }
 
-function hopsOf(board: Board, net: string, transitions: ReturnVia[], samples: Sample[], h: number): CheckHop[] {
-  if (!samples.length) return [];
-  const vias = signalVias(board, net);
-  return transitions.map((v) => {
-    let leave: Pt = v.at;
+/**
+ * One via hole the return steps around. A long swing, or two holes, is a real detour.
+ * The area can be many times h² on a thin dielectric and is still only this hole.
+ */
+function singleViaAntipad(board: Board, slice: Sample[]): boolean {
+  if (slice.length < 2) return false;
+  const span = slice[slice.length - 1].s - slice[0].s;
+  if (span > 4) return false;
+  let peak = slice[0];
+  for (const p of slice) if (p.d > peak.d) peak = p;
+  if (peak.d > 1.6) return false;
+  const forward = slice.map((p) => p.foot);
+  const hits: Pt[] = [];
+  const take = (at: Pt, reach: number) => {
+    let near = forward.length === 1 && dist(at, forward[0]) <= reach;
+    for (let i = 1; i < forward.length && !near; i++) near = distPointSeg(at, forward[i - 1], forward[i]) <= reach;
+    if (near && !hits.some((h) => dist(h, at) < 0.4)) hits.push(at);
+  };
+  for (const v of board.vias) take(v.at, Math.max(0.7, v.diameter * 0.5 + 0.35));
+  for (const p of board.pads) if (p.holeDiameter > 0) take(p.at, Math.max(0.7, p.holeDiameter * 0.5 + 0.35));
+  return hits.length === 1 && dist(peak, hits[0]) <= 1.6;
+}
+
+const EP_PIN = /^(?:E?PAD|EP\d*|THERMAL\w*|TAB|SLUG)$/i;
+
+function isEpPad(p: Pad): boolean {
+  return !!p.pinName && p.pinName.split(/[\s/(),;|]+/).some((t) => EP_PIN.test(t));
+}
+
+function padReach(p: Pad): number {
+  let r = 0;
+  for (const ring of p.shape ?? []) for (const q of ring) r = Math.max(r, dist(p.at, q));
+  return r > 0 ? r + 0.25 : 1.2;
+}
+
+function viaOnPad(v: Pt, p: Pad): boolean {
+  if (p.shape?.length && pointInPaths(v, p.shape)) return true;
+  return dist(v, p.at) <= padReach(p);
+}
+
+/**
+ * The via that ties the driver's ground to the reference layer, nearest the signal pin.
+ * Exposed-pad vias are the driver's ground connection and win over other fanout vias.
+ */
+function closureVia(board: Board, driver: string, signalAt: Pt): Pt | undefined {
+  const comp = board.components.find((c) => c.designator === driver);
+  if (!comp) return undefined;
+  const own = board.pads.filter((p) => p.componentId === comp.id);
+  const grounds = [...new Set(own.map((p) => p.net).filter((n): n is string => !!n && isGroundNet(n)))];
+  const pads = grounds.flatMap((g) => returnPads(own, g).pads);
+  if (!pads.length) return undefined;
+  const onGround = (v: Via) => pads.some((p) => p.net && sameNet(v.net, p.net));
+  const vias = board.vias.filter(onGround);
+  const ep = pads.filter(isEpPad);
+  const epVias = ep.length ? vias.filter((v) => ep.some((p) => viaOnPad(v.at, p))) : [];
+  const pool: Pt[] = epVias.length
+    ? epVias.map((v) => v.at)
+    : [
+      ...vias.filter((v) => dist(v.at, signalAt) <= 4 || pads.some((p) => dist(v.at, p.at) <= 3)).map((v) => v.at),
+      ...pads.filter((p) => p.holeDiameter > 0).map((p) => p.at),
+    ];
+  if (!pool.length) return undefined;
+  return pool.reduce((a, b) => (dist(a, signalAt) <= dist(b, signalAt) ? a : b));
+}
+
+function hopsOf(board: Board, net: string, transitions: ReturnVia[], samples: Sample[], h: number, pinAt?: Pt, closureAt?: Pt): CheckHop[] {
+  const signals = signalLayerVias(board, net);
+  if (!signals.length || !transitions.length) return [];
+  const pin = pinAt ? nearestSample(samples, pinAt) : undefined;
+  const pinIdx = pin ? samples.indexOf(pin) : -1;
+  const onClosure = (v: ReturnVia) => {
+    if (closureAt && dist(v.at, closureAt) <= 0.5) return true;
+    if (!pin || pinIdx < 0) return false;
     let best = Infinity;
     let idx = 0;
     for (let i = 0; i < samples.length; i++) {
@@ -501,46 +582,23 @@ function hopsOf(board: Board, net: string, transitions: ReturnVia[], samples: Sa
         idx = i;
       }
     }
-    let found = false;
-    for (let i = idx; i >= 0 && samples[i].walk === samples[idx].walk; i--) {
-      if (samples[i].d <= 0.25 * h) {
-        leave = samples[i];
-        found = true;
-        break;
+    return best < 1.2 && idx < pinIdx && samples[idx].walk === pin.walk;
+  };
+  const stitching = transitions.filter((v) => !onClosure(v));
+  if (!stitching.length) return [];
+  return signals.map((sig) => {
+    let via = stitching[0];
+    let distance = dist(via.at, sig);
+    for (const v of stitching) {
+      const d = dist(v.at, sig);
+      if (d < distance) {
+        distance = d;
+        via = v;
       }
     }
-    // Never on the trace before the hop: the lateral distance is from the via to the forward path.
-    if (!found) leave = samples[idx].foot;
-    let from = leave;
-    let fromSignalVia = false;
-    let sigD = Infinity;
-    for (const s of vias) {
-      const d = dist(s, v.at);
-      if (d < sigD) {
-        sigD = d;
-        from = s;
-      }
-    }
-    // A signal via only counts when it is this hop's via. Farther than 3h, measure from where the return left the trace.
-    if (sigD <= 3 * h) fromSignalVia = true;
-    else from = leave;
-    const near = nearPart(board, v.at);
-    return { at: v.at, distance: dist(from, v.at), grade: hopGrade(dist(from, v.at), h), fromSignalVia, near };
+    const near = nearPart(board, sig);
+    return { at: via.at, distance, grade: hopGrade(distance, h), fromSignalVia: true, near };
   });
-}
-
-function groundTargets(board: Board, driver: string): Pt[] {
-  const comp = board.components.find((c) => c.designator === driver);
-  if (!comp) return [];
-  const own = board.pads.filter((p) => p.componentId === comp.id);
-  const grounds = [...new Set(own.map((p) => p.net).filter((n): n is string => !!n && isGroundNet(n)))];
-  const pads = grounds.flatMap((g) => returnPads(own, g).pads);
-  const targets = pads.map((p) => p.at);
-  for (const p of pads) {
-    for (const v of board.vias) if (sameNet(v.net, p.net) && dist(v.at, p.at) < 2) targets.push(v.at);
-    for (const q of own) if (q.holeDiameter > 0 && q.net && isGroundNet(q.net)) targets.push(q.at);
-  }
-  return targets;
 }
 
 function nearestSample(samples: Sample[], at: Pt): Sample | undefined {
@@ -556,39 +614,36 @@ function nearestSample(samples: Sample[], at: Pt): Sample | undefined {
   return best;
 }
 
-function closuresOf(board: Board, net: string, driver: string | undefined, drive: DriveType, samples: Sample[], h: number): CheckClosure[] {
+/** Loop area (path × h) over the net's baseline area (length × h). The height cancels. */
+function loopGrade(pathMm: number, netMm: number): Grade {
+  if (!Number.isFinite(pathMm) || !(netMm > 0)) return 'flag';
+  const frac = pathMm / netMm;
+  if (frac > 0.5) return 'flag';
+  if (frac > 0.25) return 'note';
+  return 'ok';
+}
+
+function closuresOf(board: Board, net: string, driver: string | undefined, samples: Sample[], netMm: number): CheckClosure[] {
   if (!driver) return [];
   const comp = board.components.find((c) => c.designator === driver);
   const pin = comp && board.pads.find((p) => p.componentId === comp.id && sameNet(p.net, net));
   const out: CheckClosure[] = [];
-  const gnds = groundTargets(board, driver);
-  if (pin && gnds.length && samples.length) {
+  const via = pin ? closureVia(board, driver, pin.at) : undefined;
+  if (pin && via && samples.length) {
     const atPin = nearestSample(samples, pin.at)!;
     const here = samples.filter((s) => s.walk === atPin.walk);
-    let gap = Infinity;
-    let atGnd = atPin;
-    let gndAt = gnds[0];
-    for (const g of gnds) {
-      const s = nearestSample(here, g) ?? atPin;
-      const d = dist(s, g);
-      if (d < gap) {
-        gap = d;
-        atGnd = s;
-        gndAt = g;
-      }
-    }
-    const length = Math.abs(atPin.s - atGnd.s) + gap;
-    const grade = hopGrade(length, h);
+    const atVia = nearestSample(here, via) ?? atPin;
+    const length = Math.abs(atPin.s - atVia.s) + dist(atVia, via);
     out.push({
       kind: 'gnd',
-      at: gndAt,
+      at: via,
       length,
-      grade,
-      text: `${driver} ground is ${length.toFixed(1)} mm from the pin`,
+      grade: loopGrade(length, netMm),
+      text: `${driver} ground via is ${length.toFixed(1)} mm from the pin`,
     });
   }
   else if (driver) {
-    out.push({ kind: 'gnd', at: pin?.at ?? { x: 0, y: 0 }, length: Infinity, grade: 'flag', text: `${driver} has no ground pad on the reference copper` });
+    out.push({ kind: 'gnd', at: pin?.at ?? { x: 0, y: 0 }, length: Infinity, grade: 'flag', text: `${driver} has no ground via to the reference` });
   }
   // Computed for both drive types. The score counts it only for push-pull, so a stored check
   // can be rescored when the user changes the drive type without solving again.
@@ -608,10 +663,15 @@ function closuresOf(board: Board, net: string, driver: string | undefined, drive
     kind: 'vdd',
     at: loop.decap.component.at,
     length,
-    grade: hopGrade(length, h),
+    grade: loopGrade(length, netMm),
     text: `${driver} supply decap ${loop.decap.component.designator} is ${length.toFixed(1)} mm from the pin`,
   });
   return out;
+}
+
+/** A distance we tell the user to aim for. Never tighter than 3h, and never under 1 mm. */
+function practicalMm(h: number): string {
+  return Math.max(3 * h, 1).toFixed(1);
 }
 
 function mil2(mm2: number): number {
@@ -627,14 +687,14 @@ function deviationText(e: CheckExcursion, near: string): string {
 }
 
 function termsOf(check: Omit<NetCheck, 'terms' | 'score' | 'status' | 'rW' | 'deviation'> & { r: number }): Term[] {
-  const hTxt = check.h.toFixed(1);
+  const aim = practicalMm(check.h);
   const terms: Term[] = [];
   const share = check.length * check.h;
   for (const e of check.excursions) {
     const near = '';
     terms.push({
       kind: 'deviation',
-      coef: share > 0 ? e.dA / share : 0,
+      coef: e.antipad || !(share > 0) ? 0 : e.dA / share,
       text: deviationText(e, near),
       fix: e.blocker ? `move ${e.blocker} or stitch GND across it` : 'stitch GND across the gap',
       at: e.at,
@@ -643,13 +703,12 @@ function termsOf(check: Omit<NetCheck, 'terms' | 'score' | 'status' | 'rW' | 'de
   }
   for (const hop of check.hops) {
     if (hop.grade === 'ok') continue;
-    const from = hop.fromSignalVia ? 'signal via' : 'where the return leaves the trace';
     const place = hop.near ? ` near ${hop.near}` : '';
     terms.push({
       kind: 'transition',
       coef: hop.grade === 'flag' ? 0.5 : 0.1,
-      text: `Return via ${hop.distance.toFixed(1)} mm from ${from}${place}`,
-      fix: `add a GND via within ~${hTxt} mm`,
+      text: `Return via ${hop.distance.toFixed(1)} mm from the signal via${place}`,
+      fix: `add a GND via within ~${aim} mm`,
       at: hop.at,
       grade: hop.grade,
     });
@@ -662,7 +721,7 @@ function termsOf(check: Omit<NetCheck, 'terms' | 'score' | 'status' | 'rW' | 'de
       coef: flagged ? 0.5 : 0.1,
       supply: c.kind === 'vdd',
       text: c.text,
-      fix: c.kind === 'gnd' ? `add GND vias at ${check.driver} pad` : `add a decap within ~${hTxt} mm of ${check.driver}`,
+      fix: c.kind === 'gnd' ? `add a GND via within ~${aim} mm of ${check.driver}` : `add a decap within ~${aim} mm of ${check.driver}`,
       at: c.at,
       grade: c.grade,
     });
@@ -717,10 +776,11 @@ export function checkReturn(board: Board, analysis: Analysis, props: CheckProps)
   const pinAt = driverPinAt(board, analysis.net, props.driver);
   const built = measure(board, analysis.net, analysis.chains, analysis.returnPath.traces, h, pinAt);
   const segs = forwardSegs(analysis.chains);
-  const hops = hopsOf(board, analysis.net, analysis.returnPath.transitions, built.samples, h);
-  const closures = closuresOf(board, analysis.net, props.driver, props.drive, built.samples, h);
+  const closureAt = pinAt && props.driver ? closureVia(board, props.driver, pinAt) : undefined;
+  const hops = hopsOf(board, analysis.net, analysis.returnPath.transitions, built.samples, h, pinAt, closureAt);
+  const closures = closuresOf(board, analysis.net, props.driver, built.samples, length);
   const kept = keptTraces(analysis.returnPath.traces, built.excursions, built.errors, segs, h);
-  const sumA = built.excursions.reduce((s, e) => s + e.dA, 0);
+  const sumA = built.excursions.reduce((s, e) => s + (e.antipad ? 0 : e.dA), 0);
   const r = length > 0 && h > 0 ? sumA / (length * h) : 0;
   const pin = props.pin;
   const partial = {

@@ -91,9 +91,9 @@ export interface DriverLoop {
 }
 
 /**
- * The driver's supply pair at the end of the net. One edge returns straight into refPin; the other
- * edge's current must reach supplyPin, through the decap between the two nets with the shortest
- * pin → cap → pin path.
+ * The driver's supply pair at the end of the net. One edge returns straight into refPin. The other
+ * leaves through the supply pin nearest the signal pin, and the decap is the shortest pin → cap →
+ * pin path on that pin's net.
  */
 export function driverLoop(board: Board, designator: string, net: string, refNet: string): DriverLoop | null {
   const comp = board.components.find((c) => c.designator === designator);
@@ -107,10 +107,11 @@ export function driverLoop(board: Board, designator: string, net: string, refNet
   const refPin = nearest(isGroundNet(refNet) ? returnPads(onRef, refNet).pads : onRef, signalPad.at);
   const partner = (n: string) => (isGroundNet(refNet) ? looksLikePowerNet(n) : isGroundNet(n));
   const supplyPins = own.filter((p) => p.net && p.net !== net && p.net !== refNet && partner(p.net));
-  const loop: DriverLoop = { designator, signalPad, refNet, refPin, supplyPin: nearest(supplyPins, signalPad.at) };
-  if (!refPin || !supplyPins.length) return loop;
-  // The supply pin and decap together: shortest pin → cap → pin path, plus the on-chip distance
-  // back to the ground pin, so a large IC's bank-local supply pin wins over a far one.
+  // The other edge leaves through the supply pin nearest the signal pin, not the one with the
+  // shortest cap somewhere else on the package.
+  const supplyPin = nearest(supplyPins, signalPad.at);
+  const loop: DriverLoop = { designator, signalPad, refNet, refPin, supplyPin };
+  if (!refPin || !supplyPin) return loop;
   const pads = new Map(board.pads.map((p) => [p.id, p]));
   let best = Infinity;
   for (const c of board.components) {
@@ -118,17 +119,12 @@ export function driverLoop(board: Board, designator: string, net: string, refNet
     const cp = c.padIds.map((id) => pads.get(id)).filter((p): p is Pad => !!p);
     if (cp.length !== 2) continue;
     const refPad = cp.find((p) => p.net === refNet);
-    if (!refPad) continue;
-    for (const supplyPin of supplyPins) {
-      const supplyPad = cp.find((p) => p.net === supplyPin.net);
-      if (!supplyPad) continue;
-      const length = dist(refPin.at, refPad.at) + dist(supplyPad.at, supplyPin.at);
-      const cost = length + dist(supplyPin.at, refPin.at);
-      if (cost < best) {
-        best = cost;
-        loop.supplyPin = supplyPin;
-        loop.decap = { component: c, refPad, supplyPad, length };
-      }
+    const supplyPad = cp.find((p) => p.net === supplyPin.net);
+    if (!refPad || !supplyPad) continue;
+    const length = dist(refPin.at, refPad.at) + dist(supplyPad.at, supplyPin.at);
+    if (length < best) {
+      best = length;
+      loop.decap = { component: c, refPad, supplyPad, length };
     }
   }
   return loop;

@@ -2,6 +2,17 @@
 
 Every change raises the patch number (`0.1.x`) and adds an entry here, newest first. The major and minor numbers change only when the owner declares a milestone; that entry's heading then ends with `- Milestone: <name>`. One version covers the whole repository: `packages/extension/extension.json` and every workspace `package.json` carry it, and the `.eext` file name includes it. `npm run check:version` checks this, and CI checks on pull requests that only the patch number went up (unless a milestone is declared).
 
+## [0.1.85] - 2026-11-28
+
+From Balazs: on the 4-layer board h = 0.2 mm is correct, and SCK should still score about 90. The check was grading the driver loop in units of that height, so a via a couple of millimetres away looked like a failure.
+
+- **A layer change is graded only at a via of the signal.** A via the return uses to reach the driver's ground is the closure, and is not counted again as a missing return via.
+- **The closure ends at a ground via.** The one nearest the signal pin that ties the driver's ground to the reference layer. Vias in the exposed pad are preferred over other fanout.
+- **Closure and the decap are a fraction of the trace.** The loop area is the path length times h, divided by the trace length times h. Above half the trace is a flag, above a quarter is a note.
+- **A distance the check suggests is never under 1 mm, and never under 3h.**
+- **The decap is taken from the supply pin nearest the signal pin.**
+- **One via's antipad under the trace is a minor tick.** Its area stays out of the score, however large it is beside a thin dielectric.
+
 ## [0.1.84] - 2026-11-27
 
 From Balazs: Inner1 is a PLANE layer, EasyEDA's negative plane, not a signal layer with a copper pour. The check saw nothing on L2.
